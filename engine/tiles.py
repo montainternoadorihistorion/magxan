@@ -143,7 +143,7 @@ def counts34(tile_ids: Iterable[int]) -> list[int]:
 # ---------------------------------------------------------------- 文字 → 牌ID
 
 
-def parse_tiles(text: str, *, aka: bool = True) -> list[int]:
+def parse_tiles(text: str, *, aka: bool = True, used: Iterable[int] = ()) -> list[int]:
     """mpsz 表記の文字列を牌IDのリストにする（書かれた順）。
 
     例: parse_tiles("123m406p11z") → 一二三萬・四筒・赤五筒・六筒・東東
@@ -154,8 +154,10 @@ def parse_tiles(text: str, *, aka: bool = True) -> list[int]:
       * aka=False では "0" を書けない（赤ドラなしのルールに赤5は無い）
 
     同じ種類の牌には、空いている牌IDを小さい順に割り当てる。
+    used に牌IDを渡すと、それらは「すでに使われている牌」として避ける
+    （手牌・副露・ドラ表示牌を別々の文字列で書いても、同じ牌を二重に使わないようにするため）。
     """
-    used: set[int] = set()
+    used = set(used)
     result: list[int] = []
     pending: list[str] = []
 

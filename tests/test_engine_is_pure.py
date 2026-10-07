@@ -15,11 +15,14 @@ def test_engine_sources_do_not_mention_streamlit():
 
 
 def test_importing_engine_does_not_load_streamlit():
-    modules = sorted(p.stem for p in ENGINE.glob("*.py") if p.stem != "__init__")
+    modules = sorted(
+        ".".join(p.relative_to(ROOT).with_suffix("").parts) for p in ENGINE.rglob("*.py") if p.stem != "__init__"
+    )
+    assert "engine.scoring.explain" in modules
     code = (
         "import sys, importlib\n"
         f"for name in {modules!r}:\n"
-        "    importlib.import_module('engine.' + name)\n"
+        "    importlib.import_module(name)\n"
         "assert 'streamlit' not in sys.modules, 'engine が streamlit を読み込んでいる'\n"
     )
     done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=False)
