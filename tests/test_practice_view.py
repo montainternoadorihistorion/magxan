@@ -35,6 +35,7 @@ from ui.practice_view import (
     review_list_html,
     riichi_draws_html,
     river_html,
+    rounded,
     shanten_html,
     stats_html,
     status_html,
@@ -435,9 +436,17 @@ def test_chance_lines_show_the_arithmetic():
     assert chance_html(analyze(position("123m456p789s234s44z")), rb(), luck_draw=0) == ""
 
 
+def test_rounded_rounds_half_up_like_hand_calculation():
+    # 書式の指定に任せると 3.55 → 3.5、62.5 → 62 になる（2 進数の誤差と、偶数への丸め）。手計算と同じ四捨五入にする
+    assert [rounded(v, 1) for v in (3.55, 2.73, 2.09, 1.25, 0.05, 12.0)] == ["3.6", "2.7", "2.1", "1.3", "0.1", "12.0"]
+    assert [rounded(v) for v in (0.5, 1.5, 2.5, 14.1, 7.8, 1234.5, 12000)] == ["1", "2", "3", "14", "8", "1,235", "12,000"]
+
+
 def test_percent():
-    values = (0, 0.004, 0.01, 0.131, 0.985, 0.99, 0.9901, 0.999, 1)
+    values = (0, 0.004, 0.01, 0.131, 0.984, 0.99, 0.9901, 0.999, 1)
     assert [percent(v) for v in values] == ["0%", "1% 未満", "1%", "13%", "98%", "99%", "99% 以上", "99% 以上", "100%"]
+    # ちょうど半分は切り上げる（8 回のうち 5 回 ＝ 62.5% → 63%）
+    assert [percent(v) for v in (1 / 8, 5 / 8, 0.985, 0.145)] == ["13%", "63%", "99%", "15%"]
     # 「100%」と書くのは、本当に確実なときだけ
     wide = analyze(position("2468m2468p2468s11z", draws_left=17))       # 受け入れ 32 枚。17 回で 1 回も引かない確率は 0.4%
     assert 0.99 < wide.within_chance < 1 and "1 回以上引く確率 ＝ 99% 以上" in text_of(chance_html(wide, rb(), luck_draw=0))
@@ -589,7 +598,7 @@ def test_luck_explanations():
     assert "配牌：64 個の候補から、いちばん良い配牌を採用する" in text
     assert "ツモ：1 回ごとに 12% の確率で、有効牌を次のツモに持ってくる" in text
     guide = text_of(luck_guide_html(rb()))
-    assert "なし（0）3.5 向聴16%14 巡目" in guide.replace("3.6", "3.5") and "最大（100）1.2 向聴96%4 巡目" in guide
+    assert "なし（0）3.6 向聴16%14 巡目" in guide and "最大（100）1.2 向聴96%4 巡目" in guide      # 3.55 は、四捨五入で 3.6
     assert "各 300 局" in guide
     check_html(luck_guide_html(rb()))
     # いちばん弱い補正でも「補正なし」とは書かない（実際に候補を 2 個作って比べるので）

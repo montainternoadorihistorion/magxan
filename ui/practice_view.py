@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 
 from engine.analysis.blocks import MENTSU_TYPES, PART_NAMES, TAATSU_TYPES, Part, PartType
@@ -44,13 +45,23 @@ LUCK_GUIDE = (
 )
 
 
+def rounded(value: float | Decimal, digits: int = 0) -> str:
+    """四捨五入して書く（3.55 → 「3.6」、62.5 → 「63」、1234.5 → 「1,235」）。
+
+    書式の指定（f"{x:.1f}"）に任せると、2 進数の誤差や「偶数への丸め」のために、手で計算した値と
+    1 つずれることがある（3.55 が「3.5」、62.5 が「62」になる）。
+    """
+    step = Decimal(1).scaleb(-digits)        # 0 桁なら 1、1 桁なら 0.1
+    return f"{Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP):,}"
+
+
 def percent(value: float) -> str:
     """割合を百分率で書く。0 でも 1 でもない値を、丸めて「0%」「100%」とは書かない"""
     if 0 < value < 0.01:
         return "1% 未満"
     if 0.99 < value < 1:
         return "99% 以上"
-    return f"{value * 100:.0f}%"
+    return f"{rounded(Decimal(str(value)) * 100)}%"
 
 
 def _name(tile: int, aka: bool) -> str:
@@ -615,8 +626,8 @@ def luck_guide_html(rb: Rubifier) -> str:
     levels = dict(PRESETS)
     for name, shanten, rate, turn in LUCK_GUIDE:
         rows.append(
-            f'<tr><td>{escape(name)}（{levels[name]}）</td><td class="num">{shanten:.1f} {rb.html("向聴")}</td>'
-            f'<td class="num">{percent(rate)}</td><td class="num">{turn:.0f} 巡目</td></tr>'
+            f'<tr><td>{escape(name)}（{levels[name]}）</td><td class="num">{rounded(shanten, 1)} {rb.html("向聴")}</td>'
+            f'<td class="num">{percent(rate)}</td><td class="num">{rounded(turn)} 巡目</td></tr>'
         )
     return (
         f'<table class="mj-table">{"".join(rows)}</table>'
@@ -641,8 +652,8 @@ def stats_html(summaries: Sequence[Summary], rb: Rubifier) -> str:
             label = rb.html(f"配牌 {summary.deal}・ツモ {summary.draw}")
         if summary.hinted:
             label += '<div class="mj-sub">ヒントあり</div>'
-        turn = "—" if summary.average_turn is None else f"{summary.average_turn:.1f}"
-        points = "—" if summary.average_points is None else f"{summary.average_points:,.0f}"
+        turn = "—" if summary.average_turn is None else rounded(summary.average_turn, 1)
+        points = "—" if summary.average_points is None else rounded(summary.average_points)
         best = "—" if summary.best_rate is None else percent(summary.best_rate)
         cls = ' class="mj-skill"' if summary.is_skill else ""
         rows.append(
