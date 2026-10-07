@@ -13,11 +13,11 @@
 - 牌をタップして切るための画面部品（7 枚 × 2 段、選ぶ → 確定の 2 段階）
 - ブラウザ内保存を使った「続きから再開」の仕組み
 - スマホで上の 2 つとサーバーの速さを確かめる「実機チェック」ページ
-- 自動テスト（67 件）と、GitHub 上での自動実行の設定
+- 自動テスト（69 件）と、GitHub 上での自動実行の設定
 
 ## 手元で動かす
 
-Python 3.11 以上が必要です（Streamlit Community Cloud に合わせるなら 3.12）。
+Python 3.11 以上が必要です（3.11〜3.14 でテストしています）。
 
 ```bash
 python -m venv .venv
@@ -54,7 +54,7 @@ ruff check .    # 書き方の検査
 1. このリポジトリを GitHub に push する。
 2. <https://share.streamlit.io> にサインインし、新しいアプリを作る。
    - Repository: このリポジトリ ／ Branch: `main` ／ Main file path: `app.py`
-   - Advanced settings で Python のバージョンを **3.12** にする
+   - Python のバージョンは Advanced settings で選べる（3.11〜3.14 でテスト済み。いまの公開版は 3.14 で動いている）
    - Secrets は今は空のままでよい
 3. デプロイが終わったら、アプリの設定の Sharing で公開範囲を決める。
    自分だけで使うなら「Only specific people can view this app」（非公開にできるアプリは 1 つまで）。

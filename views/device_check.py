@@ -26,6 +26,8 @@ from ui.version import APP_VERSION
 
 SAVE_NAME = "check.solo"   # いまの局面（シードと切った牌の列）
 META_NAME = "check.meta"   # このブラウザで開いた回数・再開できた回数
+STATS_NAME = "check.stats"  # 計測値と感想（再読み込みしても結果に残すため）
+MAX_LATENCY_SAMPLES = 200
 TARGET_DISCARDS = 10
 JST = timezone(timedelta(hours=9))
 BENCH_ROUNDS = 3
@@ -64,16 +66,80 @@ def _load_meta() -> dict[str, int]:
         return {"opens": 0, "restores": 0}
 
 
+def _load_stats() -> dict:
+    """ブラウザに残っている計測値と感想。壊れていたら空から始める"""
+    try:
+        data = json.loads(store.get(STATS_NAME) or "{}")
+    except (ValueError, TypeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    latencies = data.get("latencies")
+    env = data.get("env")
+    counts = data.get("counts")
+    ratings = data.get("ratings")
+    bench = data.get("bench_us")
+    comment = data.get("comment")
+    return {
+        "latencies": [int(x) for x in latencies if isinstance(x, (int, float))][-MAX_LATENCY_SAMPLES:]
+        if isinstance(latencies, list)
+        else [],
+        "env": env if isinstance(env, dict) and {"vw", "vh", "dpr", "img_ng"} <= set(env) else {},
+        "counts": {
+            "tap": int(counts.get("tap", 0)) if isinstance(counts, dict) and isinstance(counts.get("tap"), int) else 0,
+            "fallback": int(counts.get("fallback", 0))
+            if isinstance(counts, dict) and isinstance(counts.get("fallback"), int)
+            else 0,
+        },
+        "bench_us": float(bench) if isinstance(bench, (int, float)) and not isinstance(bench, bool) else None,
+        "ratings": {
+            name: (ratings.get(name) if isinstance(ratings, dict) and ratings.get(name) in RATINGS else None)
+            for name in ("tap", "look", "speed")
+        },
+        "comment": comment if isinstance(comment, str) else "",
+    }
+
+
+def _save_stats() -> None:
+    """いまの計測値と感想をブラウザに残す（中身が変わっていなければ何もしない）"""
+    store.set(
+        STATS_NAME,
+        json.dumps(
+            {
+                "latencies": ss.chk_latencies[-MAX_LATENCY_SAMPLES:],
+                "env": ss.chk_env,
+                "counts": ss.chk_counts,
+                "bench_us": ss.chk_bench_us,
+                "ratings": {
+                    "tap": ss.get("chk_rating_tap"),
+                    "look": ss.get("chk_rating_look"),
+                    "speed": ss.get("chk_rating_speed"),
+                },
+                "comment": ss.get("chk_comment", ""),
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
 def _start_session() -> None:
     """このセッションで最初に 1 回だけ行う準備（保存があれば続きから）"""
     saved = _load_saved()
     ss.chk_restored = saved is not None
     ss.chk_state = saved or solo.start(secrets.randbelow(1_000_000))
     ss.chk_rev = 0
-    ss.chk_latencies = []
-    ss.chk_env = {}
-    ss.chk_counts = {"tap": 0, "fallback": 0}
-    ss.chk_bench_us = None
+
+    # 計測値と感想は、再読み込みや通信切れをまたいで引き継ぐ
+    stats = _load_stats()
+    ss.chk_latencies = stats["latencies"]
+    ss.chk_env = stats["env"]
+    ss.chk_counts = stats["counts"]
+    ss.chk_bench_us = stats["bench_us"]
+    for name, value in stats["ratings"].items():
+        if value is not None:
+            ss[f"chk_rating_{name}"] = value
+    if stats["comment"]:
+        ss["chk_comment"] = stats["comment"]
 
     meta = _load_meta()
     meta["opens"] += 1
@@ -119,7 +185,11 @@ def _new_hand() -> None:
 def _reset_all() -> None:
     store.remove(SAVE_NAME)
     store.remove(META_NAME)
-    for name in ("chk_state", "chk_rev", "chk_latencies", "chk_env", "chk_counts", "chk_bench_us", "chk_restored", "chk_meta"):
+    store.remove(STATS_NAME)
+    for name in (
+        "chk_state", "chk_rev", "chk_latencies", "chk_env", "chk_counts", "chk_bench_us", "chk_restored", "chk_meta",
+        "chk_rating_tap", "chk_rating_look", "chk_rating_speed", "chk_comment",
+    ):
         ss.pop(name, None)
 
 
@@ -290,4 +360,5 @@ st.divider()
 st.button("記録を消して最初からやり直す", on_click=_reset_all)
 
 # ブラウザ内保存の読み書きは、ここまでの変更をまとめてここで行う
+_save_stats()
 store.mount()

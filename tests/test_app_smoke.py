@@ -107,6 +107,36 @@ def test_broken_saved_data_starts_a_fresh_hand():
         assert len(at.session_state["chk_state"].discards) == 0
 
 
+def test_measurements_and_ratings_survive_a_reload():
+    """計測値と感想はブラウザに残り、開き直しても結果に載る"""
+    stats = {
+        "latencies": [120, 300, 180],
+        "env": {"vw": 390, "vh": 844, "dpr": 3, "img_ng": 0},
+        "counts": {"tap": 4, "fallback": 1},
+        "bench_us": 55.5,
+        "ratings": {"tap": "◎", "look": "○", "speed": "△"},
+        "comment": "右端の牌が少し押しにくい",
+    }
+    at = open_check_page(new_app(), known={"check.stats": json.dumps(stats, ensure_ascii=False)})
+    assert field(at, "応答時間（牌タップ）") == "3 回 ／ 中央値 0.18 秒 ／ 最大 0.30 秒"
+    assert field(at, "画面") == "幅 390 × 高さ 844 px ／ 画素比 3 ／ 読めなかった牌画像 0 枚"
+    assert field(at, "切った回数") == "牌タップ 4 回 ／ 予備の方法 1 回"
+    assert field(at, "サーバーの速さ").startswith("56 マイクロ秒/回") or field(at, "サーバーの速さ").startswith("55 マイクロ秒/回")
+    assert field(at, "押しやすさ") == "◎ ／ 見やすさ: ○ ／ 反応の速さ: △"
+    assert field(at, "メモ") == "右端の牌が少し押しにくい"
+    # 次の保存内容にも同じ値が入っている
+    saved = json.loads(at.session_state[STORE_STATE]["known"]["check.stats"])
+    assert saved["latencies"] == [120, 300, 180] and saved["ratings"]["speed"] == "△"
+
+
+def test_broken_measurements_are_ignored():
+    for broken in ("{壊れている", json.dumps([1, 2]), json.dumps({"latencies": "x", "counts": {"tap": "多い"}, "ratings": {"tap": "最高"}})):
+        at = open_check_page(new_app(), known={"check.stats": broken})
+        assert field(at, "応答時間（牌タップ）").startswith("未計測")
+        assert field(at, "切った回数") == "牌タップ 0 回 ／ 予備の方法 0 回"
+        assert field(at, "押しやすさ").startswith("未回答")
+
+
 def test_benchmark_and_reset():
     at = open_check_page(new_app(), known={})
     next(b for b in at.button if b.label.startswith("計測する")).click().run()

@@ -132,6 +132,10 @@ def run(base_url: str, out_dir: Path) -> dict:
             result["problems"].append("再読み込み後に局面が一致しない")
         if "今回は再開" not in field(rep, "ブラウザ内保存"):
             result["problems"].append("再開と判定されていない")
+        result["after_reload"]["応答時間（牌タップ）"] = field(rep, "応答時間（牌タップ）")
+        result["after_reload"]["画面"] = field(rep, "画面")
+        if "牌タップ 6 回" not in field(rep, "切った回数") or "未計測" in field(rep, "応答時間（牌タップ）") or "未取得" in field(rep, "画面"):
+            result["problems"].append("再読み込みで計測値が消えた")
         page.screenshot(path=str(out_dir / "05_after_reload.png"))
 
         # --- 予備の操作方法

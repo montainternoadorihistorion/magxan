@@ -10,8 +10,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 同じシードから同じ山になることを、複数の Python で確かめる（Community Cloud で使う 3.12 を含む）
-        python-version: ["3.11", "3.12", "3.13"]
+        # 同じシードから同じ山になることを、複数の Python で確かめる（Community Cloud で動いている版を含む）
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
