@@ -41,12 +41,13 @@ class WaitType(StrEnum):
     KOKUSHI_13 = "kokushi13"   # 国士無双の十三面待ち
 
 
+#: 待ちの形の名前（読みは画面側でルビとして付ける）
 WAIT_NAMES = {
-    WaitType.RYANMEN: "両面（リャンメン）",
-    WaitType.KANCHAN: "嵌張（カンチャン）",
-    WaitType.PENCHAN: "辺張（ペンチャン）",
-    WaitType.TANKI: "単騎（タンキ）",
-    WaitType.SHANPON: "双碰（シャンポン）",
+    WaitType.RYANMEN: "両面",
+    WaitType.KANCHAN: "嵌張",
+    WaitType.PENCHAN: "辺張",
+    WaitType.TANKI: "単騎",
+    WaitType.SHANPON: "双碰",
     WaitType.KOKUSHI: "国士無双の単騎",
     WaitType.KOKUSHI_13: "国士無双の十三面",
 }

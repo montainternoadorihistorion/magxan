@@ -13,6 +13,7 @@ apply_base_style()
 page = st.navigation(
     [
         st.Page("views/home.py", title="ホーム", icon=":material/home:", default=True),
+        st.Page("views/score_lab.py", title="点数計算ラボ", icon=":material/calculate:", url_path="lab"),
         st.Page("views/device_check.py", title="実機チェック", icon=":material/smartphone:", url_path="check"),
     ],
     position="top",

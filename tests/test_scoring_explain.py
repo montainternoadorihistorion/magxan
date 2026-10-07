@@ -82,8 +82,10 @@ def test_every_counted_yaku_shows_satisfied_conditions():
     yaku = result.best.evaluation.yaku
     assert keys(yaku) == ["riichi", "menzen_tsumo", "pinfu", "tanyao", "iipeikou"]
     for item in yaku:
-        assert item.ok and item.checks and all(check.ok and check.text and check.detail for check in item.checks)
+        assert item.ok and item.checks and all(check.ok and check.text for check in item.checks)
         assert item.name and item.reading and item.han >= 1
+        if item.key in ("pinfu", "tanyao", "iipeikou"):       # 形で決まる役は、どの牌で満たしたかも示す
+            assert all(check.detail for check in item.checks if "門前" not in check.text)
     pinfu = next(item for item in yaku if item.key == "pinfu")
     assert [check.text for check in pinfu.checks] == [
         "門前である（鳴いていない）",
@@ -219,3 +221,40 @@ def test_no_yaku_advice_for_closed_hand():
 def test_no_advice_when_winning_or_not_a_shape():
     assert run("123m456p789s23s44z", "4s", riichi=True).advice == ()
     assert run("123m456p789s23s19p", "4s").advice == ()
+
+
+# ---------------------------------------------------------------- ルールによって変わるところ
+
+
+def test_rule_notes_point_out_house_rule_differences():
+    assert run("123m456p789s23s44z", "4s", riichi=True).rule_notes == ()
+
+    kuitan = run("234m55p34s", "5s", melds=["pon 888m", "chi 678p"])
+    assert len(kuitan.rule_notes) == 1 and "喰いタン）を認めないルールもある" in kuitan.rule_notes[0]
+    no_kuitan = run("234m55p34s", "5s", Rules(kuitan=False), melds=["pon 888m", "chi 678p"])
+    assert "喰いタンありのルールなら" in no_kuitan.rule_notes[0]
+
+    near_mangan = run("223344m567p67s55p", "8s", riichi=True)
+    assert "切り上げ満貫）もある" in near_mangan.rule_notes[0] and "7700 → 8000" in near_mangan.rule_notes[0]
+    kiriage = run("223344m567p67s55p", "8s", Rules(kiriage_mangan=True), riichi=True)
+    assert "切り上げ満貫あり」のルール" in kiriage.rule_notes[0] and "8000 → 7700" in kiriage.rule_notes[0]
+
+    pair = run("111m456p789s23s11z", "4s", riichi=True, seat_wind=EAST)
+    assert "連風牌" in pair.rule_notes[0] and "いまの設定は 4 符" in pair.rule_notes[0]
+    assert "いまの設定は 2 符" in run("111m456p789s23s11z", "4s", Rules(double_wind_pair_fu=2), riichi=True, seat_wind=EAST).rule_notes[0]
+    assert run("111m456p789s23s11z", "4s", riichi=True, seat_wind=EAST, round_wind=SOUTH).rule_notes == ()   # 自風だけなら流派差なし
+
+    double = run("111m333p555s777s2z", "2z")
+    assert "四暗刻単騎をダブル役満にするかどうか" in double.rule_notes[0] and "ダブル役満（役満 2 つぶん）として" in double.rule_notes[0]
+    single = run("111m333p555s777s2z", "2z", Rules(double_yakuman=False))
+    assert "ふつうの役満（1 つぶん）として" in single.rule_notes[0]
+
+    kazoe = run("1234567892355m", "4m", riichi=True, is_tsumo=True, ippatsu=True, haitei=True)
+    assert "いまの設定では数え役満" in kazoe.rule_notes[0]
+    assert "いまの設定では三倍満" in run(
+        "1234567892355m", "4m", Rules(kazoe_yakuman=False), riichi=True, is_tsumo=True, ippatsu=True, haitei=True
+    ).rule_notes[0]
+
+    aka = run("0m345567p234678s", "5m", riichi=True)
+    assert any("赤ドラ（赤い 5）を使わないルールもある" in note for note in aka.rule_notes)
+    assert run("123m456p789s23s19p", "4s").rule_notes == ()        # 和了の形でなければ何も出さない

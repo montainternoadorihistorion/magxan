@@ -115,9 +115,9 @@ def lines(result) -> list[tuple[str, int]]:
 def test_fu_lines_closed_ron_with_ankan():
     result = fu_of("123m456p78s22p", "9s", melds=["ankan 1111z"], riichi=True)
     assert lines(result) == [
-        ("副底（フーテイ）", 20),
+        ("副底", 20),
         ("門前ロン", 10),
-        ("待ち：両面（リャンメン）", 0),
+        ("待ち：両面", 0),
         ("雀頭", 0),
         ("順子", 0),
         ("順子", 0),
@@ -186,7 +186,7 @@ def test_fu_of_ron_completed_triplet():
     result = fu_of("123m456p789s22s44z", "2s", riichi=True)
     line = next(line for line in result.lines if line.label == "明刻（中張牌）")
     assert line.fu == 2 and "ロンで完成" in line.detail
-    assert ("待ち：双碰（シャンポン）", 0) in lines(result)
+    assert ("待ち：双碰", 0) in lines(result)
 
 
 @pytest.mark.parametrize(

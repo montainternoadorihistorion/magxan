@@ -8,6 +8,7 @@
     python tools/build_tiles.py /path/to/src
 
 元の PNG（600x800、牌の地と絵柄が別レイヤー）を重ねて 1 枚にし、スマホ向けに縮小して保存する。
+裏面は、元の鮮やかな赤を落ち着いた青緑に変える。
 ファイル名は「数字＋種別」（1m〜9m, 1p〜9p, 1s〜9s, 1z〜7z）。赤5は 0m / 0p / 0s、裏面は back。
 実行には Pillow が必要（アプリ本体の実行には不要）。
 """
@@ -20,6 +21,11 @@ from PIL import Image
 
 OUT_SIZE = (180, 240)  # 画面上は最大でも 60x80 px 程度。高精細ディスプレイ（3倍）まで滲まない大きさ
 COLORS = 128           # 色数を絞ってファイルを小さくする（牌の絵柄は色数が少ない）
+
+# 裏面の色（色相は 0〜1。0.47 ≒ 青緑）。彩度と明るさは元の赤に対する倍率
+BACK_HUE = 0.47
+BACK_SATURATION = 0.72
+BACK_VALUE = 0.66
 
 HONORS = ["Ton", "Nan", "Shaa", "Pei", "Haku", "Hatsu", "Chun"]  # 東南西北白發中 = 1z〜7z
 SUITS = {"m": "Man", "p": "Pin", "s": "Sou"}
@@ -53,8 +59,19 @@ def build(src_root: Path, out_dir: Path) -> list[Path]:
     for out_name, src_name in sorted(source_names().items()):
         face = Image.open(export / f"{src_name}.png").convert("RGBA")
         save(Image.alpha_composite(front, face), out_name)
-    save(Image.open(export / "Back.png").convert("RGBA"), "back")
+    save(recolor(Image.open(export / "Back.png").convert("RGBA")), "back")
     return written
+
+
+def recolor(img: Image.Image, hue: float = BACK_HUE, saturation: float = BACK_SATURATION, value: float = BACK_VALUE) -> Image.Image:
+    """牌の裏面の色を変える（元は鮮やかな赤。牌の表と並べても目が疲れない落ち着いた青緑にする）。陰影はそのまま残す"""
+    red, green, blue, alpha = img.split()
+    h, s, v = Image.merge("RGB", (red, green, blue)).convert("HSV").split()
+    h = h.point(lambda _: round(hue * 255))
+    s = s.point(lambda x: round(x * saturation))
+    v = v.point(lambda x: round(x * value))
+    rgb = Image.merge("HSV", (h, s, v)).convert("RGB")
+    return Image.merge("RGBA", (*rgb.split(), alpha))
 
 
 if __name__ == "__main__":

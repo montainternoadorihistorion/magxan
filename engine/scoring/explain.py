@@ -22,8 +22,8 @@ from engine.scoring.fu import FuResult, calculate_fu
 from engine.scoring.judge import JudgeError, Judgement, judge
 from engine.scoring.points import PointsResult, calculate_points
 from engine.scoring.yaku_eval import Evaluation, YakuResult, evaluate, near_misses
-from engine.tiles import EAST, NORTH, SOUTH, WEST
-from engine.yaku_table import YAKU
+from engine.tiles import EAST, NORTH, SOUTH, WEST, is_yaochu_kind, kind_of
+from engine.yaku_table import DOUBLE_YAKUMAN_KEYS, YAKU, YAKUMAN_HAN
 
 #: 卓で風牌の役を言うときの呼び方
 WIND_SPOKEN = {EAST: "トン", SOUTH: "ナン", WEST: "シャー", NORTH: "ペー"}
@@ -122,6 +122,55 @@ class Explanation:
             return ""
         call = "ツモ" if self.ctx.is_tsumo else "ロン"
         return f"{call}。{'・'.join(self.spoken_yaku)}。{best.points.declaration}。"
+
+    @property
+    def rule_notes(self) -> tuple[str, ...]:
+        """この手の結果が、流派（ルールの違い）で変わるところ。変わるところが無ければ空"""
+        if self.status is Status.NOT_WINNING:
+            return ()
+        rules, ctx = self.rules, self.ctx
+        first = self.candidates[0]
+        keys = {y.key for y in first.evaluation.yaku}
+        notes: list[str] = []
+
+        all_simples = not any(is_yaochu_kind(kind_of(t)) for t in ctx.all_tiles)
+        if not ctx.is_menzen and all_simples:
+            if rules.kuitan:
+                notes.append("鳴いた断么九（喰いタン）を認めないルールもある。そのルールでは、この手の断么九は役にならない。")
+            else:
+                notes.append("いまの設定は「喰いタンなし」。喰いタンありのルールなら、この手に断么九（1 翻）が付く。")
+
+        pair = first.interp.pair
+        if pair is not None and pair.first == ctx.seat_wind == ctx.round_wind:
+            other = 2 if rules.double_wind_pair_fu == 4 else 4
+            notes.append(
+                f"連風牌（場風と自風が同じ牌）の雀頭は、4 符とするルールと 2 符とするルールがある。"
+                f"いまの設定は {rules.double_wind_pair_fu} 符（{other} 符のルールでは、符の合計が変わることがある）。"
+            )
+
+        if first.points is not None:
+            if not first.is_yakuman and (first.han, first.fu.fu) in ((4, 30), (3, 60)):
+                shape = f"{first.fu.fu} 符 {first.han} 翻"
+                if rules.kiriage_mangan:
+                    notes.append(
+                        f"{shape}を満貫として扱うのは「切り上げ満貫あり」のルール。"
+                        "なしのルールでは満貫にならない（子のロンなら 8000 → 7700、親のロンなら 12000 → 11600）。"
+                    )
+                else:
+                    notes.append(
+                        f"{shape}は、満貫にわずかに届かない。満貫に切り上げるルール（切り上げ満貫）もある"
+                        "（その場合、子のロンなら 7700 → 8000、親のロンなら 11600 → 12000）。"
+                    )
+            if keys & DOUBLE_YAKUMAN_KEYS:
+                names = "・".join(YAKU[key].name for key in sorted(keys & DOUBLE_YAKUMAN_KEYS))
+                how = "ダブル役満（役満 2 つぶん）" if rules.double_yakuman else "ふつうの役満（1 つぶん）"
+                notes.append(f"{names}をダブル役満にするかどうかは、ルールによって異なる。いまの設定では{how}として数えている。")
+            if not first.is_yakuman and first.han >= YAKUMAN_HAN:
+                how = "数え役満" if rules.kazoe_yakuman else "三倍満"
+                notes.append(f"13 翻以上を数え役満にするか、三倍満までとするかは、ルールによって異なる。いまの設定では{how}。")
+            if first.dora_han and self.dora.aka:
+                notes.append("赤ドラ（赤い 5）を使わないルールもある。使う枚数もルールによって異なる（このアプリは各色 1 枚ずつ）。")
+        return tuple(notes)
 
     @property
     def advice(self) -> tuple[str, ...]:

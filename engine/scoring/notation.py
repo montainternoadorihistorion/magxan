@@ -11,25 +11,56 @@
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
-from engine.melds import Meld, MeldType
+from engine.melds import Meld, MeldError, MeldType
 from engine.scoring.context import WinContext
 from engine.tiles import TileError, code_of, format_tiles, parse_tiles
 
 _MELD_TYPES = {t.value: t for t in MeldType}
+_MELD_TYPES.update(
+    {
+        "チー": MeldType.CHI,
+        "ポン": MeldType.PON,
+        "暗槓": MeldType.ANKAN,
+        "アンカン": MeldType.ANKAN,
+        "明槓": MeldType.MINKAN,
+        "大明槓": MeldType.MINKAN,
+        "ミンカン": MeldType.MINKAN,
+        "加槓": MeldType.KAKAN,
+        "カカン": MeldType.KAKAN,
+    }
+)
+#: 副露の種類の日本語名（画面の入力欄に書き戻すとき用）
+MELD_WORDS = {
+    MeldType.CHI: "チー",
+    MeldType.PON: "ポン",
+    MeldType.ANKAN: "暗槓",
+    MeldType.MINKAN: "明槓",
+    MeldType.KAKAN: "加槓",
+}
+_MELD_PATTERN = re.compile(r"^\s*([^\d\s]+)\s*([0-9mpsz\s]+?)\s*$")
+_MELD_SHAPES = "チーは同じ色の連続した 3 枚、ポンは同じ牌 3 枚、カンは同じ牌 4 枚"
 
 
 def parse_meld(text: str, *, aka: bool = True, used: set[int] | None = None) -> Meld:
-    """「pon 888m」「chi 678m」「ankan 1111z」「minkan 5555s」「kakan 3333p」を Meld にする"""
-    parts = text.split()
-    if len(parts) != 2 or parts[0] not in _MELD_TYPES:
-        raise TileError(f"副露は「種類 牌」で書きます（例: pon 888m）: {text!r}")
+    """「pon 888m」「chi 678m」「ankan 1111z」「minkan 5555s」「kakan 3333p」を Meld にする。
+
+    種類は日本語でも書ける（ポン・チー・暗槓・明槓・加槓）。種類と牌の間の空白は無くてもよい。
+    """
+    match = _MELD_PATTERN.match(text)
+    if match is None or match.group(1) not in _MELD_TYPES:
+        raise TileError(f"副露は「種類 牌」で書きます（例: ポン 888m、チー 678p、暗槓 1111z）: {text!r}")
     used = set() if used is None else used
-    tiles = parse_tiles(parts[1], aka=aka, used=used)
+    tiles = parse_tiles(match.group(2), aka=aka, used=used)
+    try:
+        meld = Meld(_MELD_TYPES[match.group(1)], tuple(tiles))
+    except MeldError as error:
+        raise TileError(f"副露 {text.strip()!r} が面子になっていません（{_MELD_SHAPES}）") from error
     used.update(tiles)
-    return Meld(_MELD_TYPES[parts[0]], tuple(tiles))
+    return meld
 
 
 def make_context(

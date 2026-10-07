@@ -2,8 +2,8 @@
 
 符は「和了の形の細かい点数」。副底 20 符に、和了り方・待ち・雀頭・面子の符を足し、10 符単位に切り上げる。
 
-    副底（フーテイ）                     20 符（必ず付く）
-    門前（メンゼン）でロン               +10 符
+    副底                                 20 符（必ず付く）
+    門前でロン                           +10 符
     ツモ                                 +2 符（平和のツモには付けない）
     待ちが嵌張・辺張・単騎               +2 符（両面・双碰は 0 符）
     雀頭が役牌                           +2 符（連風牌はルールにより 2 符または 4 符）
@@ -24,7 +24,8 @@ from dataclasses import dataclass
 from engine.rules import Rules
 from engine.scoring.context import WinContext
 from engine.scoring.decompose import WAIT_NAMES, Block, BlockType, Form, Interpretation, WaitType
-from engine.tiles import HAKU, is_yaochu_kind, name_of_kind
+from engine.scoring.texts import kind_text
+from engine.tiles import HAKU, is_yaochu_kind
 
 FUTEI = 20
 MENZEN_RON = 10
@@ -83,7 +84,7 @@ def set_label(block: Block) -> str:
 
 def pair_fu(pair_kind: int, ctx: WinContext, rules: Rules) -> tuple[int, str]:
     """雀頭の符と、その理由"""
-    name = name_of_kind(pair_kind)
+    name = kind_text(pair_kind)
     if pair_kind >= HAKU:
         return 2, f"{name}は三元牌（役牌）"
     is_seat = pair_kind == ctx.seat_wind
@@ -130,7 +131,7 @@ def calculate_fu(interp: Interpretation, ctx: WinContext, rules: Rules) -> FuRes
     other = wait_fu + pair_value + sum(line.fu for line in mentsu_lines)
     is_pinfu_shape = other == 0 and not is_open
 
-    lines = [FuLine("副底（フーテイ）", FUTEI, "どの和了にも必ず付く")]
+    lines = [FuLine("副底", FUTEI, "どの和了にも必ず付く")]
     note = ""
     if not is_open and not ctx.is_tsumo:
         lines.append(FuLine("門前ロン", MENZEN_RON, "鳴かずにロンで和了した"))

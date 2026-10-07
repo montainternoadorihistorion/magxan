@@ -204,8 +204,9 @@ def _allocate(number: int, suit: str, used: set[int], *, aka: bool, text: str) -
         used.add(tile_id)
         return tile_id
 
-    limit = 3 if aka and number == 5 and suit != "z" else 4
-    raise TileError(f"{number}{suit} は {limit} 枚までです（{text!r}）")
+    if aka and number == 5 and suit != "z":
+        raise TileError(f"赤でない 5{suit} は 3 枚までです。4 枚目は赤5なので 0{suit} と書きます（{text!r}）")
+    raise TileError(f"{number}{suit} は 4 枚までです（{text!r}）")
 
 
 def format_tiles(tile_ids: Sequence[int], *, aka: bool = True) -> str:

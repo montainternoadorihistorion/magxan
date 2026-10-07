@@ -104,7 +104,7 @@ def _texts(blocks: list[Block] | tuple[Block, ...]) -> str:
 
 
 def _menzen_check(h: _Hand) -> Check:
-    return Check("門前である（鳴いていない）", not h.is_open, "鳴いていない" if not h.is_open else "鳴いている")
+    return Check("門前である（鳴いていない）", not h.is_open, "" if not h.is_open else "鳴いている")
 
 
 # ---------------------------------------------------------------- 状況で決まる役
@@ -113,26 +113,30 @@ def _menzen_check(h: _Hand) -> Check:
 def _situational(h: _Hand) -> list[YakuResult]:
     ctx = h.ctx
     found: list[YakuResult] = []
+
+    def add(key: str, condition: str) -> None:
+        found.append(h.result(key, [Check(condition, True)]))
+
     if ctx.double_riichi:
-        found.append(h.result("double_riichi", [Check("最初の自分の番で（誰も鳴かないうちに）リーチを宣言した", True, "ダブル立直を宣言")]))
+        add("double_riichi", "最初の自分の番で（誰も鳴かないうちに）リーチを宣言した")
     elif ctx.riichi:
-        found.append(h.result("riichi", [Check("門前で聴牌して、リーチを宣言した", True, "リーチを宣言")]))
+        add("riichi", "門前で聴牌して、リーチを宣言した")
     if ctx.ippatsu:
-        found.append(h.result("ippatsu", [Check("リーチのあと 1 巡以内に、誰も鳴かないうちに和了した", True, "リーチ後 1 巡以内の和了")]))
+        add("ippatsu", "リーチのあと 1 巡以内に、誰も鳴かないうちに和了した")
     if ctx.is_tsumo and not h.is_open:
         found.append(h.result("menzen_tsumo", [_menzen_check(h), Check("ツモで和了した", True, "自分で引いた牌で和了")]))
     if ctx.rinshan:
-        found.append(h.result("rinshan", [Check("カンをして引いた嶺上牌でツモ和了した", True, "嶺上牌で和了")]))
+        add("rinshan", "カンをして引いた嶺上牌でツモ和了した")
     if ctx.chankan:
-        found.append(h.result("chankan", [Check("他家が加槓しようとした牌でロン和了した", True, "加槓の牌でロン")]))
+        add("chankan", "他家が加槓しようとした牌でロン和了した")
     if ctx.haitei:
-        found.append(h.result("haitei", [Check("山の最後の牌でツモ和了した", True, "最後のツモ牌で和了")]))
+        add("haitei", "山の最後の牌でツモ和了した")
     if ctx.houtei:
-        found.append(h.result("houtei", [Check("最後に捨てられた牌でロン和了した", True, "最後の捨て牌でロン")]))
+        add("houtei", "最後に捨てられた牌でロン和了した")
     if ctx.tenhou:
-        found.append(h.result("tenhou", [Check("親が配牌の 14 枚で和了していた", True, "配牌で和了")]))
+        add("tenhou", "親が配牌の 14 枚で和了していた")
     if ctx.chiihou:
-        found.append(h.result("chiihou", [Check("子が、誰も鳴かないうちの最初のツモで和了した", True, "第一ツモで和了")]))
+        add("chiihou", "子が、誰も鳴かないうちの最初のツモで和了した")
     return found
 
 
@@ -516,30 +520,27 @@ def evaluate(interp: Interpretation, ctx: WinContext, rules: Rules, fu: FuResult
     return Evaluation(tuple(found), (), sum(y.han for y in found), 0)
 
 
-MAX_NEAR_MISSES = 4
+MAX_NEAR_MISSES = 3
 
 
 def near_misses(interp: Interpretation, ctx: WinContext, rules: Rules, fu: FuResult, achieved: set[str]) -> tuple[YakuResult, ...]:
-    """惜しくも成立しなかった役を返す（多くても MAX_NEAR_MISSES 個）。
+    """惜しくも成立しなかった役を返す（多くても MAX_NEAR_MISSES 個。気づきやすい順）。
 
     「惜しい」とするのは次のどれか。
       * 条件が 1 つだけ足りない（平和の待ち・雀頭、門前限定の役を鳴いた、喰いタンなしのルール）
-      * 面子か雀頭が 1 つ違えば成立した（断么九・三色同順・一気通貫・対々和・混一色・混全帯么九・純全帯么九）
-      * ロンでなくツモなら成立した（三暗刻・四暗刻）
       * 雀頭の役牌があと 1 枚で刻子だった
+      * ロンでなくツモなら成立した（三暗刻・四暗刻）
+      * 面子か雀頭が 1 つ違えば成立した（断么九・三色同順・一気通貫・対々和・混一色・混全帯么九・純全帯么九）
     """
     if interp.form is not Form.REGULAR:
         return ()
     h = _Hand(interp, ctx, rules, fu)
     results: list[YakuResult] = []
 
-    def failed_checks(result: YakuResult) -> list[Check]:
-        return [c for c in result.checks if not c.ok]
-
     # 平和: 面子はすべて順子で、あと 1 つの条件だけが足りないとき
     if "pinfu" not in achieved and not h.sets:
         result = pinfu(h)
-        failed = failed_checks(result)
+        failed = [c for c in result.checks if not c.ok]
         if len(failed) == 1:
             results.append(_with_hint(result, f"「{failed[0].text}」を満たしていれば成立"))
 
@@ -556,15 +557,19 @@ def near_misses(interp: Interpretation, ctx: WinContext, rules: Rules, fu: FuRes
         elif result.checks[0].ok and not result.ok:
             results.append(_with_hint(result, "喰いタンありのルールなら成立"))
 
-    # 面子が 1 つ違えば成立した役（判定のときに hint を付けてある）
-    for result in (sanshoku(h), ittsu(h), toitoi(h), honitsu(h)):
-        if result.key not in achieved and not result.ok and result.hint:
-            results.append(result)
-    if "junchan" not in achieved and "chanta" not in achieved:
-        for result in (junchan(h), chanta(h)):
-            if not result.ok and result.hint:
-                results.append(result)
-                break
+    # 雀頭の役牌があと 1 枚で刻子だった
+    pair = h.pair
+    if pair is not None:
+        kinds = {
+            "yakuhai_haku": HAKU,
+            "yakuhai_hatsu": HATSU,
+            "yakuhai_chun": CHUN,
+            "yakuhai_seat": ctx.seat_wind,
+            "yakuhai_round": ctx.round_wind,
+        }
+        for result in yakuhai_all(h):
+            if not result.ok and result.key not in achieved and pair.first == kinds[result.key]:
+                results.append(_with_hint(result, f"雀頭の{name_of_kind(pair.first)}があと 1 枚あって刻子なら成立"))
 
     # ロンでなくツモなら成立した役
     concealed = _concealed_sets(h)
@@ -581,21 +586,15 @@ def near_misses(interp: Interpretation, ctx: WinContext, rules: Rules, fu: FuRes
         )
         results.append(h.result("suuankou", [check], hint="ツモで和了していれば成立（役満）"))
 
-    # 雀頭の役牌があと 1 枚で刻子だった
-    pair = h.pair
-    if pair is not None:
-        for result in yakuhai_all(h):
-            if result.ok or result.key in achieved:
-                continue
-            kind = {
-                "yakuhai_haku": HAKU,
-                "yakuhai_hatsu": HATSU,
-                "yakuhai_chun": CHUN,
-                "yakuhai_seat": ctx.seat_wind,
-                "yakuhai_round": ctx.round_wind,
-            }[result.key]
-            if pair.first == kind:
-                results.append(_with_hint(result, f"雀頭の{name_of_kind(kind)}があと 1 枚あって刻子なら成立"))
+    # 面子が 1 つ違えば成立した役（判定のときに hint を付けてある）
+    for result in (sanshoku(h), ittsu(h), toitoi(h), honitsu(h)):
+        if result.key not in achieved and not result.ok and result.hint:
+            results.append(result)
+    if "junchan" not in achieved and "chanta" not in achieved:
+        for result in (junchan(h), chanta(h)):
+            if not result.ok and result.hint:
+                results.append(result)
+                break
 
     return tuple(results[:MAX_NEAR_MISSES])
 

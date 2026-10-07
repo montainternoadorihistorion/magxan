@@ -39,7 +39,7 @@ def wait_text(interp: Interpretation, win_kind: int) -> str:
         return f"{kind_text(win_kind)} だけが足りない国士無双の待ち"
     block = interp.win_block
     assert block is not None
-    name = WAIT_NAMES[interp.wait].split("（")[0]
+    name = WAIT_NAMES[interp.wait]
     if interp.wait is WaitType.TANKI:
         return f"{kind_text(win_kind)} 1 枚で同じ牌を待つ{name}待ち"
     if interp.wait is WaitType.SHANPON:
