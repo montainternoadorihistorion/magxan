@@ -13,6 +13,10 @@
 
 状態は「設定（シード・ツキ補正・ルール）＋行動の列」から完全に作り直せる（replay）。
 通信が切れてセッションが消えても、ブラウザに残した小さな記録から続きを打てる。
+
+役指定練習（設定の target に、狙う役を入れる）
+    配牌を、その役の形に近づける。ツモの補正が引き寄せる牌も、その役に近づく牌になる。
+    ツキ補正が 0 なら、何も変えない（狙う役が決まっているだけの、通常の麻雀）。
 """
 from __future__ import annotations
 
@@ -22,15 +26,25 @@ from enum import StrEnum
 from typing import Any
 
 from engine.analysis.shanten import TENPAI, shanten_of
+from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS, target_distance, target_tiles
 from engine.analysis.ukeire import acceptance, remaining_counts
 from engine.analysis.waits import is_win_shape, wait_kinds
 from engine.coach import Analysis, Position, Verdict, analyze, judge_discard
-from engine.luck import NO_DRAW_LUCK, DealReport, DrawReport, LuckSettings, draw_probability, improve_deal, improve_draw
+from engine.luck import (
+    NO_DRAW_LUCK,
+    DealReport,
+    DrawReport,
+    LuckSettings,
+    aim_deal,
+    draw_probability,
+    improve_deal,
+    improve_draw,
+)
 from engine.rng import Rng
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.context import WinContext
 from engine.tiles import EAST, NORTH, NUM_TILES, SOUTH, WEST, counts34, kind_of, sort_tiles
-from engine.wall import DORA_START, URA_START, Wall
+from engine.wall import DORA_START, HAND_SIZE, LIVE_START, URA_START, Wall
 
 #: 1 局でツモれる回数（4 人打ちの 1 人ぶんにほぼ相当: 70 枚 ÷ 4 人 ≒ 18）
 MAX_DRAWS = 18
@@ -38,6 +52,10 @@ SEAT_WINDS = (EAST, SOUTH, WEST, NORTH)
 SAVE_VERSION = 1
 #: 局の番号（シード）の上限。保存したデータに極端な値が入っていても困らないように、範囲を決めておく
 MAX_SEED = 10**12
+#: 役指定練習で「一発」を狙うとき、リーチの次のツモだけ、ツモの補正の確率を何倍にするか
+IPPATSU_BOOST = 4
+#: 配牌で聴牌していないと成立しない役（役指定練習では、配牌を聴牌にする）
+DEAL_TENPAI_TARGETS = frozenset({"double_riichi"})
 
 
 def _is_int(value: object) -> bool:
@@ -56,8 +74,11 @@ class PracticeConfig:
     rules: Rules = DEFAULT_RULES
     seat_wind: int | None = None      # 自風。None なら、シードから決める（東南西北のどれか）
     round_wind: int = EAST
+    target: str | None = None         # 役指定練習で狙う役（図鑑のページの鍵）。None なら、ふつうの一人練習
 
     def __post_init__(self) -> None:
+        if self.target is not None and self.target not in TARGET_KEYS:
+            raise ValueError(f"役指定練習で選べない役です: {self.target!r}")
         if not _is_int(self.seed) or not 0 <= self.seed <= MAX_SEED:
             raise ValueError(f"局の番号（シード）は 0〜{MAX_SEED} の整数です: {self.seed!r}")
         if not isinstance(self.luck, LuckSettings) or not isinstance(self.rules, Rules):
@@ -74,6 +95,7 @@ class PracticeConfig:
             "rules": self.rules.to_dict(),
             "seat_wind": self.seat_wind,
             "round_wind": self.round_wind,
+            "target": self.target,
         }
 
     @classmethod
@@ -87,6 +109,7 @@ class PracticeConfig:
             rules=Rules.from_dict(data.get("rules", {})),
             seat_wind=data.get("seat_wind"),
             round_wind=data.get("round_wind", EAST),
+            target=data.get("target"),
         )
 
 
@@ -252,16 +275,44 @@ def _wall(state: PracticeState) -> Wall:
     return Wall(list(state.wall_tiles), live_drawn=state.turn, sealed=True)
 
 
-def _next_draw(wall: Wall, state: PracticeState, hand: Sequence[int], discards: Sequence[int]) -> tuple[int, DrawReport]:
-    """次の 1 枚をツモる（その前に、ツモの補正を試す）"""
+def _next_draw(
+    wall: Wall,
+    state: PracticeState,
+    hand: Sequence[int],
+    discards: Sequence[int],
+    *,
+    riichi: bool = False,
+    first_after_riichi: bool = False,
+) -> tuple[int, DrawReport]:
+    """次の 1 枚をツモる（その前に、ツモの補正を試す）。
+
+    補正が引き寄せるのは、ふつうは有効牌（向聴数が進む牌）。役指定練習では、狙う役に近づく牌。
+    その役に近づく牌が山に残っていなければ、有効牌にする。
+    riichi はリーチ後のツモか、first_after_riichi はリーチのすぐ次のツモか。
+    """
     probability = draw_probability(state.config.luck.draw)
     if probability <= 0:              # 補正なし：乱数も作らず、山の先頭をそのままツモる
         return wall.draw(), NO_DRAW_LUCK
+    target = state.config.target
     turn = wall.live_drawn + 1
+    if target in DEAL_TENPAI_TARGETS and turn == 1:
+        # ダブル立直を狙う練習：配牌が聴牌なので、最初のツモを引き寄せると、リーチする前にあがってしまう
+        return wall.draw(), NO_DRAW_LUCK
+    if target == "ippatsu" and first_after_riichi:
+        probability = min(1.0, probability * IPPATSU_BOOST)        # 一発を狙う練習：リーチの次のツモを引き寄せやすくする
     visible = (*discards, *state.dora_indicators)
 
     def wanted() -> list[int]:
-        return [kind for kind, _ in acceptance(counts34(hand), remaining_counts(hand, visible)).tiles]
+        counts = counts34(hand)
+        if target is not None and target not in SHAPELESS_KEYS:
+            winds = {"seat_wind": state.seat_wind, "round_wind": state.config.round_wind}
+            in_wall = counts34(wall.tiles[wall.next_live_position:wall.live_end])       # これからツモる山に残っている牌
+            # リーチのあとは手を変えられない。その役の聴牌になっているときだけ、役の付くあがり牌を引き寄せる
+            if not riichi or target_distance(counts, target, available=in_wall, **winds) == TENPAI:
+                closer = target_tiles(counts, target, available=in_wall, **winds)
+                if closer:
+                    return list(closer)
+        return [kind for kind, _ in acceptance(counts, remaining_counts(hand, visible)).tiles]
 
     report = improve_draw(wall, probability, wanted, Rng(state.config.seed, f"luck:draw:{turn}"))
     return wall.draw(), report
@@ -290,7 +341,15 @@ def start(config: PracticeConfig) -> PracticeState:
     """配牌 13 枚を取り、最初の 1 枚をツモった状態"""
     seat = seat_wind_of(config)
     wall = Wall.from_seed(config.seed)
-    deal = improve_deal(wall, 0, config.luck, config.seed, seat_wind=seat, round_wind=config.round_wind)
+    target = config.target
+    if target is None or (target in SHAPELESS_KEYS and target not in DEAL_TENPAI_TARGETS):
+        deal = improve_deal(wall, 0, config.luck, config.seed, seat_wind=seat, round_wind=config.round_wind)
+    else:           # 役指定練習：配牌を、狙う役の形に近づける
+        deal = aim_deal(
+            wall, 0, config.luck, config.seed, target=target, seat_wind=seat, round_wind=config.round_wind,
+            need_tenpai=target in DEAL_TENPAI_TARGETS,
+            unused_positions=range(HAND_SIZE, LIVE_START),      # 一人練習では、ほかの 3 人ぶんの配牌は誰も使わない
+        )
     wall.seal()
     hand = tuple(sort_tiles(wall.dealt_hand(0)))
     state = PracticeState(
@@ -346,7 +405,9 @@ def apply(state: PracticeState, action: Action) -> PracticeState:
                 state, actions=actions, wall_tiles=tuple(wall.tiles), hand=hand, drawn=None, discards=discards,
                 riichi_index=riichi_index, draws=tuple(draws), result=result,
             )
-        drawn, report = _next_draw(wall, state, hand, discards)
+        in_riichi = riichi_index is not None
+        first_after = in_riichi and len(draws) == riichi_index + 1
+        drawn, report = _next_draw(wall, state, hand, discards, riichi=in_riichi, first_after_riichi=first_after)
         turn = len(draws) + 1
         if riichi_index is None:
             draws.append(Draw(turn, drawn, report))

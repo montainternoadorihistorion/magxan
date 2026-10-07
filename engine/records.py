@@ -6,7 +6,11 @@
 
     record_of(state, decisions, ...)   終わった局 1 つぶんの記録を作る
     summarize(records)                 条件（補正の強さ・ヒントの有無）ごとに集計する（実力が先頭）
+    target_stats(records)              役指定練習の局を、狙った役ごとに集計する
     dump_record / dump_history / load_history   ブラウザや JSON に残すための変換（壊れたデータは読み飛ばす）
+
+役指定練習（狙う役を決めて、その役に近い配牌・ツモで打つ局）は、ふつうの局と打ち方も補正のかかり方も違う。
+だから、summarize の集計には入れず、狙った役ごとに「何回挑戦して、何回その役が付いたか」を別に数える。
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from typing import Any
 
 from engine.practice import Decision, Outcome, PracticeState
 from engine.scoring.explain import explain
+from engine.target_coach import target_result
 
 HISTORY_VERSION = 1
 #: 残す局数の上限（古いものから捨てる）
@@ -40,18 +45,24 @@ class HandRecord:
     yaku: tuple[str, ...] = () # 成立した役（役の名前の鍵）
     decisions: int = 0         # 自分で選んだ打牌の回数
     best: int = 0              # そのうち、いちばん速い打牌（おすすめと同じ速さ）だった回数
+    target: str = ""           # 役指定練習で狙った役（図鑑のページの鍵）。ふつうの局は空
+    made: bool = False         # 狙った役（か、その上位の役）が付いたか
 
     @property
     def luck_key(self) -> tuple[int, int]:
         return (self.deal, self.draw)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "t": self.time, "seed": self.seed, "deal": self.deal, "draw": self.draw, "hinted": self.hinted,
             "win": self.win, "turn": self.turn, "riichi": self.riichi, "tenpai": self.tenpai,
             "pts": self.points, "han": self.han, "fu": self.fu, "yaku": list(self.yaku),
             "n": self.decisions, "best": self.best,
         }
+        if self.target:             # ふつうの局の記録は、前と同じ形のまま
+            data["target"] = self.target
+            data["made"] = self.made
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> HandRecord:
@@ -75,7 +86,12 @@ class HandRecord:
         if not isinstance(yaku, list) or not all(isinstance(key, str) for key in yaku):
             raise ValueError("記録の値がおかしい: yaku")
         decisions = number("n", 0, 100, 0)
+        target = data.get("target", "")
+        if not isinstance(target, str) or len(target) > 40:
+            raise ValueError("記録の値がおかしい: target")
         return cls(
+            target=target,
+            made=flag("made"),
             time=number("t", 0, 10**11),
             seed=number("seed", 0, 10**12),
             deal=number("deal", 0, 100),
@@ -100,17 +116,20 @@ def record_of(state: PracticeState, decisions: Sequence[Decision], *, time: int,
     if result is None:
         raise ValueError("まだ終わっていない局は記録できません")
     luck = state.config.luck
+    target = state.config.target or ""
     common = {
         "time": int(time), "seed": state.config.seed, "deal": luck.deal, "draw": luck.draw, "hinted": hinted,
         "turn": result.turn, "riichi": state.in_riichi,
-        "decisions": len(decisions), "best": sum(1 for d in decisions if d.verdict.is_best),
+        "decisions": len(decisions), "best": sum(1 for d in decisions if d.verdict.is_best), "target": target,
     }
     if result.outcome is Outcome.TSUMO and result.win is not None:
-        best = explain(result.win, state.config.rules).best
+        explanation = explain(result.win, state.config.rules)
+        best = explanation.best
         if best is not None and best.points is not None:
+            made = bool(target) and target_result(explanation, target).achieved
             return HandRecord(
                 win=True, tenpai=True, points=best.points.total, han=best.han, fu=best.fu.fu,
-                yaku=tuple(item.key for item in best.evaluation.yaku), **common,
+                yaku=tuple(item.key for item in best.evaluation.yaku), made=made, **common,
             )
     return HandRecord(win=False, tenpai=result.tenpai, **common)
 
@@ -170,9 +189,14 @@ class Summary:
 
 
 def summarize(records: Iterable[HandRecord]) -> list[Summary]:
-    """条件ごとに集計する。並びは、補正の弱い順（補正 0 が先頭）。同じ補正なら、ヒントなしが先"""
+    """条件ごとに集計する。並びは、補正の弱い順（補正 0 が先頭）。同じ補正なら、ヒントなしが先。
+
+    役指定練習の局は入れない（target_stats で、狙った役ごとに数える）。
+    """
     groups: dict[tuple[int, int, bool], list[HandRecord]] = {}
     for record in records:
+        if record.target:
+            continue
         groups.setdefault((record.deal, record.draw, record.hinted), []).append(record)
     result = []
     for (deal, draw, hinted), items in sorted(groups.items()):
@@ -193,6 +217,30 @@ def summarize(records: Iterable[HandRecord]) -> list[Summary]:
             )
         )
     return result
+
+
+@dataclass(frozen=True)
+class TargetStat:
+    """役指定練習で、ある役を狙った局の集計"""
+
+    tries: int = 0      # 挑戦した局数
+    wins: int = 0       # あがった局数（狙った役が付かなかったあがりも含む）
+    made: int = 0       # 狙った役（か、その上位の役）が付いた局数
+
+    @property
+    def made_rate(self) -> float:
+        return self.made / self.tries if self.tries else 0.0
+
+
+def target_stats(records: Iterable[HandRecord]) -> dict[str, TargetStat]:
+    """役指定練習の局を、狙った役（図鑑のページの鍵）ごとに集計する"""
+    stats: dict[str, TargetStat] = {}
+    for record in records:
+        if not record.target:
+            continue
+        old = stats.get(record.target, TargetStat())
+        stats[record.target] = TargetStat(old.tries + 1, old.wins + record.win, old.made + record.made)
+    return stats
 
 
 def yaku_counts(records: Iterable[HandRecord]) -> dict[str, int]:

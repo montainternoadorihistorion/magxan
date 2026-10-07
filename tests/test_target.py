@@ -1,0 +1,328 @@
+"""役までの距離（engine/analysis/target.py）のテスト。
+
+確かめること
+    * 手の形を問わない役（立直など）の距離は、判定ライブラリの向聴数と同じ
+    * 距離 −1（その役の形であがっている）と、点数計算が「その役が付く」と言うことが、一致する
+    * 1 枚引くと距離はちょうど 1 縮められる（縮む牌が必ずあり、2 以上は縮まない）
+    * めざす形（plan）の足りない牌を足し、要らない牌を除くと、本当にその役のあがりになる
+"""
+from __future__ import annotations
+
+import random
+from functools import cache
+
+import pytest
+
+from engine import content
+from engine.analysis import target as tg
+from engine.analysis.shanten import shanten_of
+from engine.scoring.context import WinContext
+from engine.scoring.decompose import Form
+from engine.scoring.explain import explain
+from engine.tiles import EAST, SOUTH, counts34, parse_tiles
+
+SEAT, ROUND = SOUTH, EAST
+WINDS = {"seat_wind": SEAT, "round_wind": ROUND}
+STRUCTURAL = [key for key in tg.TARGET_KEYS if key not in tg.SHAPELESS_KEYS]
+PAGE_OF = content.page_of_yaku()
+#: 距離の計算が「その役の形」に含めている、上位の役
+UPGRADES = {
+    "iipeikou": {"ryanpeikou"},
+    "sanankou": {"suuankou"},
+    "chanta": {"junchan"},
+    "honitsu": {"chinitsu", "tsuuiisou"},
+}
+#: 刻子で作る役。刻子 4 つの形（門前のツモでは四暗刻になり、その役を数えない）を、役の形に入れていない
+COUNTED_ONLY = frozenset({"sanshoku_doukou", "shousangen", "honroutou"})
+
+
+def _random_counts(rnd: random.Random, size: int) -> list[int]:
+    return counts34(rnd.sample(range(136), size))
+
+
+def _complete_hand(rnd: random.Random) -> list[int]:
+    """適当な 4 面子 1 雀頭の 14 枚（種類ごとの枚数）"""
+    while True:
+        counts = [0] * 34
+        for _ in range(4):
+            if rnd.random() < 0.6:
+                first = rnd.choice(sorted(tg.SEQUENCE_STARTS))
+                kinds = (first, first + 1, first + 2)
+            else:
+                kinds = (rnd.randrange(34),) * 3
+            for kind in kinds:
+                counts[kind] += 1
+        counts[rnd.randrange(34)] += 2
+        if max(counts) <= 4:
+            return counts
+
+
+def _near_hand(rnd: random.Random, size: int) -> list[int]:
+    """あがり形から何枚か入れ替えた手（役に近い手も遠い手も混ざるように）"""
+    counts = _complete_hand(rnd)
+    for _ in range(rnd.randrange(0, 5)):
+        counts[rnd.choice([k for k in range(34) if counts[k]])] -= 1
+        counts[rnd.choice([k for k in range(34) if counts[k] < 4])] += 1
+    if size == 13:
+        counts[rnd.choice([k for k in range(34) if counts[k]])] -= 1
+    return counts
+
+
+def _tiles(counts: list[int]) -> list[int]:
+    return [kind * 4 + i for kind in range(34) for i in range(counts[kind])]
+
+
+@cache
+def _pages_of_hand(counts: tuple[int, ...]) -> tuple[frozenset[str], frozenset[str]]:
+    """14 枚のあがり形（門前のツモ）に付きうる役（図鑑のページの鍵）。あがり牌と読み方を、すべて試す。
+
+    →（数えられる役, 条件を満たしている役）。あとのほうは、役満があるために数えない役も含む。
+    """
+    tiles = _tiles(list(counts))
+    counted: set[str] = set()
+    satisfied: set[str] = set()
+    for kind in range(34):
+        if not counts[kind]:
+            continue
+        result = explain(WinContext(closed_tiles=tuple(tiles), win_tile=kind * 4, is_tsumo=True, **WINDS))
+        for candidate in result.candidates:
+            counted.update(PAGE_OF[item.key] for item in candidate.evaluation.yaku)
+            satisfied.update(PAGE_OF[item.key] for item in (*candidate.evaluation.yaku, *candidate.evaluation.ignored))
+    return frozenset(counted), frozenset(satisfied)
+
+
+def _has(counts: list[int], key: str) -> bool:
+    counted, satisfied = _pages_of_hand(tuple(counts))
+    if key == "honroutou" and "tsuuiisou" in counted:
+        return all(n in (0, 2) for n in counts)         # 字牌 7 種の七対子は、混老頭ではなく字一色（役満）として数える
+    found = counted if key in COUNTED_ONLY else satisfied
+    return bool(found & ({key} | UPGRADES.get(key, set())))
+
+
+def _distance(counts: list[int], key: str, **kw) -> int:
+    return tg.target_distance(counts, key, **WINDS, **kw)
+
+
+# ---------------------------------------------------------------- 向聴数との一致
+
+
+def test_shapeless_targets_equal_ordinary_shanten():
+    rnd = random.Random(20261008)
+    for index in range(1500):
+        size = 13 + index % 2
+        counts = _random_counts(rnd, size) if index % 3 else _near_hand(rnd, size)
+        for key in ("riichi", "double_riichi"):
+            assert _distance(counts, key) == shanten_of(counts), counts
+
+
+def test_structural_distance_is_never_below_shanten():
+    rnd = random.Random(5)
+    for _ in range(150):
+        counts = _near_hand(rnd, 13)
+        base = shanten_of(counts)
+        for key in STRUCTURAL:
+            assert _distance(counts, key) >= base, (key, counts)
+
+
+# ---------------------------------------------------------------- 点数計算との一致
+
+
+def test_keys_are_pages_marked_as_practicable():
+    pages = content.yaku_page_map()
+    assert set(tg.TARGET_KEYS) == {page.key for page in pages.values() if page.practice}
+    assert len(set(tg.TARGET_KEYS)) == len(tg.TARGET_KEYS) == 29
+    for key in tg.TARGET_KEYS:
+        tg.spec_of(key, SEAT, ROUND)
+    with pytest.raises(KeyError):
+        tg.spec_of("toitoi")
+
+
+def test_examples_of_each_page_are_at_distance_minus_one():
+    """図鑑の成立例（門前の手）は、その役の形として「あがっている」と数えられる"""
+    checked = 0
+    for page in content.yaku_pages():
+        if page.practice is None:
+            continue
+        for hand in page.examples:
+            ctx = hand.context()
+            if ctx.melds:
+                continue
+            counts = counts34(ctx.closed_tiles)
+            distance = tg.target_distance(counts, page.key, seat_wind=ctx.seat_wind, round_wind=ctx.round_wind)
+            assert distance == -1, (page.key, hand.title)
+            checked += 1
+    assert checked >= 45
+
+
+@pytest.mark.parametrize("key", STRUCTURAL)
+def test_completed_plan_really_has_the_yaku(key):
+    """めざす形どおりに牌を入れ替えると、点数計算でも、その役（か、その上位の役）が付く"""
+    rnd = random.Random(f"plan:{key}")
+    for index in range(25):
+        counts = _near_hand(rnd, 13 + index % 2) if index % 2 else _random_counts(rnd, 13 + index % 2)
+        plan = tg.target_plan(counts, key, **WINDS)
+        assert plan.possible and plan.form is not None
+        size = sum(counts)
+        assert plan.distance == plan.missing - 1                     # あがりまでに要る枚数 ＝ 距離 ＋ 1
+        assert sum(n for _, n in plan.spare) == size - (13 - plan.distance)
+        done = list(counts)
+        for kind, n in plan.spare:
+            done[kind] -= n
+        for kind, n in plan.need:
+            done[kind] += n
+        assert sum(done) == 14 and 0 <= min(done) and max(done) <= 4
+        assert sum(len(block.tiles) for block in plan.blocks) == 14
+        assert sorted(k for block in plan.blocks for k in block.tiles) == sorted(k for k in range(34) for _ in range(done[k]))
+        assert sorted(k for block in plan.blocks for k in block.need) == sorted(k for k, n in plan.need for _ in range(n))
+        assert _distance(done, key) == -1
+        assert _has(done, key), (key, done)
+
+
+def test_distance_minus_one_matches_the_scoring_engine():
+    """いろいろなあがり形について、「距離 −1」と「点数計算でその役が付く」が、どの役でも一致する"""
+    rnd = random.Random(99)
+    hands: list[list[int]] = [_complete_hand(rnd) for _ in range(60)]
+    for key in STRUCTURAL:                                  # それぞれの役のあがり形も混ぜる（まれな役を試すため）
+        for _ in range(4):
+            start = _near_hand(rnd, 14)
+            plan = tg.target_plan(start, key, **WINDS)
+            done = list(start)
+            for kind, n in plan.spare:
+                done[kind] -= n
+            for kind, n in plan.need:
+                done[kind] += n
+            hands.append(done)
+    for counts in hands:
+        for key in STRUCTURAL:
+            assert (_distance(counts, key) == -1) == _has(counts, key), (key, counts)
+
+
+# ---------------------------------------------------------------- 距離の性質
+
+
+@pytest.mark.parametrize("key", tg.TARGET_KEYS)
+def test_one_draw_changes_the_distance_by_exactly_one(key):
+    rnd = random.Random(f"step:{key}")
+    for index in range(12):
+        counts = _near_hand(rnd, 13) if index % 2 else _random_counts(rnd, 13)
+        base = _distance(counts, key)
+        assert 0 <= base < tg.IMPOSSIBLE
+        after = []
+        for kind in range(34):
+            if counts[kind] < 4:
+                counts[kind] += 1
+                after.append(_distance(counts, key))
+                counts[kind] -= 1
+        assert min(after) == base - 1 and max(after) <= base, (key, counts)
+        closer = tg.target_tiles(counts, key, **WINDS)
+        assert len(closer) == after.count(base - 1) > 0
+        # 14 枚から 1 枚切る：いちばん良い切り方をすれば、距離は変わらない
+        counts[rnd.choice([k for k in range(34) if counts[k] < 4])] += 1
+        full = _distance(counts, key)
+        cut = []
+        for kind in range(34):
+            if counts[kind]:
+                counts[kind] -= 1
+                cut.append(_distance(counts, key))
+                counts[kind] += 1
+        assert min(cut) == max(full, 0), (key, counts)
+
+
+def test_known_distances():
+    def distance(text: str, key: str) -> int:
+        return _distance(counts34(parse_tiles(text)), key)
+
+    assert distance("234m234p24s789m44z", "sanshoku") == 0          # 3索 で三色同順
+    assert distance("234m234p24s789m44z", "tanyao") == 3            # 9萬 と北 2 枚が使えない。あがりまで、3索 を含めて 4 枚
+    assert distance("123456789m24s44z", "ittsu") == 0
+    assert distance("123456789m24s44z", "chinitsu") == 4            # 使えるのは萬子 9 枚。あがりまで、あと 5 枚
+    assert distance("19m19p19s1234567z", "kokushi") == 0            # 十三面待ち
+    assert distance("19m19p19s123456z5m", "kokushi") == 1
+    assert distance("1112345678999m", "chuuren") == 0
+    assert distance("2255m3399p4466s1z", "chiitoitsu") == 0
+    assert distance("2255m3399p4466s1z", "suuankou") == 3            # 対子 6 組から四暗刻は遠い（刻子 4 つに、あと 4 枚）
+    assert distance("555z666z77z234m56p", "shousangen") == 0
+    assert distance("555z666z77z234m56p", "daisangen") == 1
+    assert distance("123m456p789s23s44z", "pinfu") == 0
+    assert distance("123m456p789s23s55z", "pinfu") == 2             # 雀頭の白は役牌。平和にするには、雀頭を作り直す（2 枚要る）
+
+
+def test_set_based_targets_avoid_four_concealed_triplets():
+    """刻子 4 つを門前でツモると四暗刻（役満）になり、ほかの役を数えない。その形は、役の形に入れない"""
+    def distance(text: str, key: str) -> int:
+        return _distance(counts34(parse_tiles(text)), key)
+
+    # 三色同刻：4 つめの面子は順子にする
+    assert distance("111m111p111s222m5z", "suuankou") == 0
+    assert distance("111m111p111s222m5z", "sanshoku_doukou") == 1          # 22萬 を雀頭にして、残りの 2萬 から順子を作る（あと 2 枚）
+    assert distance("111m111p111s234m5z", "sanshoku_doukou") == 0
+    # 小三元：残りの 2 面子のどちらかは順子
+    assert distance("555z666z77z111m99p", "suuankou") == 0
+    assert distance("555z666z77z111m99p", "shousangen") == 1               # 9筒 1 枚から順子を作る（あと 2 枚）
+    assert distance("555z666z77z111m78p", "shousangen") == 0
+    # 混老頭：七対子の形だけ（刻子 4 つの形は入れない）
+    assert distance("111m999m111p999p1z", "suuankou") == 0
+    assert distance("111m999m111p999p1z", "honroutou") == 4                # 対子は 4 組。あと 3 組と、単騎の 1 枚
+    assert distance("1199m1199p1199s1z", "honroutou") == 0
+    assert tg.target_plan(counts34(parse_tiles("1199m1199p1199s1z")), "honroutou").form is Form.CHIITOI
+
+
+def test_plan_shows_what_is_missing():
+    counts = counts34(parse_tiles("234m23p24s789m44z5z"))
+    plan = tg.target_plan(counts, "sanshoku", **WINDS)
+    assert plan.form is Form.REGULAR and plan.distance == 1
+    assert dict(plan.need) == {parse_tiles("4p")[0] // 4: 1, parse_tiles("3s")[0] // 4: 1}      # 足りないのは 4筒 と 3索
+    fixed = [block for block in plan.blocks if block.fixed]
+    assert len(fixed) == 3 and all(block.kind is tg.BlockKind.SEQUENCE for block in fixed)
+    assert sum(1 for block in plan.blocks if block.complete) >= 3      # 234萬・789萬・北北 はそろっている
+    assert dict(plan.spare) == {31: 1}                                 # 白は、めざす形に入らない
+
+    kokushi = tg.target_plan(counts34(parse_tiles("19m19p19s1234567z")), "kokushi")
+    assert kokushi.form is Form.KOKUSHI and len(kokushi.blocks) == 13 and kokushi.missing == 1
+    seven = tg.target_plan(counts34(parse_tiles("2255m3399p4466s1z")), "chiitoitsu")
+    assert seven.form is Form.CHIITOI and [b.kind for b in seven.blocks] == [tg.BlockKind.PAIR] * 7
+
+
+def test_availability_makes_a_target_impossible():
+    counts = counts34(parse_tiles("19m19p19s123456z55m"))
+    free = [4 - n for n in counts]
+    assert _distance(counts, "kokushi", available=free) == 1
+    free[33] = 0                                                       # 中が 4 枚とも見えている
+    assert _distance(counts, "kokushi", available=free) == tg.IMPOSSIBLE
+    plan = tg.target_plan(counts, "kokushi", **WINDS, available=free)
+    assert not plan.possible and plan.form is None and plan.blocks == ()
+    assert tg.target_tiles(counts, "kokushi", **WINDS, available=free) == ()
+
+    # 三色同順：3索 が残っていなければ、234 の三色はあきらめて、別の数字の三色をめざす
+    hand = counts34(parse_tiles("234m234p24s789m44z"))
+    free = [4 - n for n in hand]
+    assert tg.target_tiles(hand, "sanshoku", **WINDS, available=free) == (parse_tiles("3s")[0] // 4,)
+    free[parse_tiles("3s")[0] // 4] = 0
+    assert _distance(hand, "sanshoku", available=free) > 0
+    assert parse_tiles("3s")[0] // 4 not in tg.target_tiles(hand, "sanshoku", **WINDS, available=free)
+
+
+def test_yakuhai_and_pinfu_depend_on_the_winds():
+    counts = counts34(parse_tiles("11z234m567p23s789s"))             # 東の対子と、面子 3 つ、両面
+    assert tg.target_distance(counts, "yakuhai", seat_wind=EAST, round_wind=EAST) == 1
+    assert tg.target_distance(counts, "yakuhai", seat_wind=SOUTH, round_wind=EAST) == 1          # 東は場風
+    assert tg.target_distance(counts, "yakuhai", seat_wind=SOUTH, round_wind=SOUTH) == 2         # 東は、どちらの風でもない
+    # 客風の対子は平和の雀頭にできる。役牌の対子はできないので、雀頭を作り直すことになる
+    assert tg.target_distance(counts, "pinfu", seat_wind=SOUTH, round_wind=SOUTH) == 0
+    assert tg.target_distance(counts, "pinfu", seat_wind=EAST, round_wind=EAST) == 2
+
+
+def test_speed_is_good_enough_for_the_coach():
+    """1 局面ぶん（14 通りの打牌 ＋ 引いて近づく牌 34 通り）を、十分な速さで調べられる"""
+    import time
+
+    rnd = random.Random(3)
+    hands = [_random_counts(rnd, 14) for _ in range(12)]
+    started = time.perf_counter()
+    for counts in hands:
+        for key in ("sanshoku", "honitsu", "iipeikou"):
+            best = min((k for k in range(34) if counts[k]), key=lambda k: _distance([n - (i == k) for i, n in enumerate(counts)], key))
+            counts[best] -= 1
+            tg.target_tiles(counts, key, **WINDS)
+            counts[best] += 1
+    assert (time.perf_counter() - started) / 36 < 1.0         # 遅い計算機でも 1 局面 1 秒未満（ふつうは 0.1 秒ほど）
