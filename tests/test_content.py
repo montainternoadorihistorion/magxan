@@ -355,3 +355,48 @@ def test_loader_rejects_non_mapping():
         content._yaku_page(["riichi"], 0)
     with pytest.raises(ContentError):
         content._load("no_such_file.yaml")
+
+
+def test_folded_text_breaks_only_after_punctuation():
+    """長い文章を何行かに分けて書くとき（YAML の「>-」）は、句読点のあとで折る。
+
+    YAML は、行の切れ目を空白 1 つにする。読み込むときに「、」「。」のあとの空白は取っているが、
+    文の途中で折ると、日本語の文の中に空白が残ってしまう。
+    """
+    import re
+
+    from engine.content import DATA_DIR
+
+    for path in sorted(DATA_DIR.glob("*.yaml")):
+        lines = path.read_text(encoding="utf-8").split("\n")
+        inside, indent, previous = False, 0, None
+        for number, line in enumerate(lines, start=1):
+            if re.search(r": >-\s*$", line):
+                inside, indent, previous = True, len(line) - len(line.lstrip()), None
+                continue
+            if not inside:
+                continue
+            if not line.strip() or len(line) - len(line.lstrip()) <= indent:
+                inside = False
+                continue
+            if previous is not None:
+                assert previous.rstrip()[-1] in "、。", f"{path.name}:{number - 1} 行の終わりが句読点でない"
+            previous = line
+
+
+def test_loaded_text_has_no_space_after_punctuation():
+    import re
+
+    from engine import content
+
+    texts = []
+    for page in content.yaku_pages():
+        texts += [page.origin.text, page.short, page.kanji, *page.notes, *page.definition, *page.tips]
+        texts += [trap.why for trap in page.traps] + [hand.note for hand in page.examples]
+    for term in content.glossary().terms:
+        texts += [term.meaning, term.alt, term.kanji, term.example_note] + ([term.origin.text] if term.origin else [])
+    texts += [content.table_guide().intro, content.rule_book().intro]
+    texts += [item.note for item in content.rule_book().items] + [ref.text for ref in content.yaku_stats().references]
+    assert len(texts) > 800
+    for text in texts:
+        assert not re.search(r"[、。] \S", text), text

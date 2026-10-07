@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 import pytest
-from html_helpers import headings_of, page_html, ruby_terms
+from html_helpers import headings_of, page_html, page_parts, ruby_terms
 from practice_helpers import nearest_discard
 from streamlit.testing.v1 import AppTest
 
@@ -20,8 +20,11 @@ from engine.coach import analyze
 from engine.luck import LuckSettings
 from engine.practice import Outcome, PracticeConfig
 from engine.records import HandRecord, dump_record, load_history
+from engine.scoring.explain import explain
+from engine.target_coach import target_result
 from ui.components.browser_store import initial_state
-from ui.practice_session import DEFAULT_SETTINGS, HAND_NAME, HISTORY_NAME, SETTINGS_NAME
+from ui.practice_session import DEFAULT_SETTINGS, HAND_NAME, HISTORY_NAME, SETTINGS_NAME, PracticeSession
+from ui.ruby import missing_ruby
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE_STATE = "mjdojo_store::state"
@@ -130,7 +133,7 @@ def test_first_visit_starts_a_hand_with_hints():
     assert state.turn == 1 and state.config.luck == LuckSettings(75, 75)
     assert "1 巡目（残りツモ 17 回）" in text and "ドラ表示牌" in text and "河（切った牌）：まだ切っていません" in text
     assert "おすすめ：" in text or "聴牌にとれます" in text or "あがりの形です" in text
-    assert labels(at)[-3:] == ["設定（ツキ補正・コーチ）", "成績", "このページの使い方"]
+    assert labels(at)[-3:] == ["設定（ツキ補正・役指定・コーチ）", "成績", "このページの使い方"]
     assert any(f"局の番号 {state.config.seed}" in c.value for c in at.caption)
     # 始めた局が、ブラウザに保存される
     assert json.loads(stored(at, HAND_NAME))["save"] == practice.to_save(state)
@@ -259,7 +262,7 @@ def test_hint_off_and_minimum_level_show_less():
     assert "コーチはオフです" in text and "巡目の打牌" not in text and TABLE not in labels(off)
     minimum = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(level=1)})
     assert "おすすめ：" in page_text(minimum) and "3 巡目の打牌" in page_text(minimum)
-    assert labels(minimum) == ["設定（ツキ補正・コーチ）", "成績", "このページの使い方"]
+    assert labels(minimum) == ["設定（ツキ補正・役指定・コーチ）", "成績", "このページの使い方"]
 
 
 def test_last_draw_explains_that_only_tenpai_matters():
@@ -293,6 +296,8 @@ def test_tsumo_button_shows_the_full_explanation_and_records_the_hand():
     assert "配牌：候補 64 個から" in text and "「ツモ。" in text
     assert REVIEW in labels(at)
     assert [b.label for b in at.button].count("次の局へ") == 2          # 解説を読み終えた下にも、もう 1 つ
+    # ドラ表示牌は、上の札に出ている。手牌の下には、もう出さない（「次の局へ」を、最初の画面に収めるため）
+    assert '<div class="mj-cap">ドラ表示牌</div>' not in page_html(at) and "ドラ表示牌" in text
     assert "ヒントあり" in text                                         # 打つ前のヒントを出した局
     # 成績に 1 局ぶん入り、ブラウザにも保存される
     history = load_history(stored(at, HISTORY_NAME))
@@ -321,6 +326,7 @@ def test_riichi_hand_shows_which_draws_were_brought_by_luck():
     at = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(deal=100, draw=100, tenpai_deal=True)})
     text = page_text(at)
     assert "リーチのあとのツモ" in text and "★ は、ツキ補正で引き寄せた牌" in text and 'class="mj-star"' in page_html(at)
+    assert "裏ドラ表示牌" in text                                     # リーチしてあがった局は、手牌の下に裏ドラ表示牌も出す
     assert "あがり牌も、補正で引き寄せた牌。" in text
     plain = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(deal=100, draw=100, tenpai_deal=True, mark=False)})
     assert 'class="mj-star"' not in page_html(plain)                   # 印を付けない設定
@@ -453,15 +459,10 @@ def test_stats_table_and_clearing():
     assert at.session_state["pr_history"] == []
 
 
-def test_playing_through_the_session_object_updates_the_page():
-    """牌タップの代わりに、同じ処理（PracticeSession）を呼んで 1 局打ち、画面と成績が付いてくることを確かめる"""
-    from ui.practice_session import PracticeSession
-
-    at = open_practice({SETTINGS_NAME: settings_json(hint="after", deal=50, draw=50)})
+def session_of(at: AppTest) -> PracticeSession:
+    """ページと同じ状態（セッションとブラウザ内保存）につないだ PracticeSession。牌タップの代わりに、同じ処理を呼ぶのに使う"""
 
     class StoreProxy:
-        """テストの中から、ページと同じブラウザ内保存の状態に書き込む"""
-
         def get(self, name):
             return at.session_state[STORE_STATE]["known"].get(name)
 
@@ -488,19 +489,195 @@ def test_playing_through_the_session_object_updates_the_page():
         def __contains__(self, key):
             return key in at.session_state
 
-    session = PracticeSession(StateProxy(), StoreProxy(), now=lambda: 1000.0)
+    return PracticeSession(StateProxy(), StoreProxy(), now=lambda: 1000.0)
+
+
+def session_pick(at: AppTest, tile: int) -> AppTest:
+    """牌を切る（部品から「この牌を切る」が届いたときと同じ処理）"""
+    session_of(at).pick(tile)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def test_playing_through_the_session_object_updates_the_page():
+    """牌タップの代わりに、同じ処理（PracticeSession）を呼んで 1 局打ち、画面と成績が付いてくることを確かめる"""
+    at = open_practice({SETTINGS_NAME: settings_json(hint="after", deal=50, draw=50)})
     steps = 0
     while not at.session_state["pr_state"].finished:
         state = at.session_state["pr_state"]
         if state.can_tsumo:
             click(at, "ツモ（あがる）")
         else:
-            session.pick(nearest_discard(state))
-            at.run()
-            assert not at.exception, [e.value for e in at.exception]
+            session_pick(at, nearest_discard(state))
             if not at.session_state["pr_state"].finished:
                 assert "巡目の打牌" in page_text(at)                    # 答え合わせが出る
         steps += 1
         assert steps < 40
     assert len(at.session_state["pr_history"]) == 1 and at.session_state["pr_history"][0].hinted is False
     assert "次の局へ" in [b.label for b in at.button]
+
+
+# ---------------------------------------------------------------- 役指定練習
+
+
+def open_target(key: str | None, known: dict[str, str] | None = None) -> AppTest:
+    """役図鑑の「この役を実戦で練習する」から来たときと同じ開き方（URL の target に役の鍵）"""
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+    at.run()
+    at.session_state[STORE_STATE] = initial_state(known or {})
+    if key is not None:
+        at.query_params["target"] = key
+    at.switch_page("views/practice.py").run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def aim_step(state: practice.PracticeState) -> practice.Action:
+    """狙う役のコーチのおすすめどおりに 1 手打つ（もう作れないときは、ツモ切り）"""
+    advice = practice.target_advice_of(state)
+    if advice is None or advice.pick is None:
+        return practice.discard(state.drawn)
+    return practice.discard(advice.pick.tile)
+
+
+def find_target(key: str, stop, *, level: int = 75, seeds=range(200)) -> practice.PracticeState:
+    """狙う役のコーチに従って打ち、stop(state) が真になった局面を探す"""
+    for seed in seeds:
+        state = practice.start(PracticeConfig(seed=seed, luck=LuckSettings(level, level), target=key))
+        while not state.finished:
+            if stop(state):
+                return state
+            if state.can_tsumo:
+                break
+            state = practice.apply(state, aim_step(state))
+    raise AssertionError("局面が見つからない")
+
+
+def wins_with(key: str):
+    """いまツモると、狙った役が付く局面か"""
+    def check(state: practice.PracticeState) -> bool:
+        if not state.can_tsumo:
+            return False
+        win = practice.apply(state, practice.TSUMO).result.win
+        return target_result(explain(win, state.config.rules), key).made
+    return check
+
+
+def components(at: AppTest, name: str) -> list[dict]:
+    return [json.loads(c.proto.json) for c in at.get("bidi_component") if c.proto.component_name == name]
+
+
+def test_target_link_starts_a_hand_aimed_at_that_yaku():
+    at = open_target("sanshoku")
+    state = at.session_state["pr_state"]
+    assert state.config.target == "sanshoku" and "target" not in at.query_params
+    assert json.loads(stored(at, SETTINGS_NAME))["target"] == "sanshoku"
+    text = page_text(at)
+    assert "役指定：三色同順" in text and "三色同順まで あと" in text
+    assert labels(at)[:4] == ["めざす形（三色同順）", "三色同順に近い切り方の表", "受け入れ表（速さだけで見たとき）", LAYOUT]
+    assert "聴牌したときの待ちと点数" not in labels(at)
+    assert missing_ruby(page_parts(at)) == []
+    # 手牌の印は、役に近い切り方（速さのおすすめではなく）
+    advice = practice.target_advice_of(state)
+    marked = [tile["id"] for tile in components(at, "mjdojo_tile_hand")[0]["tiles"] if tile["mark"]]
+    assert sorted(marked) == sorted(c.tile for c in advice.best) and marked
+
+
+def test_unknown_target_is_ignored():
+    at = open_target("no_such_yaku")
+    assert at.session_state["pr_state"].config.target is None and "target" not in at.query_params
+    assert "役指定：" not in page_text(at) and json.loads(stored(at, SETTINGS_NAME))["target"] is None
+
+
+def test_target_link_keeps_a_hand_in_progress_for_the_same_yaku():
+    state = find_target("sanshoku", lambda s: s.turn == 4 and not s.can_tsumo)
+    saved = {HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(target="sanshoku")}
+    same = open_target("sanshoku", saved)
+    assert same.session_state["pr_state"] == state                      # 同じ役を狙う局の途中なら、そのまま続ける
+    other = open_target("chiitoitsu", saved)
+    fresh = other.session_state["pr_state"]
+    assert fresh.config.target == "chiitoitsu" and fresh.turn == 1 and fresh != state
+
+
+def test_target_practice_without_luck_says_so():
+    at = open_target("sanshoku", {SETTINGS_NAME: settings_json(deal=0, draw=0)})
+    assert "ツキ補正が「なし」なので、配牌もツモも、ふつうの麻雀と同じです。" in page_text(at)
+    assert "ツキ補正が「なし」なので" not in page_text(open_target("sanshoku"))
+    assert missing_ruby(page_parts(at)) == []
+
+
+def test_shapeless_target_shows_a_tip_instead_of_a_plan():
+    at = open_target("riichi")
+    text = page_text(at)
+    assert "役指定：立直" in text and "立直を狙う局：聴牌したら「リーチ」を押して、切る牌を選ぶ。" in text
+    assert not any(label.startswith("めざす形") for label in labels(at)) and TABLE in labels(at)
+    assert missing_ruby(page_parts(at)) == []
+
+
+def test_target_hint_after_grades_the_discard_against_the_yaku():
+    state = find_target("sanshoku", lambda s: s.turn == 3 and not s.can_tsumo)
+    advice = practice.target_advice_of(state)
+    worst = advice.candidates[-1]
+    at = open_target(None, {HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(target="sanshoku", hint="after")})
+    session_pick(at, worst.tile)
+    text = page_text(at)
+    assert "3 巡目の打牌" in text and "おすすめ：" not in text
+    assert "さっきの局面の、役に近い切り方（答え合わせ）" in labels(at) and "さっきの局面の受け入れ表（答え合わせ）" in labels(at)
+    assert "切った牌" in text and missing_ruby(page_parts(at)) == []
+    decision = at.session_state["pr_decisions"][-1]
+    assert decision.target is not None and decision.target.chosen.kind == worst.kind
+
+
+def test_winning_with_the_target_gives_a_stamp_and_a_record():
+    state = find_target("tanyao", wins_with("tanyao"))
+    at = open_target(None, {HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(target="tanyao")})
+    assert "あがりの形です。断么九が付きます。" in page_text(at)
+    click(at, "ツモ（あがる）")
+    text = page_text(at)
+    assert "狙った断么九が付いた。" in text and "はじめて成立させた役" in text and "役図鑑に、スタンプを押しました。" in text
+    # スタンプの案内は、「次の局へ」の下に出す（上に置くと、ボタンが最初の画面から押し出される）
+    shown = [part[0] for part in page_parts(at)]
+    assert shown.index("次の局へ") < next(i for i, piece in enumerate(shown) if "はじめて成立させた役" in piece)
+    stamps = json.loads(stored(at, "progress.stamps"))
+    assert "tanyao" in stamps and stamps["tanyao"]["n"] == 1
+    history = load_history(stored(at, HISTORY_NAME))
+    assert len(history) == 1 and history[0].target == "tanyao" and history[0].made and "tanyao" in history[0].yaku
+    # 打牌の評価は、狙う役から見たもの（コーチのおすすめどおりに打ってきた局なので、すべて「いちばん近い」）
+    turns = len(at.session_state["pr_decisions"])
+    assert "役指定：断么九" in text and f"打牌：断么九を狙えた {turns} 回のうち、役にいちばん近い切り方は {turns} 回（100%）。" in text
+    links = [(e.proto.label, e.proto.page, e.proto.query_string) for e in at.get("page_link")]
+    assert ("役図鑑で「断么九」を見る", "yaku", "y=tanyao") in links
+    assert missing_ruby(page_parts(at)) == []
+    # もう 1 回あがっても「はじめて」とは言わない
+    again = open_target(None, {**at.session_state[STORE_STATE]["known"], HAND_NAME: hand_json(state)})
+    click(again, "ツモ（あがる）")
+    assert "狙った断么九が付いた。" in page_text(again) and "はじめて成立させた役" not in page_text(again)
+    assert json.loads(stored(again, "progress.stamps"))["tanyao"]["n"] == 2
+
+    click(at, "役指定をやめる")
+    after = at.session_state["pr_state"]
+    assert after.config.target is None and not after.finished and json.loads(stored(at, SETTINGS_NAME))["target"] is None
+
+
+def test_target_settings_show_the_chosen_group_and_yaku():
+    at = open_target("sanshoku")
+    groups, targets = components(at, "mjdojo_choices")
+    assert [option["key"] for option in groups["options"]] == ["なし", "1 翻", "2 翻", "3 翻・6 翻", "役満"] and groups["selected"] == ["2 翻"]
+    assert "sanshoku" in [option["key"] for option in targets["options"]] and targets["selected"] == ["sanshoku"]
+    assert "目安：ツキ補正が「中」で" in page_text(at)
+    plain = open_practice()
+    only = components(plain, "mjdojo_choices")
+    assert len(only) == 1 and only[0]["selected"] == ["なし"]
+    assert "役指定練習" in page_text(plain) and "目安：ツキ補正が" not in page_text(plain)
+
+
+def test_target_stats_are_listed_apart_from_ordinary_hands():
+    records = [
+        HandRecord(time=1, seed=1, deal=75, draw=75, hinted=True, win=True, turn=9, riichi=False, tenpai=True, points=2000, han=2, fu=30, yaku=("sanshoku",), decisions=8, best=8, target="sanshoku", made=True),
+        HandRecord(time=2, seed=2, deal=75, draw=75, hinted=True, win=False, turn=18, riichi=False, tenpai=False, decisions=18, best=9, target="sanshoku"),
+    ]
+    at = open_practice({HISTORY_NAME: history_json(records)})
+    text = page_text(at)
+    assert "三色同順211（50%）" in text and "役指定練習の局は、上の表（ふつうの一人練習）には入れていない。" in text
+    assert "まだ記録がありません" in text                               # ふつうの一人練習の表は、空のまま

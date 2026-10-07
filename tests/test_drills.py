@@ -481,6 +481,8 @@ def test_discard_answers_come_from_the_coach():
         best = {c.kind for c in analysis.best}
         assert q.correct == {str(k) for k in best}
         assert len(best) < len(analysis.candidates)             # どれを切っても同じ、という問題は出さない
+        # ドラ（赤い 5・表示牌の次の牌）を切るのが正解、という問題も出さない（速さだけの問題で、打点を捨てる癖を付けないため）
+        assert not any(c.dora for c in analysis.best)
         assert q.river is not None and set(q.river) <= set(position.visible)
         for tile in position.tiles:
             correct, verdict, _ = grade_discard(q, tile)

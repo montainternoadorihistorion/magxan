@@ -26,6 +26,8 @@ IPHONE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 )
+#: ホームに並んでいる、ページへのリンク
+HOME_LINK = '[data-testid="stMain"] a[data-testid="stPageLink-NavLink"]'
 
 
 def report_text(page: Page) -> str:
@@ -91,9 +93,9 @@ def run(base_url: str, out_dir: Path) -> dict:
 
         # --- ホーム → 実機チェック
         page.goto(base_url)
-        page.get_by_text("実機チェックを始める").wait_for(timeout=60000)
+        page.locator(HOME_LINK, has_text="実機チェック").wait_for(timeout=60000)
         page.screenshot(path=str(out_dir / "01_home.png"))
-        page.get_by_text("実機チェックを始める").tap()
+        page.locator(HOME_LINK, has_text="実機チェック").tap()
         wait_hand(page)
         page.wait_for_timeout(800)
         page.screenshot(path=str(out_dir / "02_check_initial.png"))

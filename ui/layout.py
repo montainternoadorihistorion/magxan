@@ -133,6 +133,9 @@ img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
 .mj-chip-tiles img.mj-img.mj-s { width: 15px; margin: 1px 0 2px; }
 .mj-chip-luck { background: rgba(232, 164, 0, 0.3); }
 .mj-chip-plain { background: rgba(46, 157, 87, 0.28); }
+.mj-chip-target { background: rgba(74, 144, 217, 0.3); }
+.mj-missing { opacity: 0.3; outline: 1.5px dashed rgba(128, 128, 128, 0.9); outline-offset: -1px; filter: none; }
+.mj-blocks-tight { gap: 6px 5px; }
 .mj-headline {
   /* 2 行ぶん（牌の画像やルビが入った行を含む）がちょうど収まる高さに固定する。
      1 行のときも同じ高さにして、巡目によって手牌の位置が上下しないようにする */
@@ -228,6 +231,56 @@ img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
 .mj-key.mj-part-wait { background: #e8a400; }
 .mj-key.mj-part-float { background: rgba(128, 128, 128, 0.6); }
 .mj-reviewlist td { vertical-align: middle; }
+
+/* ---- 役図鑑・用語辞典・ドリル */
+.mj-home-head { font-size: 1.05rem; margin-top: 18px; padding-bottom: 2px; border-bottom: 2px solid rgba(128, 128, 128, 0.35); }
+.mj-topgap { height: 2px; }
+.mj-yaku-head { margin-top: 2px; }
+.mj-reading-big { font-size: 14px; }
+.mj-chip-han { background: rgba(232, 164, 0, 0.3); font-weight: 700; }
+.mj-freq-good { background: rgba(46, 157, 87, 0.3); }
+.mj-freq-soso { background: rgba(232, 164, 0, 0.3); }
+.mj-freq-rare { background: rgba(128, 128, 128, 0.3); }
+.mj-ex { border: 1px solid rgba(128, 128, 128, 0.35); border-left-width: 4px; border-radius: 8px; padding: 8px 10px 10px; margin-top: 10px; }
+.mj-ex-ok { border-left-color: #2e9d57; }
+.mj-ex-ng { border-left-color: #d9534f; }
+.mj-ex-title { font-size: 14px; font-weight: 700; margin-bottom: 6px; line-height: 1.6; }
+.mj-ex-mark.good { color: #2e9d57; }
+.mj-ex-mark.bad { color: #d9534f; }
+.mj-ex .mj-hand { margin-top: 2px; }
+.mj-ex .mj-river { margin-top: 2px; }
+.mj-result { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: rgba(128, 128, 128, 0.12); font-size: 14px; line-height: 1.7; }
+.mj-result-num { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mj-origin td:first-child { white-space: nowrap; opacity: 0.8; font-size: 12.5px; padding-right: 10px; }
+.mj-cert { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px; line-height: 1.7; white-space: nowrap; vertical-align: middle; }
+.mj-cert-sure { background: rgba(46, 157, 87, 0.3); }
+.mj-cert-likely { background: rgba(74, 144, 217, 0.3); }
+.mj-cert-mixed { background: rgba(232, 164, 0, 0.35); }
+.mj-cert-unknown { background: rgba(128, 128, 128, 0.3); }
+.mj-termcard { border-bottom: 1px solid rgba(128, 128, 128, 0.3); padding: 10px 2px 12px; }
+.mj-term-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.mj-term-word { font-size: 1.15rem; }
+.mj-term-ex { margin: 6px 0 2px; }
+.mj-termcard .mj-table { margin-top: 6px; font-size: 13px; }
+.mj-sources { word-break: break-all; }
+.mj-star-inline { color: #c98a00; }
+.mj-sides td:first-child { width: 46%; }
+.mj-score td { padding-top: 3px; padding-bottom: 3px; font-size: 13.5px; }
+.mj-score { margin-bottom: 12px; }
+.mj-prompt { font-size: 1.2rem; font-weight: 700; line-height: 1.7; margin: 4px 0 2px; }
+.mj-choices { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.mj-choice { display: flex; gap: 6px; border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 8px; padding: 6px 8px; font-size: 14px; line-height: 1.7; }
+.mj-choice-mark { width: 1.2em; text-align: center; font-weight: 700; }
+.mj-choice-body { flex: 1; min-width: 0; }
+.mj-choice-right { border-color: #2e9d57; background: rgba(46, 157, 87, 0.1); }
+.mj-choice-right .mj-choice-mark { color: #2e9d57; }
+.mj-choice-wrong { border-color: #d9534f; background: rgba(217, 83, 79, 0.1); }
+.mj-choice-wrong .mj-choice-mark { color: #d9534f; }
+.mj-choice-other { opacity: 0.75; }
+.mj-kind-note { margin: -8px 0 6px 2px; }
+.mj-river-cap { margin-top: 12px; }
+.mj-guide-head { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; font-size: 1.05rem; line-height: 1.7; }
+.mj-guide-num { display: inline-block; min-width: 1.7em; padding: 0 5px; border-radius: 999px; background: rgba(74, 144, 217, 0.3); font-size: 13px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
 .mj-stats td { padding-left: 2px; padding-right: 2px; font-size: 13px; }
 .mj-stats tr.mj-skill td { background: rgba(46, 157, 87, 0.12); }
 </style>

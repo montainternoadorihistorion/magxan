@@ -27,6 +27,8 @@ IPHONE_UA = (
     "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 )
 WIDTH = 375          # 利用者の実機（iPhone）の幅
+#: ホームに並んでいる、ページへのリンク
+HOME_LINK = '[data-testid="stMain"] a[data-testid="stPageLink-NavLink"]'
 TALL = 6000          # 縦に長いページを 1 枚に収めるための高さ（Streamlit は内側の枠でスクロールするため）
 
 
@@ -91,8 +93,8 @@ def run(base_url: str, out_dir: Path) -> dict:
 
         # --- ホームからラボへ
         page.goto(base_url)
-        page.get_by_text("点数計算ラボを開く").wait_for(timeout=60000)
-        page.get_by_text("点数計算ラボを開く").tap()
+        page.locator(HOME_LINK, has_text="点数計算ラボ").wait_for(timeout=60000)
+        page.locator(HOME_LINK, has_text="点数計算ラボ").tap()
         page.locator(".mj-big").first.wait_for(timeout=60000)
         settle(page)
         shot("1_first_example")
@@ -206,7 +208,7 @@ def run(base_url: str, out_dir: Path) -> dict:
         settle(page)
         check_ruby("先に自分で計算する（答えを隠した状態）")
         page.goto(base_url)
-        page.get_by_text("点数計算ラボを開く").wait_for(timeout=60000)
+        page.locator(HOME_LINK, has_text="点数計算ラボ").wait_for(timeout=60000)
         settle(page, 500)
         check_ruby("ホーム")
         result["ruby_missing"] = ruby_missing

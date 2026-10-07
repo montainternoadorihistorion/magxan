@@ -1,21 +1,30 @@
 """一人練習の表示（ui/practice_view.py）のテスト。HTML の文字列として確かめる"""
 from __future__ import annotations
 
+from html import escape
+
+import pytest
 from coach_helpers import TENPAI_PLUS_ONE, TWO_SHANTEN, held, position
 from html_helpers import check_html, check_tile_images, ruby_parts, ruby_terms, text_of
 from practice_helpers import TENPAI_HAND, crafted_wall, mixed_policy, start_on, tile, tsumogiri
 
 from engine import practice
+from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS
 from engine.coach import analyze, judge_discard
 from engine.luck import LuckSettings
 from engine.practice import Decision, Outcome, PracticeConfig, discard, riichi
-from engine.records import Summary, record_of, summarize
+from engine.records import Summary, TargetStat, record_of, summarize, target_stats
+from engine.rng import Rng
 from engine.scoring.explain import explain
+from engine.scoring.notation import make_context
+from engine.target_coach import judge_target, target_advice, target_result
 from engine.tiles import EAST
 from ui.practice_view import (
     LEVEL_FULL,
     LEVEL_MIN,
     LEVEL_NORMAL,
+    SHAPELESS_TIPS,
+    TARGET_GUIDE,
     advice_headline_html,
     candidates_html,
     chance_html,
@@ -32,14 +41,24 @@ from ui.practice_view import (
     note_html,
     percent,
     plain_headline_html,
+    plan_html,
     review_list_html,
     riichi_draws_html,
     river_html,
     rounded,
     shanten_html,
+    stamps_html,
     stats_html,
     status_html,
     subhead_html,
+    target_candidates_html,
+    target_guide_html,
+    target_headline_html,
+    target_name,
+    target_result_html,
+    target_stats_html,
+    target_verdict_headline_html,
+    target_verdict_html,
     verdict_headline_html,
     verdict_html,
     waits_html,
@@ -153,66 +172,127 @@ def test_ruby_is_given_once_per_page():
     assert len(terms) == len(set(terms)) and {"東場", "南家", "聴牌", "巡目", "河", "向聴", "順子", "雀頭", "放銃"} <= set(terms)
 
 
-def page_pieces(state, decisions, *, hint: str, level: int, history=()) -> list[tuple[str, int]]:
+def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()) -> list[tuple[str, int]]:
     """ページ（views/practice.py）と同じ順・同じ分け方で、画面の部品を作る。返すのは（HTML, 範囲）の列。
 
     範囲 0 は、いつも見えている部分。折りたたみの中身は、折りたたみごとに別の番号（Rubifier.fork() に通す）。
+    折りたたみやリンクの名前は、ルビを振れない文字として、範囲 0 に入れる（そこに出てくる用語は、先に読みが出ていないといけない）。
     """
     ruby = rb()
     pieces: list[tuple[str, int]] = [(status_html(state, ruby), 0)]
     scope = 0
+    target = state.config.target
+    aiming = target is not None and target not in SHAPELESS_KEYS
+    luck = state.config.luck
 
-    def folded(make) -> None:
+    def folded(make, label: str) -> None:
         nonlocal scope
+        pieces.append((escape(label), 0))
         scope += 1
         pieces.append((make(ruby.fork()), scope))
 
     if not state.finished:
         last = decisions[-1] if decisions else None
         analysis = analyze(practice.position_of(state)) if hint == "before" else None
+        advice = practice.target_advice_of(state) if analysis is not None and aiming else None
         if analysis is not None:
-            pieces.append((advice_headline_html(analysis, ruby, can_riichi=bool(state.riichi_discards)), 0))
-        elif hint == "after" and last is not None:
-            pieces.append((verdict_headline_html(last, ruby, aka=True), 0))
+            can_riichi = bool(state.riichi_discards)
+            if advice is not None:
+                win = None
+                if state.can_tsumo:
+                    win = target_result(explain(practice.apply(state, practice.TSUMO).result.win, state.config.rules), target)
+                pieces.append((target_headline_html(advice, analysis, ruby, can_riichi=can_riichi, win=win), 0))
+            else:
+                pieces.append((advice_headline_html(analysis, ruby, can_riichi=can_riichi), 0))
+        elif hint == "after":
+            if last is not None and last.target is not None:
+                pieces.append((target_verdict_headline_html(last, ruby, aka=True), 0))
+            elif last is not None:
+                pieces.append((verdict_headline_html(last, ruby, aka=True), 0))
+            else:
+                pieces.append((plain_headline_html("自分で考えて切ってください。切ったあとに、答え合わせを表示します。", ruby), 0))
         else:
-            pieces.append((plain_headline_html("自分で考えて切ってください。切ったあとに、答え合わせを表示します。", ruby), 0))
+            pieces.append((plain_headline_html("コーチはオフです。下の「設定」で、ヒントを出すように変えられます。", ruby), 0))
         if state.last_draw.luck.swapped:
             pieces.append((draw_note_html(state.last_draw, ruby, aka=True), 0))
         pieces.append((river_html(state, ruby), 0))
+        if target in SHAPELESS_TIPS and hint != "off":
+            pieces.append((note_html(f"{target_name(target)}を狙う局：{SHAPELESS_TIPS[target]}", ruby), 0))
         if hint != "off" and last is not None:
-            pieces.append((verdict_html(last, ruby, level=level, aka=True), 0))
+            if last.target is not None:
+                pieces.append((target_verdict_html(last, ruby, level=level, aka=True), 0))
+            else:
+                pieces.append((verdict_html(last, ruby, level=level, aka=True), 0))
             if hint == "after" and level >= LEVEL_NORMAL:
-                folded(lambda r: shanten_html(last.analysis, r) + candidates_html(last.analysis, r, chosen_kind=last.verdict.chosen.kind))
+                if last.target_advice is not None and last.target_advice.pick is not None:
+                    chosen = last.target.chosen.kind if last.target else None
+                    folded(
+                        lambda r: target_candidates_html(last.target_advice, r, aka=True, chosen_kind=chosen),
+                        "さっきの局面の、役に近い切り方（答え合わせ）",
+                    )
+                folded(
+                    lambda r: shanten_html(last.analysis, r) + candidates_html(last.analysis, r, chosen_kind=last.verdict.chosen.kind),
+                    "さっきの局面の受け入れ表（答え合わせ）",
+                )
+        if advice is not None and level >= LEVEL_NORMAL:
+            folded(lambda r: plan_html(advice.plan, r), f"めざす形（{advice.name}）")
+            if advice.pick is not None and not state.can_tsumo:
+                folded(lambda r: target_candidates_html(advice, r, aka=True), f"{advice.name}に近い切り方の表")
         if analysis is not None and not analysis.can_win and level >= LEVEL_NORMAL:
-            if analysis.waits and not analysis.last_discard:
-                folded(lambda r: waits_html(analysis, r))
+            if analysis.waits and not analysis.last_discard and advice is None:
+                folded(lambda r: waits_html(analysis, r), "聴牌したときの待ちと点数")
             if not analysis.last_discard:
-                folded(lambda r: shanten_html(analysis, r) + candidates_html(analysis, r) + chance_html(analysis, r, luck_draw=state.config.luck.draw))
-            folded(lambda r: layout_html(analysis, r, level=level))
+                folded(
+                    lambda r: shanten_html(analysis, r) + candidates_html(analysis, r) + chance_html(analysis, r, luck_draw=luck.draw),
+                    "受け入れ表（速さだけで見たとき）" if advice is not None else "受け入れ表（切る牌と、手が進む牌）",
+                )
+            folded(lambda r: layout_html(analysis, r, level=level), "手の分け方（分解図）")
     else:
         explanation = None
         if state.result.outcome == Outcome.TSUMO:
             explanation = explain(state.result.win, state.config.rules)
             banner = f'<div class="mj-headline mj-headline-short good"><b class="mj-stage">ツモあがり</b>　{state.result.turn} {ruby.html("巡目")}</div>'
-            pieces.append((banner + summary_section(explanation, ruby).html, 0))
+            if target is not None:
+                banner += target_result_html(target_result(explanation, target), ruby)
+            pieces.append((banner + summary_section(explanation, ruby, indicators=bool(state.result.win.ura_indicators)).html, 0))
         else:
             pieces.append((exhausted_html(state, ruby), 0))
-        pieces.append((hand_summary_html(state, decisions, ruby, counted=True, hinted=hint == "before"), 0))
+        if target is not None:
+            pieces.append((escape(f"役図鑑で「{target_name(target)}」を見る"), 0))
+        pieces.append((stamps_html(fresh, ruby) + hand_summary_html(state, decisions, ruby, counted=True, hinted=hint == "before"), 0))
         if state.in_riichi:
             pieces.append((riichi_draws_html(state, ruby), 0))
         pieces.append((river_html(state, ruby), 0))
-        folded(lambda r: review_list_html(decisions, r, aka=True))
+        folded(lambda r: review_list_html(decisions, r, aka=True), "この局の振り返り（切った牌の評価）")
         if explanation is not None:
             pieces.extend((section.heading_html + section.html, 0) for section in detail_sections(explanation, ruby, detail=DETAIL_FULL))
-    luck = state.config.luck
-    folded(
-        lambda r: subhead_html("ツキ補正", "配牌とツモの「引きの良さ」を上げます。", r) + luck_now_html(luck.deal, luck.draw, r)
-        + note_html("配牌の候補のうち、最初から聴牌しているものは、ふつう採用しません。", r) + subhead_html("強さの目安", "", r) + luck_guide_html(r)
-        + note_html("コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。", r)
-    )
-    folded(lambda r: stats_html(summarize(history), r))
-    folded(lambda r: help_html(r))
+
+    def settings(r: Rubifier) -> str:
+        html = subhead_html("ツキ補正", "配牌とツモの「引きの良さ」を上げます。変えた強さは、次の局から使います。", r)
+        html += luck_now_html(luck.deal, luck.draw, r, target=target, tenpai_deal=luck.allow_tenpai_deal)
+        html += note_html("配牌の候補のうち、最初から聴牌しているものは、ふつう採用しません（あがりに近すぎて、練習にならないため）。", r)
+        html += subhead_html("強さの目安", "", r) + luck_guide_html(r)
+        html += subhead_html("役指定練習", "狙う役を 1 つ決めて打ちます。配牌がその役に近くなり、ツモの補正も、その役に近づく牌を引き寄せます。", r)
+        # 狙う役のまとまりと役の名前は、ブラウザの中の部品が描く（文字は、ルビつきで渡している）
+        html += "".join(f"<span>{r.html(name)}</span>" for name in ("なし", "1 翻", "2 翻", "3 翻・6 翻", "役満"))
+        if target is not None:
+            html += "".join(f"<span>{r.html(target_name(key))}</span>" for key in TARGET_KEYS if key == target)
+            html += target_guide_html(target, r)
+        else:
+            html += note_html("狙う役を 1 つ選んでください。", r)
+        html += note_html("対々和・嶺上開花など、鳴きやカン、相手の牌が要る役は、一人練習では狙えません（役図鑑の各ページに、理由を書いてあります）。", r)
+        html += subhead_html("コーチ", "", r)
+        html += note_html("コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役や打点との兼ね合いは、対局のコーチで扱う予定です。", r)
+        return html
+
+    folded(settings, "設定（ツキ補正・役指定・コーチ）")
+    folded(lambda r: stats_html(summarize(history), r) + target_stats_html(target_stats(history), r), "成績")
+    folded(lambda r: help_html(r), "このページの使い方")
     return pieces
+
+
+def scoped_parts(pieces) -> list[tuple[str, bool, int]]:
+    return [(text, has, scope) for html, scope in pieces for text, has in ruby_parts(html)]
 
 
 def test_every_first_appearance_gets_ruby_on_pages_assembled_like_the_real_one():
@@ -228,8 +308,7 @@ def test_every_first_appearance_gets_ruby_on_pages_assembled_like_the_real_one()
         history = []
         while True:
             pieces = page_pieces(state, decisions, hint=hint, level=level, history=history)
-            parts = [(text, has, scope) for html, scope in pieces for text, has in ruby_parts(html)]
-            assert missing_ruby(parts) == [], (seed, state.turn, hint, level)
+            assert missing_ruby(scoped_parts(pieces)) == [], (seed, state.turn, hint, level)
             checked += 1
             if state.finished and history:
                 break
@@ -242,6 +321,68 @@ def test_every_first_appearance_gets_ruby_on_pages_assembled_like_the_real_one()
                 decisions.append(decision)
             state = practice.apply(state, action)
     assert checked > 100
+
+
+# ---------------------------------------------------------------- 役指定練習：どの局面でも壊れない
+
+
+def target_policy(seed: int):
+    """狙う役のコーチのおすすめを切る（3 割は、適当な牌）。狙った役が付くあがりは取り、付かないあがりは半分だけ取る"""
+    rng = Rng(seed, "test:target-policy")
+
+    def choose(state):
+        key = state.config.target
+        if state.can_tsumo:
+            win = practice.apply(state, practice.TSUMO).result.win
+            if target_result(explain(win, state.config.rules), key).achieved or state.draws_left == 0 or rng.chance(0.5):
+                return practice.TSUMO
+        advice = practice.target_advice_of(state)
+        tile = advice.pick.tile if advice is not None and advice.pick is not None and rng.chance(0.7) else rng.choice(state.tiles)
+        if tile in state.riichi_discards and rng.chance(0.5):
+            return riichi(tile)
+        return discard(tile)
+
+    return choose
+
+
+TARGET_SAMPLES = (
+    "tanyao", "pinfu", "yakuhai", "chiitoitsu", "sanshoku", "honitsu", "sanshoku_doukou", "honroutou", "kokushi", "suuankou", "chuuren",
+    "riichi", "ippatsu", "menzen_tsumo", "double_riichi",
+)
+
+
+@pytest.mark.parametrize("key", TARGET_SAMPLES)
+def test_target_practice_pages_give_ruby_on_first_appearance(key):
+    """役指定練習の画面も、ふつうの局と同じく、初出の用語にルビが付く。部品は、どの局面でも正しい HTML になる"""
+    checked = 0
+    for index in range(3):
+        seed = 100 * index + TARGET_SAMPLES.index(key)
+        hint = ("before", "after", "off")[index]
+        level = (LEVEL_FULL, LEVEL_NORMAL, LEVEL_NORMAL)[index]
+        strength = (75, 100, 50)[index]
+        state = practice.start(PracticeConfig(seed=seed, luck=LuckSettings(strength, strength), target=key))
+        chooser = target_policy(seed)
+        decisions: list[Decision] = []
+        history = []
+        while True:
+            fresh = [key] if state.finished and state.result.outcome == Outcome.TSUMO else []
+            pieces = page_pieces(state, decisions, hint=hint, level=level, history=history, fresh=fresh)
+            for html, _ in pieces:
+                check_tile_images(html)
+                assert "None" not in html and "nan" not in text_of(html), (key, seed, state.turn)
+            assert missing_ruby(scoped_parts(pieces)) == [], (key, seed, state.turn, hint, missing_ruby(scoped_parts(pieces)))
+            checked += 1
+            if state.finished and history:
+                break
+            if state.finished:
+                history = [record_of(state, decisions, time=1, hinted=hint == "before")]
+                continue
+            action = chooser(state)
+            decision = practice.assess(state, action)
+            if decision is not None:
+                decisions.append(decision)
+            state = practice.apply(state, action)
+    assert checked >= 9
 
 
 # ---------------------------------------------------------------- 状況
@@ -643,3 +784,248 @@ def test_stats_table_puts_the_plain_unhinted_game_first_as_skill():
     lost = text_of(stats_html([summary(wins=0, win_turns=0, win_points=0)], rb()))
     assert "なし（実力）100%——80%" in lost
     check_html(html)
+
+
+# ---------------------------------------------------------------- 役指定練習
+
+
+SANSHOKU_TENPAI = "234m234p245s789m44z"     # 5索 を切れば、三色同順の聴牌（3索 待ち）。速さだけなら 2索 切り
+SANSHOKU_FAR = "13m123388p2355s22z"         # 三色同順まで あと 3 枚
+WINDS = {"seat_wind": 28, "round_wind": 27}
+
+
+def aim(pos, code: str, key: str) -> Decision:
+    """文字で書いた局面で、その牌を切ったときの評価（狙う役から見た評価つき）"""
+    analysis = analyze(pos)
+    chosen = held(pos, code)
+    advice = target_advice(pos, key)
+    return Decision(3, discard(chosen), judge_discard(analysis, chosen, riichi=False), analysis, judge_target(advice, chosen, pos), advice)
+
+
+def won(key: str, hand: str, win: str, **flags):
+    return target_result(explain(make_context(hand, win, is_tsumo=True, **WINDS, **flags)), key)
+
+
+def test_status_and_summary_show_the_target():
+    state = practice.start(PracticeConfig(seed=3, luck=LuckSettings(75, 75), target="sanshoku"))
+    html = status_html(state, rb())
+    assert "役指定：三色同順" in text_of(html) and "mj-chip-target" in html and "<ruby>三色同順" in html
+    assert "役指定" not in text_of(status_html(practice.start(PracticeConfig(seed=3)), rb()))
+    assert target_name("yakuhai") == "役牌" and target_name("kokushi") == "国士無双"
+
+
+def test_target_headline_names_the_distance_and_the_discard():
+    pos = position(SANSHOKU_TENPAI)
+    advice, analysis = target_advice(pos, "sanshoku"), analyze(pos)
+    html = target_headline_html(advice, analysis, rb(), can_riichi=True)
+    text = text_of(html)
+    assert text.startswith("三色同順の聴牌にとれます　 5索 を切ると、三色同順になる待ちは 1 種 4 枚")
+    assert "速さだけなら  2索 切り（聴牌）。役を狙うぶん、遠回りになる。" in text
+    check_tile_images(html)
+    assert missing_ruby(ruby_parts(html)) == []
+
+    far = position(SANSHOKU_FAR)
+    text = text_of(target_headline_html(target_advice(far, "sanshoku"), analyze(far), rb(), can_riichi=False))
+    assert text.startswith("三色同順まで あと 3 枚　おすすめ： 3筒 切り（近づく牌 5 種 14 枚）") and "速さだけなら  1萬 切り（2 向聴）" in text
+
+    same = position("19m19p19s1234567z5m", visible="777z")       # 役に近い切り方と、速い切り方が同じとき：比べる行は出さない
+    text = text_of(target_headline_html(target_advice(same, "kokushi"), analyze(same), rb(), can_riichi=False))
+    assert text == "国士無双の聴牌にとれます　 5萬 を切ると、国士無双になる待ちは 12 種 36 枚"
+
+
+def test_target_headline_when_the_yaku_can_no_longer_be_made():
+    pos = position("19m19p19s123456z55m", visible="7777z")          # 中が 4 枚とも見えている
+    html = target_headline_html(target_advice(pos, "kokushi"), analyze(pos), rb(), can_riichi=False)
+    text = text_of(html)
+    assert text.startswith("国士無双は、もう作れない") and "おすすめ" in text and "mj-chip-luck" in html      # あとは、速さのおすすめ
+    assert missing_ruby(ruby_parts(html)) == []
+
+
+def test_target_headline_on_a_winning_shape():
+    made = position("234m234p234s789m44z", drawn="3s")
+    text = text_of(target_headline_html(
+        target_advice(made, "sanshoku"), analyze(made), rb(), can_riichi=False, win=won("sanshoku", "234m234p24s789m44z", "3s"),
+    ))
+    assert text == "あがりの形です。三色同順が付きます。下の「ツモ」を押すと、あがれます。"
+
+    missed = position("234m234p123s789m44z", drawn="1s")            # 安目であがりの形：三色同順は付かない
+    result = won("sanshoku", "234m234p23s789m44z", "1s")
+    html = target_headline_html(target_advice(missed, "sanshoku"), analyze(missed), rb(), can_riichi=False, win=result)
+    assert text_of(html) == "あがりの形ですが、三色同順は付きません「ツモ」であがるか、1 枚切って三色同順を狙い続けるかを、選べます。" and "soso" in html
+
+    last = position("234m234p123s789m44z", drawn="1s", draws_left=0, can_riichi=False)
+    text = text_of(target_headline_html(target_advice(last, "sanshoku"), analyze(last), rb(), can_riichi=False, win=result))
+    assert text == "あがりの形です。三色同順は付きませんが、最後のツモなので、あがりましょう。"
+
+    upgraded = position("112233m778899p55s", drawn="5s")            # 一盃口を狙って、二盃口の形
+    text = text_of(target_headline_html(
+        target_advice(upgraded, "iipeikou"), analyze(upgraded), rb(), can_riichi=False, win=won("iipeikou", "112233m778899p5s", "5s"),
+    ))
+    assert text == "あがりの形です。一盃口の形ができています。下の「ツモ」を押すと、あがれます。"
+
+
+def test_target_verdicts_grade_the_discard_against_the_yaku():
+    pos = position(SANSHOKU_TENPAI)
+    best = aim(pos, "5s", "sanshoku")
+    html = target_verdict_headline_html(best, rb(), aka=True)
+    assert text_of(html) == "✓  5索 切り：三色同順に近い切り方" and "good" in html and "おすすめは" not in html
+    card = text_of(target_verdict_html(best, rb(), level=LEVEL_FULL, aka=True))
+    assert card.startswith("✓ 3 巡目の打牌 ") and "5索切り。三色同順の完成まで、あと 1 枚。近づく牌は 1 種 4 枚で、いちばん多い。" in card
+
+    farther = aim(pos, "3m", "sanshoku")
+    html = target_verdict_headline_html(farther, rb(), aka=True)
+    assert text_of(html) == "✗  3萬 切り：三色同順から遠ざかったおすすめは  5索 切り" and "bad" in html
+    full = text_of(target_verdict_html(farther, rb(), level=LEVEL_FULL, aka=True))
+    assert "3萬を切ると、三色同順の完成まで あと 2 枚になる。5索切りなら、あと 1 枚のまま。" in full
+    assert "3萬は、めざす形の「234萬 の順子」に使う牌。" in full
+    minimum = text_of(target_verdict_html(farther, rb(), level=LEVEL_MIN, aka=True))
+    assert "あと 2 枚になる" in minimum and "めざす形の" not in minimum             # 最小では、理由を省く
+
+    narrower = aim(position(SANSHOKU_FAR), "8p", "sanshoku")
+    html = target_verdict_headline_html(narrower, rb(), aka=True)
+    assert text_of(html) == "△  8筒 切り：近づく牌が 2 枚少ないおすすめは  3筒 切り" and "soso" in html
+
+    lost = aim(position("19m19p19s1234567z5m", visible="777z"), "7z", "kokushi")
+    assert text_of(target_verdict_headline_html(lost, rb(), aka=True)) == "✗  中 切り：国士無双が作れなくなったおすすめは  5萬 切り"
+    for decision in (best, farther, narrower, lost):
+        for html in (target_verdict_headline_html(decision, rb(), aka=True), target_verdict_html(decision, rb(), level=LEVEL_FULL, aka=True)):
+            check_tile_images(html)
+            assert missing_ruby(ruby_parts(html)) == []
+
+
+def test_plan_diagram_shows_the_groups_and_the_missing_tiles():
+    advice = target_advice(position(SANSHOKU_TENPAI), "sanshoku")
+    html = plan_html(advice.plan, rb())
+    text = text_of(html)
+    check_tile_images(html)
+    assert missing_ruby(ruby_parts(html)) == []
+    assert html.count("mj-missing") == 1                            # 足りないのは 3索 の 1 枚
+    assert text.count("★順子") == 3 and "雀頭" in text and "★ は、この役に必ず要る組。" in text
+    # めざす形は、おすすめの牌を切ったあとの 13 枚で作る。聴牌なら、13 枚すべてが形に入っている
+    assert "うすい牌が、足りない牌。" in text and "めざす形に入らない牌" not in text
+
+    far = plan_html(target_advice(position(SANSHOKU_FAR), "sanshoku").plan, rb())
+    assert far.count("mj-missing") == 3 and "めざす形に入らない牌" in text_of(far)      # まだ遠い手には、形に入らない牌がある
+
+    pairs = plan_html(target_advice(position("1122m3344p5566s7z1z"), "chiitoitsu").plan, rb())
+    assert "七対子の形（対子 7 組）。" in text_of(pairs) and "mj-blocks-tight" in pairs and pairs.count("mj-missing") == 1
+    orphans = plan_html(target_advice(position("19m19p19s1234567z5m", visible="777z"), "kokushi").plan, rb())
+    assert "国士無双の形（13 種類の么九牌を 1 枚ずつと、そのどれか 1 枚）。" in text_of(orphans)
+    hopeless = plan_html(target_advice(position("19m19p19s123456z55m", visible="7777z"), "kokushi").plan, rb())
+    assert text_of(hopeless) == "必要な牌が残っていないので、めざす形がありません。"
+
+
+def test_target_candidates_table():
+    decision = aim(position(SANSHOKU_FAR), "8p", "sanshoku")
+    advice = decision.target_advice
+    html = target_candidates_html(advice, rb(), aka=True, chosen_kind=decision.target.chosen.kind)
+    text = text_of(html)
+    check_tile_images(html)
+    assert missing_ruby(ruby_parts(html)) == []
+    assert "三色同順の完成まで あと 3 枚のままの切り方" in text and "切ると、三色同順から遠ざかる牌" in text
+    assert "◎3筒5 種 14 枚" in text and "8筒切った牌4 種 12 枚（−2 枚）" in text
+    assert html.count("mj-cand-pick") == 1 and html.count("mj-cand-you") == 1 and html.count("切った牌") == 1
+    near = [c for c in advice.candidates if c.distance == advice.pick.distance]
+    far = [c for c in advice.candidates if c.distance > advice.pick.distance]
+    assert html.count('<div class="mj-cand-head">') == len(near) > 1      # 同じ近さの切り方は、1 行ずつ
+    assert html.count('<span class="mj-far') == len(far) > 0              # 遠ざかる切り方は、牌だけを並べる
+    assert "切った牌" not in text_of(target_candidates_html(advice, rb(), aka=True))
+    # もう作れないときは、表を出さない
+    gone = target_advice(position("19m19p19s123456z55m", visible="7777z"), "kokushi")
+    assert target_candidates_html(gone, rb(), aka=True) == ""
+
+
+def test_target_result_card():
+    made = target_result_html(won("sanshoku", "234m234p24s789m44z", "3s"), rb())
+    assert text_of(made) == "狙った三色同順が付いた。" and "good" in made
+    missed = target_result_html(won("sanshoku", "234m234p23s789m44z", "1s"), rb())
+    text = text_of(missed)
+    assert text.startswith("あがったが、狙った三色同順は付かなかった。三色同順の条件：") and "soso" in missed and "mj-ng" in missed
+    assert "索子の同じ順子がない" in text
+    upgraded = target_result_html(won("iipeikou", "112233m778899p5s", "5s"), rb())
+    assert text_of(upgraded) == "一盃口を狙って、その上位の役の二盃口が付いた。" and "good" in upgraded
+    hidden = target_result_html(won("honroutou", "111m999m111p999s1z", "1z"), rb())
+    assert text_of(hidden) == "混老頭の形はできた。ただし、役満（四暗刻単騎）があるので、混老頭は数えない。役満のときは、ふつうの役とドラを数えない。"
+    for html in (made, missed, upgraded, hidden):
+        check_html(html)
+        assert missing_ruby(ruby_parts(html)) == []
+
+
+def test_new_stamps_and_target_stats():
+    assert stamps_html([], rb()) == ""
+    html = stamps_html(["sanshoku", "pinfu", "なくなった役"], rb())
+    assert text_of(html) == "はじめて成立させた役：三色同順・平和役図鑑に、スタンプを押しました。"
+    assert missing_ruby(ruby_parts(html)) == []
+
+    assert target_stats_html({}, rb()) == ""
+    stats = {"kokushi": TargetStat(tries=2, wins=0, made=0), "sanshoku": TargetStat(tries=5, wins=4, made=3)}
+    html = target_stats_html(stats, rb())
+    text = text_of(html)
+    check_html(html)
+    assert missing_ruby(ruby_parts(html)) == []
+    assert "三色同順543（60%）国士無双200（0%）" in text            # 図鑑の順に並べる
+    assert "狙った役か、その上位の役が付いた局" in text and html.index("mj-subhead") < html.index("<table")
+
+
+def test_target_guide_covers_every_target_with_measured_rates():
+    assert set(TARGET_GUIDE) == set(TARGET_KEYS)
+    for key, rates in TARGET_GUIDE.items():
+        assert len(rates) == 3 and all(0 <= rate <= 100 for rate in rates), key
+        html = target_guide_html(key, rb())
+        text = text_of(html)
+        check_html(html)
+        assert missing_ruby(ruby_parts(html)) == [], key
+        assert text.startswith(f"{target_name(key)}：") and f"「中」で {rates[0]}%、「強」で {rates[1]}%、「最大」で {rates[2]}%" in text
+    assert "七対子の形（1・9・字牌の対子を 7 組）を狙います" in text_of(target_guide_html("honroutou", rb()))
+
+
+def test_luck_explanation_in_target_practice():
+    aimed = text_of(luck_now_html(75, 50, rb(), target="sanshoku"))
+    assert "配牌：三色同順の聴牌まで あと 2 枚になるまで、配牌の牌を山の牌と入れ替える" in aimed
+    assert "ツモ：1 回ごとに 12% の確率で、三色同順に近づく牌を次のツモに持ってくる" in aimed
+    assert "配牌：三色同順の聴牌になるまで" in text_of(luck_now_html(100, 100, rb(), target="sanshoku", tenpai_deal=True))
+    assert text_of(luck_now_html(0, 0, rb(), target="sanshoku")) == "配牌：補正なし（山の並びのまま）ツモ：補正なし（山の順番どおり）"
+    # 手の形を問わない役（立直・一発・門前清自摸和）は、ふつうの局と同じ補正
+    for key in ("riichi", "ippatsu", "menzen_tsumo"):
+        assert text_of(luck_now_html(75, 50, rb(), target=key)) == text_of(luck_now_html(75, 50, rb()))
+    double = text_of(luck_now_html(25, 50, rb(), target="double_riichi"))
+    assert "配牌：聴牌になるまで、配牌の牌を山の牌と入れ替える（ダブル立直は、配牌で聴牌していないと狙えない）" in double
+    assert "有効牌を次のツモに持ってくる" in double
+    for key in TARGET_KEYS:
+        html = luck_now_html(75, 75, rb(), target=key)
+        assert missing_ruby(ruby_parts(html)) == [], key
+
+
+def test_summary_of_a_target_hand():
+    state = practice.start(PracticeConfig(seed=11, luck=LuckSettings(75, 75), target="sanshoku"))
+    chooser = target_policy(11)
+    decisions: list[Decision] = []
+    while not state.finished:
+        action = chooser(state)
+        decision = practice.assess(state, action)
+        if decision is not None:
+            decisions.append(decision)
+        state = practice.apply(state, action)
+    text = text_of(hand_summary_html(state, decisions, rb(), counted=True))
+    assert "役指定：三色同順" in text and "配牌：三色同順" in text
+    aimed = [d for d in decisions if d.target is not None]
+    assert aimed
+    best = sum(1 for d in aimed if d.target.is_best)
+    assert f"打牌：三色同順を狙えた {len(aimed)} 回のうち、役にいちばん近い切り方は {best} 回（{percent(best / len(aimed))}）。" in text
+    assert "三色同順に近づく牌に入れ替えた" in text
+    review = review_list_html(decisions, rb(), aka=True)
+    check_tile_images(review)
+    assert review.count("<tr") == len(decisions) + 1
+    assert "スタンプは押す" in text_of(hand_summary_html(state, decisions, rb(), counted=False))
+
+
+def test_exhausted_summary_tells_how_far_the_target_was():
+    state = practice.start(PracticeConfig(seed=5, target="kokushi"))            # 補正なしで、国士無双を狙う局（ツモ切りで流局）
+    while not state.finished:
+        state = practice.apply(state, tsumogiri(state))
+    html = exhausted_html(state, rb())
+    text = text_of(html)
+    check_tile_images(html)
+    assert missing_ruby(ruby_parts(html)) == []
+    assert "流局" in text and "狙った国士無双の完成まで、あと " in text
+    assert html.index("流局") < html.index("ノーテンは") < html.index("狙った")        # 画面に出る順に作ってある

@@ -82,3 +82,24 @@ def test_missing_ruby_finds_first_appearances_without_ruby():
     parts = [("配牌", True), ("有効牌", True, 1), ("有効牌と配牌", False, 1), ("有効牌", False, 2), ("有効牌", False)]
     assert missing_ruby(parts) == ["有効牌", "有効牌"]
     assert missing_ruby([("山", False)], {"山": "ヤマ"}) == ["山"]
+
+
+def test_parts_give_readings_for_first_appearances_only():
+    """HTML を受け取らない部品（選択肢のボタン）に渡す形。読みは、初出の用語にだけ入る"""
+    rb = Rubifier()
+    assert rb.parts("1 翻（門前限定）") == [("1 ", ""), ("翻", "ハン"), ("（", ""), ("門前", "メンゼン"), ("限定）", "")]
+    assert rb.parts("2 翻（門前限定）") == [("2 翻（門前限定）", "")]            # 2 回目は、読みを入れない
+    assert rb.parts("混全帯么九") == [("混全帯么九", "ホンチャンタイヤオチュー")]
+    assert rb.parts("") == []
+    assert "".join(text for text, _ in Rubifier().parts("<b>立直</b>")) == "<b>立直</b>"      # 文字はそのまま（エスケープは、受け取る側の仕事）
+    # html() と同じ用語を「もう出てきた」と数える
+    assert "<ruby>" not in rb.html("翻と門前")
+    off = Rubifier(enabled=False)
+    assert off.parts("聴牌の読みは？") == [("聴牌の読みは？", "")]
+
+
+def test_missing_ruby_accepts_a_reading_written_next_to_the_term():
+    """ルビを振れない場所（ページへのリンクの文字）では、名前のすぐあとに読みを並べて書く"""
+    assert missing_ruby([("立直　リーチ　門前", False)]) == ["門前"]            # 立直は読みが書いてある。門前は無い
+    assert missing_ruby([("立直　リーチ", False), ("立直をかける", False)]) == []
+    assert missing_ruby([("混全帯么九　ホンチャンタイヤオチュー", False)]) == []

@@ -116,6 +116,24 @@ def test_ruby_terms_are_plain_katakana():
             assert READINGS[info.name] == info.reading.replace(" ", "")
 
 
+def test_hard_to_read_terms_get_ruby_wherever_they_appear():
+    """読みが難しい用語（読みのドリルで問う語）は、アプリの文章に出てきたとき、初出に読みを付ける。
+
+    辞典の見出しでは読みを横に並べるが、ほかのページ（卓での手順・ルールの違い・役図鑑）の文章にも、同じ語が出てくる。
+    """
+    from engine import drills
+
+    asked = {word for key, (word, _, _, _) in drills._reading_items().items() if key.startswith("t:")}
+    for term in GLOSSARY.terms:
+        if term.term in asked:
+            assert term.ruby and READINGS[term.term] == term.reading, term.term
+    for must in ("起家", "連荘", "上家", "下家", "対面", "半荘", "洗牌", "理牌", "多牌", "少牌", "不聴", "槓ドラ", "喰い替え"):
+        assert must in READINGS, must
+    # ふだんの言葉と同じ読みの語には、振らない（文章がルビだらけにならないように）
+    for plain in ("親", "子", "山", "局", "待ち", "鳴き", "高目", "点棒", "発声"):
+        assert plain not in READINGS, plain
+
+
 def test_glossary_loader_rejects_mistakes(monkeypatch):
     def load_with(data):
         monkeypatch.setattr(content, "_load", lambda name: data)

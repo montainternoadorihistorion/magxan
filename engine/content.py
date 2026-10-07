@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
@@ -67,11 +68,27 @@ class ContentError(ValueError):
 # ---------------------------------------------------------------- 読み込みの道具
 
 
+#: 長い文章を何行かに分けて書くと（YAML の「>-」）、行の切れ目が空白 1 つになる。日本語の文では、その空白は要らない。
+#: 文章は、句読点のあとで折る決まりにしてある（tests/test_content.py で確かめる）。だから、句読点のあとの空白を取ればよい
+_FOLD_AFTER = re.compile(r"(?<=[、。]) (?=\S)")
+
+
+def _tidy(node: Any) -> Any:
+    """読み込んだ内容の文章から、行の切れ目に入った空白（句読点のあと）を取る"""
+    if isinstance(node, str):
+        return _FOLD_AFTER.sub("", node)
+    if isinstance(node, list):
+        return [_tidy(item) for item in node]
+    if isinstance(node, dict):
+        return {key: _tidy(value) for key, value in node.items()}
+    return node
+
+
 def _load(name: str) -> Any:
     path = DATA_DIR / name
     try:
         with path.open(encoding="utf-8") as file:
-            return yaml.safe_load(file)
+            return _tidy(yaml.safe_load(file))
     except (OSError, yaml.YAMLError) as error:
         raise ContentError(f"{name} を読めません: {error}") from error
 

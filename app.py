@@ -34,12 +34,24 @@ st.set_page_config(page_title=APP_NAME, page_icon="🀄", layout="centered")
 apply_base_style()
 
 page = st.navigation(
-    [
-        st.Page("views/home.py", title="ホーム", icon=":material/home:", default=True),
-        st.Page("views/practice.py", title="一人練習", icon=":material/playing_cards:", url_path="practice"),
-        st.Page("views/score_lab.py", title="点数計算ラボ", icon=":material/calculate:", url_path="lab"),
-        st.Page("views/device_check.py", title="実機チェック", icon=":material/smartphone:", url_path="check"),
-    ],
+    {
+        "": [st.Page("views/home.py", title="ホーム", icon=":material/home:", default=True)],
+        "打つ": [
+            st.Page("views/practice.py", title="一人練習", icon=":material/playing_cards:", url_path="practice"),
+            st.Page("views/score_lab.py", title="点数計算ラボ", icon=":material/calculate:", url_path="lab"),
+        ],
+        "学ぶ": [
+            st.Page("views/yaku_book.py", title="役図鑑", icon=":material/menu_book:", url_path="yaku"),
+            st.Page("views/glossary.py", title="用語辞典", icon=":material/dictionary:", url_path="terms"),
+            st.Page("views/drill.py", title="ドリル", icon=":material/quiz:", url_path="drill"),
+            st.Page("views/table_guide.py", title="卓で打つとき", icon=":material/table_restaurant:", url_path="table"),
+            st.Page("views/rules.py", title="ルールの違い", icon=":material/rule:", url_path="rules"),
+        ],
+        "記録": [
+            st.Page("views/records.py", title="記録と保存", icon=":material/save:", url_path="records"),
+            st.Page("views/device_check.py", title="実機チェック", icon=":material/smartphone:", url_path="check"),
+        ],
+    },
     position="top",
 )
 page.run()

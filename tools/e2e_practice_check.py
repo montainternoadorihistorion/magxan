@@ -32,9 +32,13 @@ IPHONE_UA = (
 WIDTH, HEIGHT = 375, 606     # 利用者の実機（iPhone の Safari）で測った画面の大きさ
 TALL = 5000                  # 縦に長いページを 1 枚に収めるための高さ（Streamlit は内側の枠でスクロールするため）
 STEPS = ["① 手牌の読み方", "② 役", "③ ドラ", "④ 符", "⑤ 点数", "⑥ 誰がいくら払うか", "⑦ 卓での申告"]
-SETTINGS = "設定（ツキ補正・コーチ）"
+SETTINGS = "設定（ツキ補正・役指定・コーチ）"
 TABLE = "受け入れ表"
 LAYOUT = "手の分け方"
+#: ホームに並んでいる、ページへのリンク（上の帯のメニューにも同じ名前のリンクがあるので、画面の中のものを指す）
+HOME_LINK = '[data-testid="stMain"] a[data-testid="stPageLink-NavLink"]'
+#: 手牌の部品（設定の中にも、選択肢の部品の「確定」ボタンがある。手牌のほうを指すときは、これを前に付ける）
+HAND = ".mj-hand-root"
 #: 画面の文字が、渡した文字列（操作する前の内容）から変わったら真になる式
 MAIN_CHANGED = "t => document.querySelector('[data-testid=stMain]').innerText !== t"
 
@@ -167,7 +171,7 @@ def confirm(page: Page, *, by_second_tap: int | None = None) -> None:
     """
     before = page.locator('[data-testid="stMain"]').inner_text()       # MAIN_CHANGED と同じ取り出し方で比べる
     if by_second_tap is None:
-        page.locator(".mj-confirm").tap()
+        page.locator(HAND + " .mj-confirm").tap()
     else:
         page.locator(".mj-tile").nth(by_second_tap).tap()
     page.wait_for_function(MAIN_CHANGED, arg=before, timeout=20000)
@@ -236,14 +240,14 @@ def run(base_url: str, out_dir: Path) -> dict:
         # ---- 1. はじめて開く（実機と同じ大きさの画面）。ホームから入る
         context = new_context(height=HEIGHT, script=COUNT_WRITES)
         page = open_page(context, "/")
-        page.get_by_text("一人練習を始める").wait_for(timeout=60000)
-        page.get_by_text("一人練習を始める").tap()
+        page.locator(HOME_LINK, has_text="一人練習").wait_for(timeout=60000)
+        page.locator(HOME_LINK, has_text="一人練習").tap()
         wait_hand(page)
         shot(page, "01_first_view")
         tiles = page.locator(".mj-tile")
         boxes = tiles.evaluate_all("els => els.map(e => { const r = e.getBoundingClientRect(); return [r.width, r.height, r.top]; })")
         loaded = tiles.evaluate_all("els => els.filter(e => { const i = e.querySelector('img'); return i && i.naturalWidth > 0; }).length")
-        bar_bottom = page.locator(".mj-bar").evaluate("e => e.getBoundingClientRect().bottom")
+        bar_bottom = page.locator(HAND + " .mj-bar").evaluate("e => e.getBoundingClientRect().bottom")
         result["first_view"] = {
             "tiles": len(boxes), "images_loaded": loaded, "tile_width": round(min(b[0] for b in boxes), 1),
             "confirm_button_bottom": round(bar_bottom), "viewport_height": HEIGHT, "headline": headline(page),
@@ -260,10 +264,10 @@ def run(base_url: str, out_dir: Path) -> dict:
         # ---- 2. 選ぶ → 切る。河と評価が出ること。何巡打っても、手牌と確定ボタンの位置が動かないこと
         tiles.nth(13).tap()
         page.wait_for_timeout(300)
-        result["status_after_select"] = page.locator(".mj-status").inner_text()
+        result["status_after_select"] = page.locator(HAND + " .mj-status").inner_text()
         expect(result["status_after_select"].startswith("選択中："), "牌を選んだあとの案内が違う")
         shot(page, "02_selected")
-        hand_tops, confirm_tops, writes = {top_of(page, ".mj-tile")}, {top_of(page, ".mj-confirm")}, []
+        hand_tops, confirm_tops, writes = {top_of(page, ".mj-tile")}, {top_of(page, HAND + " .mj-confirm")}, []
         for turn in range(1, 7):
             if page.locator(".mj-tile").count() < 14 or page.get_by_role("button", name="ツモ（あがる）").count():
                 break
@@ -276,7 +280,7 @@ def run(base_url: str, out_dir: Path) -> dict:
                 break
             writes.append(page.evaluate("window.__writes"))
             hand_tops.add(top_of(page, ".mj-tile"))
-            confirm_tops.add(top_of(page, ".mj-confirm"))
+            confirm_tops.add(top_of(page, HAND + " .mj-confirm"))
             expect(river_count(page) == turn, f"{turn} 枚目を切ったあと、河の枚数が違う")
             expect(page.locator(".mj-review").count() == 1, "前の打牌の評価が出ていない")
         result["positions"] = {"hand_top": sorted(hand_tops), "confirm_top": sorted(confirm_tops), "writes_per_discard": writes}
@@ -396,17 +400,17 @@ def run(base_url: str, out_dir: Path) -> dict:
         expect("聴牌にとれます" in text and "聴牌したときの待ちと点数" in text, "聴牌の案内か、待ちの表が出ていない")
         riichi = page.locator(".mj-riichi")
         expect(riichi.is_visible(), "リーチのボタンが出ていない")
-        button_top = top_of(page, ".mj-confirm")
+        button_top = top_of(page, HAND + " .mj-confirm")
         expect(abs(button_top - min(confirm_tops)) <= 1, f"リーチのボタンが出ると、確定ボタンの位置が変わる（{min(confirm_tops)} → {button_top}px）")
         riichi.tap()
         page.wait_for_timeout(300)
         dim = page.locator(".mj-tile.mj-dim").count()
-        result["riichi"] = {"allowed_tiles": allowed, "dimmed": dim, "confirm": page.locator(".mj-confirm").inner_text()}
+        result["riichi"] = {"allowed_tiles": allowed, "dimmed": dim, "confirm": page.locator(HAND + " .mj-confirm").inner_text()}
         expect(dim == 14 - allowed, f"リーチで切れない牌の数が違う（暗い牌 {dim} 枚、切れる牌 {allowed} 枚）")
         expect(result["riichi"]["confirm"] == "リーチして切る", "確定ボタンの文字が変わっていない")
         page.locator(".mj-tile:not(.mj-dim)").first.tap()
         page.wait_for_timeout(300)
-        moved = abs(top_of(page, ".mj-confirm") - button_top)
+        moved = abs(top_of(page, HAND + " .mj-confirm") - button_top)
         expect(moved <= 1, f"牌を選んだとき、確定ボタンの位置が動いた（{moved:.1f}px）")
         shot(page, "07_riichi")
         check_ruby(page, "聴牌（リーチできる）")
@@ -429,7 +433,7 @@ def run(base_url: str, out_dir: Path) -> dict:
         wait_hand(page)
         expect("あがりの形です" in headline(page), "あがりの形の案内が出ていない")
         expect(not page.locator(".mj-riichi").is_visible(), "あがれる局面で、リーチのボタンが出ている")
-        expect(abs(top_of(page, ".mj-confirm") - min(confirm_tops)) <= 1, "あがれる局面で、確定ボタンの位置が変わる")
+        expect(abs(top_of(page, HAND + " .mj-confirm") - min(confirm_tops)) <= 1, "あがれる局面で、確定ボタンの位置が変わる")
         tsumo = page.get_by_role("button", name="ツモ（あがる）")
         expect(tsumo.evaluate("e => e.getBoundingClientRect().bottom") <= HEIGHT, "「ツモ（あがる）」が、最初の画面に収まっていない")
         tsumo.tap()

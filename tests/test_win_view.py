@@ -17,9 +17,12 @@ from ui.win_view import (
     DETAIL_BRIEF,
     DETAIL_FULL,
     DETAIL_NORMAL,
+    detail_sections,
     explanation_sections,
+    hand_html,
     headline,
     situation_chips,
+    summary_section,
     tiles_fit_html,
 )
 
@@ -143,6 +146,17 @@ def test_dora_section():
     assert "ドラは 0 翻" in text_page("A-1")
 
 
+def test_indicators_under_the_hand_can_be_left_out():
+    """ドラ表示牌を、同じ画面のほかの場所にもう出しているページ（一人練習の結果）では、手牌の下に出さない"""
+    example = EXAMPLES_BY_KEY["A-1"]
+    result = explain(dataclasses.replace(example.context(), dora_indicators=(0,)), example.rules)
+    assert "ドラ表示牌" in text_of(hand_html(result, Rubifier()))
+    hidden = hand_html(result, Rubifier(), indicators=False)
+    assert "ドラ表示牌" not in text_of(hidden) and hidden.count("<img ") == 14
+    assert "ドラ表示牌" not in text_of(summary_section(result, Rubifier(), indicators=False).html)
+    check_html(hidden)
+
+
 def test_no_yaku_and_not_winning():
     example = EXAMPLES_BY_KEY["I-1"]
     result = explain(example.context(), example.rules)
@@ -242,3 +256,67 @@ def test_random_hands_render():
             assert result.status is Status.WIN
             for section in explanation_sections(result):
                 check_html(section.html)
+
+
+def scoped_parts(page: str) -> list[tuple[str, bool, int]]:
+    """（文字, 読みが付いているか, 範囲）の列。折りたたみ（<details>）の中身は、折りたたみごとに別の範囲"""
+    parts: list[tuple[str, bool, int]] = []
+    position = 0
+    for scope, found in enumerate(re.finditer(r"<details[^>]*><summary>(.*?)</summary>(.*?)</details>", page, flags=re.DOTALL), start=1):
+        parts += [(text, has, 0) for text, has in ruby_parts(page[position:found.start()] + found.group(1))]
+        parts += [(text, has, scope) for text, has in ruby_parts(found.group(2))]
+        position = found.end()
+    return parts + [(text, has, 0) for text, has in ruby_parts(page[position:])]
+
+
+@pytest.mark.parametrize("example", EXAMPLES, ids=lambda e: e.key)
+def test_detail_sections_give_ruby_without_the_summary(example):
+    """まとめを上に出さないページ（ドリルの「くわしい解説」）でも、解説だけで、初出の用語にルビが付く。
+
+    表の中の「1 翻」「役満」「ドラ表示牌」のような短い文字も、ルビを振る仕組みを通してある（画面に出る順に）。
+    """
+    result = explain(example.context(), example.rules)
+    for detail in (DETAIL_BRIEF, DETAIL_NORMAL, DETAIL_FULL):
+        sections = detail_sections(result, Rubifier(), detail=detail)
+        page = "".join(section.heading_html + section.html for section in sections)
+        check_html(page)
+        assert missing_ruby(scoped_parts(page)) == [], (example.key, detail, missing_ruby(scoped_parts(page)))
+        # どの部分も、それだけで出したとき、初出の用語にルビが付く
+        for section in sections:
+            alone = detail_sections(result, Rubifier(), detail=detail, keys=[section.key])
+            assert [s.key for s in alone] == [section.key]
+            html = alone[0].heading_html + alone[0].html
+            assert missing_ruby(scoped_parts(html)) == [], (example.key, detail, section.key)
+
+
+def test_detail_sections_can_be_limited_to_some_parts():
+    """出さない部分は、はじめから作らない（作ってから捨てると、そこに振ったルビが画面から消えてしまう）"""
+    example = EXAMPLES_BY_KEY["A-1"]
+    result = explain(example.context(), example.rules)
+    rb = Rubifier()
+    sections = detail_sections(result, rb, detail=DETAIL_NORMAL, keys=("reading", "fu"))
+    assert [s.key for s in sections] == ["reading", "fu"]
+    page = "".join(s.heading_html + s.html for s in sections)
+    assert missing_ruby(ruby_parts(page)) == [] and "<ruby>符<rt>フ</rt></ruby>" in page
+    assert "役満" not in rb.seen and "翻" not in rb.seen             # 作らなかった部分の用語は、まだ出てきていない扱い
+    assert detail_sections(result, Rubifier(), detail=DETAIL_NORMAL, keys=()) == []
+    everything = [s.key for s in detail_sections(result, Rubifier(), detail=DETAIL_NORMAL)]
+    assert [s.key for s in detail_sections(result, Rubifier(), detail=DETAIL_NORMAL, keys=None)] == everything
+
+
+def test_folded_table_inside_points_does_not_use_up_readings():
+    """⑤ 点数の「基本点の早見」は折りたたみ。閉じたままだと読まれないので、その中で振ったルビは、外では数えない"""
+    example = EXAMPLES_BY_KEY["A-1"]
+    result = explain(example.context(), example.rules)
+    rb = Rubifier()
+    points = next(s for s in detail_sections(result, rb, detail=DETAIL_FULL, keys=["points"]))
+    folded = re.search(r"<details.*?</details>", points.html, flags=re.DOTALL).group(0)
+    assert "<ruby>跳満<rt>ハネマン</rt></ruby>" in folded and "跳満" not in rb.seen
+
+
+def test_declaration_gets_readings_too():
+    """申告の文に出てくる「役満」「満貫」にも、初出なら読みを付ける"""
+    example = EXAMPLES_BY_KEY["G-9"]
+    result = explain(example.context(), example.rules)
+    say = detail_sections(result, Rubifier(), detail=DETAIL_NORMAL, keys=["say"])[0]
+    assert "役満" in text_of(say.html) and "<ruby>役満<rt>ヤクマン</rt></ruby>" in say.html

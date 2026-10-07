@@ -923,6 +923,8 @@ def _discard_question(item: str) -> Question:
         analysis = analyze(position)
         if analysis.can_win or analysis.last_discard or len(analysis.best) == len(analysis.candidates):
             continue                            # どれを切っても同じ局面は、問題にならない
+        if any(candidate.dora for candidate in analysis.best):
+            continue                            # ドラを切るのが正解になる局面は、出さない（速さだけの問題で、打点を捨てる癖を付けないため）
         break
     else:
         raise RuntimeError(f"何切るの問題を作れませんでした: {item!r}")
@@ -989,14 +991,18 @@ def _han_question(item: str) -> Question:
         answer.append(f"{'・'.join(doubles)}をダブル役満（役満 2 つぶん）にするかどうかは、ルールによって異なる。")
     if page.key == "tanyao":
         answer.append("鳴いた断么九（喰いタン）を認めないルールもある（ルールによって異なる）。")
-    return Question("han", item, f"「{page.name}」は何翻？", choices, frozenset({label}), answer=tuple(answer), page=page.key)
+    return Question(
+        "han", item, f"「{page.name}」は何翻？", choices, frozenset({label}),
+        note="門前限定は、鳴くと付かない役。「鳴くと 1 翻」などは、鳴くと翻が下がる役（喰い下がり）。",
+        answer=tuple(answer), page=page.key,
+    )
 
 
 # ---------------------------------------------------------------- 用語の読み
 
 
 #: ふだんの言葉と同じ読みなので、読みの問題にしない用語
-_PLAIN_TERMS = frozenset({"山", "親", "子", "局", "筋", "壁", "腰", "基本点", "点棒", "強打", "発声", "三味線", "現物"})
+_PLAIN_TERMS = frozenset({"山", "親", "子", "局", "筋", "壁", "腰", "基本点", "点棒", "強打", "発声", "三味線", "現物", "高目"})
 
 
 def _is_kanji(ch: str) -> bool:

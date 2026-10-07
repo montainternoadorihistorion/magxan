@@ -24,12 +24,19 @@ RUBY_PARTS = """() => {
         if (node.nodeType === Node.TEXT_NODE) {
             const owner = node.parentElement;
             if (!node.textContent.trim() || !owner || owner.closest('rt, style, script, noscript')) return;
-            // 読みが付いているのは、ルビを振った用語と、読みをすぐ横に並べて書いた名前（.mj-term）
-            parts.push([node.textContent, Boolean(owner.closest('ruby, .mj-term')), scope]);
+            // 読みが付いているのは、ルビを振った用語と、読みをすぐ横に並べて書いた名前（.mj-term）。
+            // 読みを答えさせる問題の文（.mj-asked）は、わざと読みを隠しているので、同じ扱いにする
+            parts.push([node.textContent, Boolean(owner.closest('ruby, .mj-term, .mj-asked')), scope]);
             return;
         }
         if (node.nodeType !== Node.ELEMENT_NODE) return;
         if (node.tagName === 'STYLE' || node.tagName === 'SCRIPT') return;
+        if (node.matches('a[data-testid="stPageLink-NavLink"]')) {
+            // ページへのリンクは、名前と読みを 1 行に並べて書くことがある（役図鑑の一覧）。1 つの文として読む
+            const label = node.querySelector('[data-testid="stMarkdownContainer"]');
+            if (label && label.textContent.trim()) parts.push([label.textContent, false, scope]);
+            return;
+        }
         const inner = node.tagName === 'DETAILS' ? ++counter : scope;
         for (const child of node.childNodes) {
             const summary = node.tagName === 'DETAILS' && child.nodeType === Node.ELEMENT_NODE && child.tagName === 'SUMMARY';

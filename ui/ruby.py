@@ -67,6 +67,26 @@ class Rubifier:
                 out.append(escape(piece))
         return "".join(out)
 
+    def parts(self, text: str) -> list[tuple[str, str]]:
+        """文章を（文字, 読み）の列にする。読みは、初出の用語にだけ入る（それ以外は空）。
+
+        HTML を受け取らない部品（選択肢のボタンなど）に、ルビつきの文字を渡すときに使う。
+        """
+        out: list[tuple[str, str]] = []
+        plain: list[str] = []
+        for piece, is_term in self._pieces(text):
+            if is_term and self._enabled and piece not in self._seen:
+                self._seen.add(piece)
+                if plain:
+                    out.append(("".join(plain), ""))
+                    plain = []
+                out.append((piece, self._readings[piece]))
+            else:
+                plain.append(piece)
+        if plain:
+            out.append(("".join(plain), ""))
+        return out
+
     def rich(self, text: str) -> str:
         """html() と同じだが、**…** で囲んだ部分を太字にする（説明文で、要点を目立たせるため）"""
         return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", self.html(text))
@@ -96,6 +116,8 @@ def missing_ruby(parts: Iterable[tuple], readings: Mapping[str, str] = READINGS)
 
     parts は、画面に出る順に並べた（文字, その文字には読みが付いているか）の列。
     読みが付いているのは、ルビを振った用語と、読みをすぐ横に並べて書いた名前（class="mj-term"）。
+    読みを答えさせる問題の文（class="mj-asked"。わざと読みを隠している）も、同じ扱いにする。
+    同じ文字のかたまりの中に読みが書いてある用語（例：一覧の「立直　リーチ」）も、読みが付いているものとして扱う。
     3 つ目に範囲の番号を付けてもよい：0（省略したときも 0）は、いつも見えている部分。それ以外の番号は
     折りたたみ 1 つぶんで、Rubifier.fork() と同じ扱いにする（その中で振ったルビは、外やほかの折りたたみでは数えない）。
     """
@@ -109,5 +131,6 @@ def missing_ruby(parts: Iterable[tuple], readings: Mapping[str, str] = READINGS)
         if has_ruby:
             checker.note(text)
         else:
-            missing.extend(re.findall(r"<ruby>([^<]+)<rt>", checker.html(text)))
+            found = re.findall(r"<ruby>([^<]+)<rt>", checker.html(text))
+            missing.extend(term for term in found if readings[term] not in text)
     return missing

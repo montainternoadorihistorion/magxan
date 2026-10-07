@@ -11,55 +11,89 @@ def _list(items: list[str], ruby: Rubifier) -> str:
     return '<ul class="mj-rules">' + "".join(f"<li>{ruby.rich(item)}</li>" for item in items) + "</ul>"
 
 
+def _head(text: str) -> None:
+    st.html(f'<div class="mj-subhead mj-home-head">{rb.html(text)}</div>')
+
+
 st.title(APP_NAME)
 st.caption(f"版 {APP_VERSION} ／ {APP_PHASE}")
 
 st.html(
     '<div class="mj-note">'
     + rb.rich(
-        "**Phase 1** まで入りました。相手なしで打って牌効率を身につける **一人練習** と、"
-        "あがったときの点数計算を 1 歩ずつ確かめられる **点数計算ラボ** が使えます。"
+        "友人と卓を囲んで、楽しく打てるようになるための練習場です。**打つ**（一人練習・点数計算）、"
+        "**学ぶ**（役図鑑・用語辞典・ドリル・卓での手順）の順に、少しずつ進めてください。"
     )
     + "</div>"
 )
 
-st.page_link("views/practice.py", label="一人練習を始める", icon=":material/playing_cards:")
+# ---------------------------------------------------------------- 打つ
+_head("打つ")
+st.page_link("views/practice.py", label="一人練習", icon=":material/playing_cards:")
 st.html(
     _list(
         [
-            "配牌からツモと打牌をくり返し、**どれを切ると聴牌に近づくか**を練習する",
-            "コーチが、向聴数・受け入れ（有効牌の種類と残り枚数）・おすすめの打牌を出す。"
-            "ヒントは「打つ前」「打った後に答え合わせ」「オフ」から選べる",
-            "**ツキ補正**で、配牌とツモの引きの良さを上げられる（補正の強さはいつも画面に出て、成績も補正ごとに分けて記録）",
-            "あがると、点数計算ラボと同じ解説が出る",
+            "配牌からツモと打牌をくり返し、**どれを切ると聴牌に近づくか**を練習する。コーチが、向聴数・受け入れ・おすすめの打牌を出す",
+            "**ツキ補正**で、配牌とツモの引きの良さを上げられる（強さはいつも画面に出て、成績も補正ごとに分けて記録）",
+            "**役指定練習**：狙う役を 1 つ決めると、配牌とツモがその役に近づき、コーチも「その役に近い切り方」を勧める",
+        ],
+        rb,
+    )
+)
+st.page_link("views/score_lab.py", label="点数計算ラボ", icon=":material/calculate:")
+st.html(
+    _list(
+        [
+            "あがった手の点数を、読み方 → 役 → ドラ → 符 → 点数 → 支払い → 申告 の順に、計算の途中まですべて表示する",
+            "例題 43 題、ランダムな手、自分で入力した手。ルール（喰いタン・赤ドラなど）を変えて、計算の違いも見られる",
         ],
         rb,
     )
 )
 
-st.page_link("views/score_lab.py", label="点数計算ラボを開く", icon=":material/calculate:")
+# ---------------------------------------------------------------- 学ぶ
+_head("学ぶ")
+st.page_link("views/yaku_book.py", label="役図鑑", icon=":material/menu_book:")
 st.html(
     _list(
         [
-            "**例題で学ぶ**：符の足し算の基本から、鳴いた手、暗刻・槓子、待ち、高点法、満貫以上、本場・供託まで 43 題",
-            "**ランダムに出す**／**自分で入力**／**状況を変えてみる**（ツモ／ロン、親／子、リーチあり／なし）",
-            "どの手でも、読み方 → 役 → ドラ → 符 → 点数 → 支払い → 申告 の順に、計算の途中をすべて表示",
+            "すべての役の、条件・成立する例・**ひっかけ**（付きそうで付かない例）・複合・狙い方のコツ・名前の由来",
+            "一人練習で成立させた役には**スタンプ**が付く。「この役を実戦で練習する」から、役指定練習を始められる",
         ],
         rb,
     )
 )
+st.page_link("views/glossary.py", label="用語辞典", icon=":material/dictionary:")
+st.html(_list(["麻雀の言葉の、読み・意味・由来。言葉でさがせる（ひらがな・カタカナ・漢字のどれでも）"], rb))
+st.page_link("views/drill.py", label="ドリル", icon=":material/quiz:")
+st.html(
+    _list(
+        [
+            "用語の読み、役の翻数、成立・不成立、役の判定、あがれる？、待ち、符、点数早見、点数計算、何切る",
+            "間違えた問題は、**間隔をあけてもう一度**出す（10 分 → 1 日 → 3 日 → 7 日 …）",
+        ],
+        rb,
+    )
+)
+st.page_link("views/table_guide.py", label="卓で打つとき", icon=":material/table_restaurant:")
+st.html(_list(["実際の卓での手順：席決め、山と配牌、発声（ポン・チー・カン・リーチ・ロン・ツモ）、点棒のやり取り、作法と反則"], rb))
+st.page_link("views/rules.py", label="ルールの違い", icon=":material/rule:")
+st.html(_list(["打つ場所によって違うルールの一覧と、**卓に着く前に確かめること**"], rb))
+
+# ---------------------------------------------------------------- 記録
+_head("記録")
+st.page_link("views/records.py", label="記録と保存", icon=":material/save:")
+st.html(_list(["成績・スタンプ・ドリルの記録を、ファイルに保存したり、読み込んだりできる（記録は、このブラウザの中にある）"], rb))
 
 PLAN = (
-    ("Phase 2", "役図鑑、用語辞典、ドリル、役指定練習（狙った役が出やすい配牌・ツモ）、進捗の保存"),
-    ("Phase 3", "CPU 3 人との対局（門前）、対局中コーチ（役・打点・守備）"),
+    ("Phase 3", "CPU 3 人との対局（門前）、対局中コーチ（役・打点・守備）、危険牌のドリル"),
     ("Phase 4", "ポン・チー・カン、鳴き判断コーチ、局後の振り返り"),
     ("Phase 5", "AI による解説と自由質問、カリキュラム、おまかせ補正、卒業判定"),
 )
 
-with st.expander("このあとの予定"):
+with st.expander("このあとの予定", key="hm_x_plan"):
     inner = rb.fork()      # 折りたたみの中身は、別に数える（閉じていると読まれないので）
     rows = "".join(f'<tr><td style="white-space:nowrap">{name}</td><td>{inner.html(text)}</td></tr>' for name, text in PLAN)
     st.html(f'<table class="mj-table"><tr class="mj-dim"><td>段階</td><td>内容</td></tr>{rows}</table>')
 
-st.caption("Phase 0 の確認用のページも残してあります。")
-st.page_link("views/device_check.py", label="実機チェックを始める", icon=":material/smartphone:")
+st.page_link("views/device_check.py", label="実機チェック（端末の画面と反応の確認）", icon=":material/smartphone:")

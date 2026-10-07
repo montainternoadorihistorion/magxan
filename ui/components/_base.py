@@ -7,10 +7,14 @@ Streamlit の部品（カスタムコンポーネント v2）は、動いてい�
 """
 from __future__ import annotations
 
+import secrets
 from functools import cache
 from pathlib import Path
 
 import streamlit as st
+
+#: セッションごとの「番号の土台」を入れておく場所
+REV_BASE_KEY = "mj_rev_base"
 
 
 @cache
@@ -26,3 +30,17 @@ def registered(name: str, folder: Path, *, html: str | None = None, css: str | N
         css=_read(folder / css) if css else None,
         js=_read(folder / js) if js else None,
     )
+
+
+def session_rev(number: int) -> int:
+    """部品に渡す番号（rev）に、セッションごとに違う土台を足す。
+
+    部品は「番号が変わった ＝ サーバーが応答した」と判断する。通信が長く切れてセッションが作り直されると、
+    Python の側の番号は最初に戻る。たまたま前と同じ番号になると、部品は「まだ応答が無い」と見なして、
+    送信中のまま止まる。セッションごとに土台を変えておけば、部品は、サーバーが新しくなったことに必ず気づく。
+    """
+    base = st.session_state.get(REV_BASE_KEY)
+    if not isinstance(base, int) or isinstance(base, bool):
+        base = (secrets.randbelow(900_000_000) + 1) * 1_000_000        # 足しても、JavaScript が正確に扱える整数（2^53）に収まる
+        st.session_state[REV_BASE_KEY] = base
+    return base + number

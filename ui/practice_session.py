@@ -13,6 +13,9 @@
     session.begin()                     # 次の局
     session.again()                     # 同じ局をもう一度
 
+役指定練習：設定の target に、狙う役（図鑑のページの鍵）を入れておくと、次の局から、その役を狙う局になる。
+あがった局では、付いた役にスタンプを押す（progress.stamps）。成績に入れない局（やり直しなど）でも押す。
+
 画面の部品（Streamlit）には触れない。画面なしでテストできる。
 """
 from __future__ import annotations
@@ -22,19 +25,25 @@ import secrets
 import time
 import unicodedata
 from collections.abc import Callable, MutableMapping
-from typing import Any, Protocol
+from typing import Any
 
 from engine import practice
+from engine.analysis.target import TARGET_KEYS
 from engine.luck import PRESETS, LuckSettings
-from engine.practice import Decision, PracticeConfig, PracticeState
+from engine.practice import Decision, Outcome, PracticeConfig, PracticeState
+from engine.progress import add_stamps
 from engine.records import MAX_RECORDS, HandRecord, add_record, dump_record, load_history, record_of
+from engine.scoring.explain import explain
 from ui.practice_view import HINT_AFTER, HINT_BEFORE, HINT_OFF, LEVEL_FULL, LEVEL_MIN, LEVEL_NORMAL
+from ui.progress_store import HAND_NAME, HISTORY_NAME, SETTINGS_NAME, Store, read_stamps, write_stamps
+from ui.progress_store import parse_json as _parse_json
 
-HAND_NAME = "practice.hand"            # 打っている局（設定＋行動の列）
-SETTINGS_NAME = "practice.settings"    # ツキ補正とコーチの設定
-HISTORY_NAME = "practice.history"      # 成績（記録の配列）
+__all__ = ["HAND_NAME", "HISTORY_NAME", "SETTINGS_NAME", "PracticeSession", "Store", "clean_settings", "parse_seed", "preset_name"]
+
 SAVE_VERSION = 1
 MAX_SEED = 999_999
+#: 役指定練習で、その役が作れる山に当たるまで、番号を引き直す回数の上限
+MAX_DEALS = 40
 
 #: 初めて開いたときの設定。カリキュラムの最初の段階（補正：強、ヒントは打つ前）に合わせてある
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -44,16 +53,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "mark": True,            # 補正によるツモに印を付けるか
     "hint": HINT_BEFORE,     # ヒントのタイミング
     "level": LEVEL_NORMAL,   # コーチの表示量
+    "target": None,          # 役指定練習で狙う役（図鑑のページの鍵）。None なら、ふつうの一人練習
 }
-
-
-class Store(Protocol):
-    """ブラウザ内保存の窓口（ui.components.browser_store.BrowserStore と同じ形）"""
-
-    def get(self, name: str) -> str | None: ...
-    def set(self, name: str, value: str) -> None: ...
-    def remove(self, name: str) -> None: ...
-    def append(self, name: str, item: str, *, limit: int) -> None: ...
 
 
 def clean_settings(data: object, base: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -72,6 +73,8 @@ def clean_settings(data: object, base: dict[str, Any] | None = None) -> dict[str
         result["hint"] = data["hint"]
     if data.get("level") in (LEVEL_MIN, LEVEL_NORMAL, LEVEL_FULL) and not isinstance(data.get("level"), bool):
         result["level"] = data["level"]
+    if "target" in data and (data["target"] is None or (isinstance(data["target"], str) and data["target"] in TARGET_KEYS)):
+        result["target"] = data["target"]
     return result
 
 
@@ -88,16 +91,6 @@ def parse_seed(text: object) -> int | None:
     if not (digits.isascii() and digits.isdigit()) or len(digits) > len(str(MAX_SEED)):
         return None
     return int(digits)
-
-
-def _parse_json(text: str | None) -> object:
-    """JSON を読む。読めなければ None（ブラウザに残っているデータは、壊れていることがある）"""
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except (ValueError, RecursionError):        # JSON でない／入れ子が深すぎる
-        return None
 
 
 class PracticeSession:
@@ -172,6 +165,21 @@ class PracticeSession:
         """いま打っている局のツキ補正が、設定と違うか（設定を変えた直後）"""
         return self.state.config.luck != self.luck
 
+    @property
+    def target(self) -> str | None:
+        """設定されている、役指定練習で狙う役（次に始める局に使う）"""
+        return self.settings.get("target")
+
+    @property
+    def target_changed(self) -> bool:
+        """いま打っている局の狙う役が、設定と違うか（設定を変えた直後）"""
+        return self.state.config.target != self.target
+
+    @property
+    def fresh_stamps(self) -> list[str]:
+        """この局のあがりで、はじめてスタンプが押された役（図鑑のページの鍵）"""
+        return self._s.get("pr_fresh", [])
+
     # ------------------------------------------------------------ 始める
 
     def start(self, generation: int = 0) -> None:
@@ -189,22 +197,34 @@ class PracticeSession:
             self.begin()
 
     def begin(self, seed: int | None = None, *, counted: bool = True) -> None:
-        """新しい局を始める。seed を指定した局は、成績に入れない"""
+        """新しい局を始める。seed を指定した局は、成績に入れない。
+
+        役指定練習では、その役が作れる山に当たるまで、番号を引き直す。必要な牌が王牌（嶺上牌・ドラ表示牌）にしか
+        無い山では、どう打っても役が作れないため（補正は王牌に触れない）。番号を指定した局は、引き直さない。
+        """
         if seed is not None:
-            counted = False
-        config = PracticeConfig(seed=self._new_seed() if seed is None else seed, luck=self.luck)
-        self._open(config, counted=counted)
+            self._open(practice.start(self._config(seed)), counted=False)
+            return
+        for _ in range(MAX_DEALS):
+            state = practice.start(self._config(self._new_seed()))
+            if not state.deal.target or state.deal.chosen_distance is not None:
+                break
+        self._open(state, counted=counted)
 
     def again(self) -> None:
-        """同じ配牌（同じ番号・同じ補正）で、もう一度打つ。成績には入れない"""
-        self._open(self.state.config, counted=False)
+        """同じ配牌（同じ番号・同じ補正・同じ狙う役）で、もう一度打つ。成績には入れない"""
+        self._open(practice.start(self.state.config), counted=False)
 
-    def _open(self, config: PracticeConfig, *, counted: bool) -> None:
-        self._s["pr_state"] = practice.start(config)
+    def _config(self, seed: int) -> PracticeConfig:
+        return PracticeConfig(seed=seed, luck=self.luck, target=self.target)
+
+    def _open(self, state: PracticeState, *, counted: bool) -> None:
+        self._s["pr_state"] = state
         self._s["pr_decisions"] = []
         self._s["pr_counted"] = counted
         self._s["pr_hinted"] = False
         self._s["pr_resumed"] = False
+        self._s["pr_fresh"] = []
         self._s["pr_scroll"] = True       # 新しい局は、画面のいちばん上から見せる
         self._bump()
         self._save_hand()
@@ -231,6 +251,7 @@ class PracticeSession:
         self._s["pr_counted"] = data.get("counted") is True
         self._s["pr_hinted"] = data.get("hinted") is True
         self._s["pr_resumed"] = resumed
+        self._s.setdefault("pr_fresh", [])       # スタンプは、あがった瞬間にだけ押す（再開した局では押し直さない）
         self._s["pr_save"] = self._hand_data()
         return True
 
@@ -305,12 +326,29 @@ class PracticeSession:
         self._s["pr_state"] = after
         self._s["pr_resumed"] = False
         self._bump()
-        if after.finished and self.counted:
-            made = record_of(after, self.decisions, time=int(self._now()), hinted=self.hinted)
-            self._s["pr_history"] = add_record(self.history, made)
-            # 全体を書き直さず、ブラウザに残っている配列の末尾に 1 件だけ足す
-            self._store.append(HISTORY_NAME, dump_record(made), limit=MAX_RECORDS)
+        if after.finished:
+            now = int(self._now())
+            self._stamp(after, now)
+            if self.counted:
+                made = record_of(after, self.decisions, time=now, hinted=self.hinted)
+                self._s["pr_history"] = add_record(self.history, made)
+                # 全体を書き直さず、ブラウザに残っている配列の末尾に 1 件だけ足す
+                self._store.append(HISTORY_NAME, dump_record(made), limit=MAX_RECORDS)
         self._save_hand()
+
+    def _stamp(self, after: PracticeState, now: int) -> None:
+        """あがった手に付いた役に、スタンプを押す（成績に入れない局でも押す）"""
+        result = after.result
+        self._s["pr_fresh"] = []
+        if result is None or result.outcome is not Outcome.TSUMO or result.win is None:
+            return
+        best = explain(result.win, after.config.rules).best
+        if best is None:
+            return
+        keys = [item.key for item in best.evaluation.yaku]
+        stamps, fresh = add_stamps(read_stamps(self._store), keys, time=now, plain=after.config.luck.is_off)
+        write_stamps(self._store, stamps)
+        self._s["pr_fresh"] = fresh
 
     def _bump(self) -> None:
         self._s["pr_rev"] = self._s.get("pr_rev", 0) + 1

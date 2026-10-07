@@ -43,6 +43,7 @@ from engine.luck import (
 from engine.rng import Rng
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.context import WinContext
+from engine.target_coach import TargetAdvice, TargetVerdict, judge_target, target_advice
 from engine.tiles import EAST, NORTH, NUM_TILES, SOUTH, WEST, counts34, kind_of, sort_tiles
 from engine.wall import DORA_START, HAND_SIZE, LIVE_START, URA_START, Wall
 
@@ -446,6 +447,9 @@ class Decision:
     action: Action
     verdict: Verdict
     analysis: Analysis    # 切る前の局面の分析（答え合わせで、候補の表を見せるため）
+    # ---- 役指定練習のときだけ（手の形を問わない役を狙う局では None）
+    target: TargetVerdict | None = None         # 狙う役から見た評価（その役がもう作れない局面では None）
+    target_advice: TargetAdvice | None = None   # 切る前の局面で、役に近い切り方を調べた結果
 
 
 def position_of(state: PracticeState) -> Position:
@@ -469,9 +473,20 @@ def assess(state: PracticeState, action: Action) -> Decision | None:
     """これからする打牌を評価する（apply の前に呼ぶ）。ツモあがりは評価の対象外なので None"""
     if action.move is Move.TSUMO or action.tile is None:
         return None
-    analysis = analyze(position_of(state))
+    position = position_of(state)
+    analysis = analyze(position)
     verdict = judge_discard(analysis, action.tile, riichi=action.move is Move.RIICHI)
-    return Decision(state.turn, action, verdict, analysis)
+    advice = target_advice_of(state)
+    target = judge_target(advice, action.tile, position) if advice is not None else None
+    return Decision(state.turn, action, verdict, analysis, target, advice)
+
+
+def target_advice_of(state: PracticeState) -> TargetAdvice | None:
+    """役指定練習の局面で、狙う役に近い切り方を調べる。ふつうの局・手の形を問わない役を狙う局では None"""
+    key = state.config.target
+    if key is None or key in SHAPELESS_KEYS:
+        return None
+    return target_advice(position_of(state), key)
 
 
 def decisions_of(config: PracticeConfig, actions: Sequence[Action]) -> tuple[Decision, ...]:

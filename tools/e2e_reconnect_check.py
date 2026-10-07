@@ -128,7 +128,7 @@ def discard(page: Page, index: int) -> None:
     before = page.locator('[data-testid="stMain"]').inner_text()
     page.locator(".mj-tile").nth(index).tap()
     page.wait_for_timeout(150)
-    page.locator(".mj-confirm").tap()
+    page.locator(".mj-hand-root .mj-confirm").tap()
     page.wait_for_function("t => document.querySelector('[data-testid=stMain]').innerText !== t", arg=before, timeout=20000)
     settle(page, 400)
 
@@ -182,13 +182,13 @@ def run(base_url: str, out_dir: Path) -> dict:
             if state.finished:
                 page.get_by_role("button", name="次の局へ").first.tap()
             elif name == "設定を変えようとした":
-                page.locator("summary", has_text="設定（ツキ補正・コーチ）").first.tap()
+                page.locator("summary", has_text="設定（ツキ補正・役指定・コーチ）").first.tap()
                 page.wait_for_timeout(400)
                 page.get_by_role("radio", name="オフ", exact=True).tap()
             else:
                 page.locator(".mj-tile").nth(13).tap()
                 page.wait_for_timeout(150)
-                page.locator(".mj-confirm").tap()
+                page.locator(".mj-hand-root .mj-confirm").tap()
             noticed = False
             for _ in range(10):
                 page.wait_for_timeout(500)
@@ -212,7 +212,7 @@ def run(base_url: str, out_dir: Path) -> dict:
                 if page.evaluate(HAND_PENDING):
                     problems.append("手牌が「送信中」のまま止まっている")
             if name == "設定を変えようとした":
-                page.locator("summary", has_text="設定（ツキ補正・コーチ）").first.tap()
+                page.locator("summary", has_text="設定（ツキ補正・役指定・コーチ）").first.tap()
                 page.wait_for_timeout(500)
                 shown = page.get_by_role("radio", name="打つ前に表示", exact=True).get_attribute("aria-checked")
                 if shown != "true":

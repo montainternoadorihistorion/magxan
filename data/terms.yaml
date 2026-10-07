@@ -187,6 +187,7 @@ terms:
     origin:
       text: 日本でできた言葉。
       certainty: 有力
+    ruby: true
     see: [聴牌, 罰符, 形式聴牌]
 
   - term: 形式聴牌
@@ -194,6 +195,7 @@ terms:
     category: agari
     meaning: 役がなくてあがれないが、形だけは聴牌していること。流局のときは聴牌として扱われ、ノーテンの罰符を払わなくてよい。
     alt: 「形テン」（ケイテン）と略す。
+    ruby: true
     see: [聴牌, 役なし, 罰符]
 
   - term: 空聴
@@ -211,6 +213,7 @@ terms:
     origin:
       text: 日本語。「黙って聴牌」を縮めた言い方。
       certainty: 確実
+    ruby: true
     see: [聴牌]
 
   - term: 役なし
@@ -492,6 +495,7 @@ terms:
     meaning: 3 種類以上の牌を待てる形。3 種類なら三面張（サンメンチャン）。
     example: "23456m456p789s55z"
     example_note: 1萬・4萬・7萬 の三面張。
+    ruby: true
     see: [両面, 待ち]
 
   # ============================================================ 牌の呼び方
@@ -712,6 +716,7 @@ terms:
     category: hai
     meaning: 誰かがカンをするたびに、1 枚ずつ増えるドラ。ドラ表示牌の隣を新しくめくる。全員に有効。
     alt: 「新ドラ」とも言う。
+    ruby: true
     see: [ドラ, カン, 裏ドラ]
 
   - term: 赤ドラ
@@ -803,6 +808,7 @@ terms:
     reading: クイカエ
     category: naki
     meaning: 鳴いた直後に、鳴いた牌と同じ牌や、同じ順子の反対側の牌を捨てること。たとえば 234 を持っていて 1 をチーし、4 を捨てる。禁止しているルールが一般的。
+    ruby: true
     see: [チー, ポン]
 
   # ============================================================ 卓・場・進行
@@ -882,6 +888,7 @@ terms:
     origin:
       text: 中国語から。
       certainty: 確実
+    ruby: true
     see: [配牌]
 
   - term: 洗牌
@@ -892,6 +899,7 @@ terms:
     origin:
       text: 中国語から。
       certainty: 確実
+    ruby: true
     see: [山]
 
   - term: 親
@@ -916,6 +924,7 @@ terms:
     origin:
       text: 中国語から。
       certainty: 確実
+    ruby: true
     see: [親]
 
   - term: 東家
@@ -930,12 +939,14 @@ terms:
     category: ba
     meaning: 自分の左隣の人。自分のすぐ前の番の人。チーできるのは、上家の捨て牌だけ。
     kanji: 上（かみ。日本語）＋家（チャ。中国語の音）。
+    ruby: true
     see: [下家, 対面, チー]
 
   - term: 下家
     reading: シモチャ
     category: ba
     meaning: 自分の右隣の人。自分のすぐ次の番の人。
+    ruby: true
     see: [上家, 対面]
 
   - term: 対面
@@ -945,6 +956,7 @@ terms:
     origin:
       text: 中国語から。
       certainty: 確実
+    ruby: true
     see: [上家, 下家]
 
   - term: 東場
@@ -964,6 +976,7 @@ terms:
     reading: ハンチャン
     category: ba
     meaning: 東場と南場を打つ 1 試合。連荘がなければ 8 局。東場だけで終わる試合は、東風戦（トンプウセン）と言う。
+    ruby: true
     see: [東場, 局, オーラス]
 
   - term: オーラス
@@ -981,6 +994,7 @@ terms:
     origin:
       text: 中国語から。
       certainty: 確実
+    ruby: true
     see: [親, 本場]
 
   - term: 本場
@@ -1168,6 +1182,7 @@ terms:
     category: mamori
     meaning: 捨てても、ロンされる心配がない（とても少ない）牌。
     alt: 「安牌」（アンパイ）と略す。
+    ruby: true
     see: [現物, ベタオリ]
 
   - term: 筋
@@ -1241,12 +1256,14 @@ terms:
     reading: ターハイ
     category: sahou
     meaning: 手牌が、決まりより 1 枚多いこと。ツモったあとに捨て忘れたときなどに起きる。ふつうは、アガリ放棄になる。
+    ruby: true
     see: [少牌, アガリ放棄]
 
   - term: 少牌
     reading: ショーハイ
     category: sahou
     meaning: 手牌が、決まりより 1 枚少ないこと。ツモり忘れや、鳴いたあとの捨てすぎで起きる。ふつうは、アガリ放棄になる。
+    ruby: true
     see: [多牌, アガリ放棄]
 
   - term: 誤ロン

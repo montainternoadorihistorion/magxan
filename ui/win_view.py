@@ -9,7 +9,7 @@ Streamlit には依存しない（HTML の文字列を返すだけ）。画面�
 """
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from html import escape
 
@@ -97,7 +97,7 @@ def tiles_fit_html(tile_ids: Sequence[int], *, aka: bool, max_px: int = 34, win_
     return f'<div class="mj-fit" style="grid-template-columns:{" ".join(columns)}">{"".join(cells)}</div>'
 
 
-def _group_html(
+def group_html(
     tile_ids: Iterable[int], caption: str, *, aka: bool, win_tile: int | None = None, small: bool = False, hide_ends: bool = False
 ) -> str:
     images = [tile_img(t, aka=aka, cls="mj-win" if t == win_tile else "") for t in tile_ids]
@@ -113,8 +113,11 @@ def _meld_caption(meld: Meld) -> str:
     return _MELD_CAPTIONS[meld.type]
 
 
-def hand_html(result: Explanation, rb: Rubifier) -> str:
-    """卓で見える形の手牌（門前の牌、和了牌、副露、ドラ表示牌）"""
+def hand_html(result: Explanation, rb: Rubifier, *, indicators: bool = True) -> str:
+    """卓で見える形の手牌（門前の牌、和了牌、副露、ドラ表示牌）。
+
+    indicators が偽なら、ドラ表示牌を出さない（同じ画面のほかの場所に、もう出ているとき）。
+    """
     ctx = result.ctx
     aka = result.rules.aka_dora
     closed = [t for t in sort_tiles(ctx.closed_tiles) if t != ctx.win_tile]
@@ -126,17 +129,17 @@ def hand_html(result: Explanation, rb: Rubifier) -> str:
     ]
     if ctx.melds:
         groups = "".join(
-            _group_html(sort_tiles(m.tiles), rb.html(_meld_caption(m)), aka=aka, small=True, hide_ends=m.type is MeldType.ANKAN)
+            group_html(sort_tiles(m.tiles), rb.html(_meld_caption(m)), aka=aka, small=True, hide_ends=m.type is MeldType.ANKAN)
             for m in ctx.melds
         )
         parts.append(f'<div class="mj-row"><span class="mj-rowlabel">{rb.html("副露")}</span><div class="mj-blocks">{groups}</div></div>')
-    indicators = []
-    if ctx.dora_indicators:
-        indicators.append(_group_html(ctx.dora_indicators, "ドラ表示牌", aka=aka, small=True))
-    if ctx.ura_indicators:
-        indicators.append(_group_html(ctx.ura_indicators, "裏ドラ表示牌", aka=aka, small=True))
-    if indicators:
-        parts.append(f'<div class="mj-row"><div class="mj-blocks">{"".join(indicators)}</div></div>')
+    shown = []
+    if indicators and ctx.dora_indicators:
+        shown.append(group_html(ctx.dora_indicators, rb.html("ドラ表示牌"), aka=aka, small=True))
+    if indicators and ctx.ura_indicators:
+        shown.append(group_html(ctx.ura_indicators, rb.html("裏ドラ表示牌"), aka=aka, small=True))
+    if shown:
+        parts.append(f'<div class="mj-row"><div class="mj-blocks">{"".join(shown)}</div></div>')
     parts.append("</div>")
     return "".join(parts)
 
@@ -169,7 +172,7 @@ def situation_chips(result: Explanation) -> list[str]:
     return chips
 
 
-def _chips_html(chips: Iterable[str], rb: Rubifier) -> str:
+def chips_html(chips: Iterable[str], rb: Rubifier) -> str:
     return '<div class="mj-chips">' + "".join(f'<span class="mj-chip">{rb.html(c)}</span>' for c in chips) + "</div>"
 
 
@@ -204,20 +207,20 @@ def headline(result: Explanation) -> str:
 
 def summary_html(result: Explanation, rb: Rubifier) -> str:
     """いちばん上に出す結果のまとめ"""
-    chips = _chips_html(situation_chips(result), rb)
+    chips = chips_html(situation_chips(result), rb)
     if result.status is Status.NOT_WINNING:
-        body = '<div class="mj-big mj-bad">和了の形になっていない</div>' + f'<div class="mj-sub">{rb.html("4 面子 1 雀頭・七対子・国士無双のどれにもなっていない。")}</div>'
+        body = f'<div class="mj-big mj-bad">{rb.html("和了の形になっていない")}</div>' + f'<div class="mj-sub">{rb.html("4 面子 1 雀頭・七対子・国士無双のどれにもなっていない。")}</div>'
     elif result.status is Status.NO_YAKU:
-        body = '<div class="mj-big mj-bad">あがれない（役なし）</div>' + f'<div class="mj-sub">{rb.html("形はできているが、役が 1 つも無い。")}</div>'
+        body = f'<div class="mj-big mj-bad">{rb.html("あがれない（役なし）")}</div>' + f'<div class="mj-sub">{rb.html("形はできているが、役が 1 つも無い。")}</div>'
     else:
         best = result.best
         assert best is not None and best.points is not None
         points = best.points
         level = rb.wrap(points.level_name, '<span class="mj-level">', "</span>") if points.level is not Level.NONE else ""
+        dora = f" ／ ドラ {best.dora_han}" if best.dora_han else ""
         body = (
             f'<div class="mj-big">{escape(headline(result))} {level}</div>'
-            f'<div class="mj-sub">{rb.html(_han_fu_text(best))} ／ {rb.html(_yaku_names(best))}'
-            f'{" ／ ドラ " + str(best.dora_han) if best.dora_han else ""}</div>'
+            f'<div class="mj-sub">{rb.html(f"{_han_fu_text(best)} ／ {_yaku_names(best)}{dora}")}</div>'
         )
         if len(points.payments) > 1 or points.payments[0].count > 1 or points.kyotaku_bonus:
             body += f'<div class="mj-sub">{rb.html(f"和了者が受け取る合計 {_fmt(points.total)} 点")}</div>'
@@ -253,7 +256,7 @@ def reading_html(candidate: Candidate, result: Explanation, rb: Rubifier, *, sma
     for index, tiles in enumerate(groups):
         meld = meld_of_block(interp, ctx, index)
         caption = rb.html(_block_caption(interp, index, meld))
-        cells.append(_group_html(tiles, caption, aka=aka, win_tile=ctx.win_tile if index == interp.win_index else None, small=small))
+        cells.append(group_html(tiles, caption, aka=aka, win_tile=ctx.win_tile if index == interp.win_index else None, small=small))
     return f'<div class="mj-blocks">{"".join(cells)}</div>'
 
 
@@ -280,7 +283,7 @@ def decomposition_section(result: Explanation, rb: Rubifier, detail: int) -> Sec
     first = result.candidates[0]
     interp = first.interp
     parts = [reading_html(first, result, rb)]
-    parts.append(f'<div class="mj-note">待ち：{rb.html(wait_text(interp, result.ctx.win_kind))}（枠つきが和了牌）</div>')
+    parts.append(f'<div class="mj-note">{rb.html(f"待ち：{wait_text(interp, result.ctx.win_kind)}（枠つきが和了牌）")}</div>')
     if interp.form is Form.CHIITOI:
         parts.append(f'<div class="mj-note">{rb.html("7 組の対子でできた七対子の形。")}</div>')
     elif interp.form is Form.KOKUSHI:
@@ -295,12 +298,14 @@ def decomposition_section(result: Explanation, rb: Rubifier, detail: int) -> Sec
             for number, candidate in enumerate(result.candidates, start=1):
                 mark = "採用" if number == 1 and candidate.has_yaku else ""
                 badge = f'<span class="mj-adopt">{mark}</span>' if mark else ""
-                wait = rb.html(wait_text(candidate.interp, result.ctx.win_kind))
+                # 画面に出る順（結果 → 分け方の図 → 待ちと役）に作る
+                outcome = rb.html(_candidate_result_text(candidate, result.ctx))
+                figure = reading_html(candidate, result, rb, small=True)
+                names = _yaku_names(candidate) or "役なし"
+                wait = rb.html(f"{wait_text(candidate.interp, result.ctx.win_kind)}／{names}")
                 rows.append(
                     f'<div class="mj-alt"><div class="mj-alt-head">読み方 {number} {badge}'
-                    f'<span class="mj-alt-result">{rb.html(_candidate_result_text(candidate, result.ctx))}</span></div>'
-                    f"{reading_html(candidate, result, rb, small=True)}"
-                    f'<div class="mj-sub">{wait}／{rb.html(_yaku_names(candidate) or "役なし")}</div></div>'
+                    f'<span class="mj-alt-result">{outcome}</span></div>{figure}<div class="mj-sub">{wait}</div></div>'
                 )
             parts.append("".join(rows))
     elif detail >= DETAIL_FULL:
@@ -311,7 +316,7 @@ def decomposition_section(result: Explanation, rb: Rubifier, detail: int) -> Sec
 # ---------------------------------------------------------------- ② 役
 
 
-def _checks_html(item: YakuResult, rb: Rubifier) -> str:
+def checks_html(item: YakuResult, rb: Rubifier) -> str:
     rows = []
     for check in item.checks:
         cls = "mj-ok" if check.ok else "mj-ng"
@@ -321,19 +326,20 @@ def _checks_html(item: YakuResult, rb: Rubifier) -> str:
     return f'<ul class="mj-checks">{"".join(rows)}</ul>'
 
 
-def _named(name: str, reading: str, rb: Rubifier) -> str:
+def named_html(name: str, reading: str, rb: Rubifier) -> str:
     """役の名前と、そのすぐ横に並べる読み。ルビの代わりに読みを見せるので、名前は「もう出てきた用語」として覚える"""
     rb.note(name)
     return f'<b class="mj-term">{escape(name)}</b> <span class="mj-reading">{escape(reading)}</span>'
 
 
 def _yaku_row(item: YakuResult, rb: Rubifier, detail: int, *, counted: bool = True) -> str:
-    name = _named(item.name, item.reading, rb)
-    han = "役満" if item.is_yakuman and item.han == 13 else (f"役満 × {item.han // 13}" if item.is_yakuman else f"{item.han} 翻")
+    # 画面に出る順（名前 → 補足 → 条件 → 翻）に作る
+    name = named_html(item.name, item.reading, rb)
     note = f'<div class="mj-sub">{rb.html(item.note)}</div>' if item.note else ""
-    checks = _checks_html(item, rb) if detail >= DETAIL_FULL else ""
+    checks = checks_html(item, rb) if detail >= DETAIL_FULL else ""
+    han = "役満" if item.is_yakuman and item.han == 13 else (f"役満 × {item.han // 13}" if item.is_yakuman else f"{item.han} 翻")
     cls = "" if counted else ' class="mj-dim"'
-    return f"<tr{cls}><td>{name}{note}{checks}</td><td class=\"num\">{han}</td></tr>"
+    return f"<tr{cls}><td>{name}{note}{checks}</td><td class=\"num\">{rb.html(han)}</td></tr>"
 
 
 def yaku_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
@@ -347,7 +353,7 @@ def yaku_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
             total = "役満" if evaluation.yakuman_times == 1 else f"役満 {evaluation.yakuman_times} つぶん"
         else:
             total = f"{evaluation.han} 翻"
-        rows += f'<tr class="total"><td>役の合計</td><td class="num">{total}</td></tr>'
+        rows += f'<tr class="total"><td>役の合計</td><td class="num">{rb.html(total)}</td></tr>'
         parts.append(f'<table class="mj-table">{rows}</table>')
         if first.is_yakuman and evaluation.ignored:
             names = "・".join(y.name for y in evaluation.ignored)
@@ -358,14 +364,13 @@ def yaku_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
             parts.append(f'<div class="mj-note">{rb.html(line)}</div>')
 
     if first.near and (detail >= DETAIL_FULL or not evaluation.yaku):
-        rows = []
+        parts.append(f'<div class="mj-subhead">{rb.html("惜しかった役（あと少しで付いた役）")}</div>')
         for item in first.near:
             failed = next((c for c in item.checks if not c.ok), None)
-            name = _named(item.name, item.reading, rb)
+            name = named_html(item.name, item.reading, rb)
             hint = rb.html(item.hint)              # 画面に出る順（名前 → 条件 → 足りなかった理由）に作る
             why = f'<div class="mj-sub">{rb.html(failed.detail)}</div>' if failed and failed.detail else ""
-            rows.append(f'<div class="mj-near">{name}<div class="mj-near-hint">{hint}</div>{why}</div>')
-        parts.append(f'<div class="mj-subhead">惜しかった役（あと少しで付いた役）</div>{"".join(rows)}')
+            parts.append(f'<div class="mj-near">{name}<div class="mj-near-hint">{hint}</div>{why}</div>')
     return Section("yaku", title, "".join(parts), heading)
 
 
@@ -387,17 +392,17 @@ def dora_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
     for label, lines in (("ドラ表示牌", dora.dora_lines), ("裏ドラ表示牌", dora.ura_lines)):
         for line in lines:
             rows.append(
-                f'<tr><td><span class="mj-inline">{escape(label)} {tile_img(line.indicator, aka=aka)} → {kind_img(line.dora_kind)}</span>'
-                f'<div class="mj-sub">{escape(kind_text(line.dora_kind))} が手牌に {line.count} 枚</div></td>'
-                f'<td class="num">{line.count} 翻</td></tr>'
+                f'<tr><td><span class="mj-inline">{rb.html(label)} {tile_img(line.indicator, aka=aka)} → {kind_img(line.dora_kind)}</span>'
+                f'<div class="mj-sub">{rb.html(f"{kind_text(line.dora_kind)} が手牌に {line.count} 枚")}</div></td>'
+                f'<td class="num">{rb.html(f"{line.count} 翻")}</td></tr>'
             )
     if aka:
         tiles = "".join(tile_img(t, aka=True) for t in dora.aka_tiles)
         rows.append(
-            f'<tr><td><span class="mj-inline">赤ドラ {tiles}</span><div class="mj-sub">赤い 5 が手牌に {dora.aka} 枚</div></td>'
-            f'<td class="num">{dora.aka} 翻</td></tr>'
+            f'<tr><td><span class="mj-inline">{rb.html("赤ドラ")} {tiles}</span><div class="mj-sub">{rb.html(f"赤い 5 が手牌に {dora.aka} 枚")}</div></td>'
+            f'<td class="num">{rb.html(f"{dora.aka} 翻")}</td></tr>'
         )
-    rows.append(f'<tr class="total"><td>ドラの合計</td><td class="num">{dora.total} 翻</td></tr>')
+    rows.append(f'<tr class="total"><td>{rb.html("ドラの合計")}</td><td class="num">{rb.html(f"{dora.total} 翻")}</td></tr>')
     parts = [f'<table class="mj-table">{"".join(rows)}</table>']
 
     if result.ctx.ura_indicators and not result.ctx.riichi:
@@ -446,14 +451,16 @@ def fu_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
             text = "・".join(item.detail for item in sequences)
         else:
             label, text = line.label, line.detail
+        name = rb.html(label)               # 画面に出る順（名前 → 内訳 → 符）に作る
         sub = f'<div class="mj-sub">{rb.html(text)}</div>' if text and detail >= DETAIL_NORMAL else ""
-        rows.append(f'<tr><td>{rb.html(label)}{sub}</td><td class="num">{line.fu} 符</td></tr>')
+        rows.append(f'<tr><td>{name}{sub}</td><td class="num">{rb.html(f"{line.fu} 符")}</td></tr>')
     if first.interp.form is Form.REGULAR:
         if fu.fu != fu.raw_total:
             rule = "例外で 30 符にする" if fu.raw_total == 20 else "10 符単位に切り上げ"
-            rows.append(f'<tr class="total"><td>合計 {fu.raw_total} 符 → {rule}</td><td class="num">{fu.fu} 符</td></tr>')
+            total = f"合計 {fu.raw_total} 符 → {rule}"
         else:
-            rows.append(f'<tr class="total"><td>合計（ちょうど 10 符単位）</td><td class="num">{fu.fu} 符</td></tr>')
+            total = "合計（ちょうど 10 符単位）"
+        rows.append(f'<tr class="total"><td>{rb.html(total)}</td><td class="num">{rb.html(f"{fu.fu} 符")}</td></tr>')
     parts.append(f'<table class="mj-table">{"".join(rows)}</table>')
     if fu.note:
         parts.append(f'<div class="mj-note">{rb.html(fu.note)}</div>')
@@ -490,13 +497,15 @@ def points_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
         parts.append(f'<ol class="mj-steps">{steps}</ol>')
     if detail >= DETAIL_FULL:
         label = rb.html("基本点の早見（満貫以上は符を使わない）")       # 画面に出る順（見出し → 表）に作る
+        inner = rb.fork()           # 折りたたみの中身。開かないと読まれないので、ここで振ったルビは、外では数えない
         rows = "".join(
-            f'<tr><td>{rb.html(name)}</td><td class="mj-sub">{rb.html(cond)}</td><td class="num">{_fmt(base)}</td></tr>' for name, cond, base in _LIMIT_ROWS
+            f'<tr><td>{inner.html(name)}</td><td class="mj-sub">{inner.html(cond)}</td><td class="num">{_fmt(base)}</td></tr>'
+            for name, cond, base in _LIMIT_ROWS
         )
         parts.append(
             f'<details class="mj-details"><summary>{label}</summary>'
             f'<table class="mj-table"><tr><td></td><td class="mj-sub">条件</td><td class="num mj-sub">基本点</td></tr>{rows}</table>'
-            f'<div class="mj-sub">{rb.html("満貫未満は 基本点 ＝ 符 × 2^(翻＋2)。子のロンは × 4、親のロンは × 6。ツモは、親が × 2・子が × 1 を払う。")}</div>'
+            f'<div class="mj-sub">{inner.html("満貫未満は 基本点 ＝ 符 × 2^(翻＋2)。子のロンは × 4、親のロンは × 6。ツモは、親が × 2・子が × 1 を払う。")}</div>'
             "</details>"
         )
     return Section("points", title, "".join(parts), heading)
@@ -510,12 +519,12 @@ def payment_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
     points = result.best.points
     rows = []
     for payment in points.payments:
-        who = payment.payer if payment.count == 1 else f"{payment.payer} {payment.count} 人（1 人あたり）"
-        honba = f'<div class="mj-sub">うち本場ぶん {_fmt(payment.honba)} 点</div>' if payment.honba else ""
-        rows.append(f'<tr><td>{rb.html(who)}{honba}</td><td class="num">{_fmt(payment.points)} 点</td></tr>')
+        who = rb.html(payment.payer if payment.count == 1 else f"{payment.payer} {payment.count} 人（1 人あたり）")
+        honba = f'<div class="mj-sub">{rb.html(f"うち本場ぶん {_fmt(payment.honba)} 点")}</div>' if payment.honba else ""
+        rows.append(f'<tr><td>{who}{honba}</td><td class="num">{_fmt(payment.points)} 点</td></tr>')
     if points.kyotaku_bonus:
         rows.append(f'<tr><td>{rb.html("供託のリーチ棒")}</td><td class="num">{_fmt(points.kyotaku_bonus)} 点</td></tr>')
-    rows.append(f'<tr class="total"><td>和了者が受け取る合計</td><td class="num">{_fmt(points.total)} 点</td></tr>')
+    rows.append(f'<tr class="total"><td>{rb.html("和了者が受け取る合計")}</td><td class="num">{_fmt(points.total)} 点</td></tr>')
     parts = [f'<table class="mj-table">{"".join(rows)}</table>']
     if detail >= DETAIL_NORMAL:
         if result.ctx.is_tsumo:
@@ -528,7 +537,7 @@ def payment_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
 
 def declaration_section(result: Explanation, rb: Rubifier, detail: int) -> Section:
     title, heading = _head(rb, "⑦ 卓での申告")
-    parts = [f'<div class="mj-say">「{escape(result.declaration)}」</div>']
+    parts = [f'<div class="mj-say">{rb.html(f"「{result.declaration}」")}</div>']
     if detail >= DETAIL_NORMAL:
         parts.append(
             '<div class="mj-sub">'
@@ -563,45 +572,50 @@ def library_only_section(result: Explanation, rb: Rubifier) -> Section:
     html = (
         f'<div class="mj-note mj-bad">{rb.html("解説の計算と判定ライブラリの結果が一致しなかったため、内訳の表示を止めている。下は判定ライブラリの結果。")}</div>'
         f'<table class="mj-table"><tr><td>役</td><td>{rb.html(names)}</td></tr>'
-        f'<tr><td>翻・符</td><td>{verdict.han} 翻 {verdict.fu} 符</td></tr>'
+        f'<tr><td>{rb.html("翻・符")}</td><td>{rb.html(f"{verdict.han} 翻 {verdict.fu} 符")}</td></tr>'
         f"<tr><td>支払い</td><td>{payment}</td></tr></table>"
     )
     return Section("library", title, html, heading)
 
 
-def summary_section(result: Explanation, rb: Rubifier) -> Section:
-    """いちばん上に置く、結果のまとめと手牌"""
-    return Section("summary", "", summary_html(result, rb) + hand_html(result, rb))
+def summary_section(result: Explanation, rb: Rubifier, *, indicators: bool = True) -> Section:
+    """いちばん上に置く、結果のまとめと手牌。indicators が偽なら、手牌の下のドラ表示牌を出さない"""
+    return Section("summary", "", summary_html(result, rb) + hand_html(result, rb, indicators=indicators))
 
 
-def detail_sections(result: Explanation, rb: Rubifier, *, detail: int = DETAIL_FULL) -> list[Section]:
+def detail_sections(
+    result: Explanation, rb: Rubifier, *, detail: int = DETAIL_FULL, keys: Collection[str] | None = None
+) -> list[Section]:
     """まとめのあとに続く解説（① 読み方 〜 ⑦ 申告）。
 
     ルビは「画面で最初に出てきたとき」に振る。まとめとこの解説のあいだに別の内容を置くページは、
     まとめ → あいだの内容 → この解説、の順に作る。
+
+    keys を渡すと、その名前（Section.key）の部分だけを作る。作ってから捨てると、捨てた部分に振ったルビが
+    無くなってしまうので、出さない部分は、はじめから作らない。
     """
-    sections: list[Section] = []
     if not result.consistent:
-        sections.append(library_only_section(result, rb))
-        return sections
+        return [library_only_section(result, rb)]
     if result.status is Status.NOT_WINNING:
-        return sections
-    sections.append(decomposition_section(result, rb, detail))
-    sections.append(yaku_section(result, rb, detail))
+        return []
+    builders: list[tuple[str, Callable[[], Section]]] = [
+        ("reading", lambda: decomposition_section(result, rb, detail)),
+        ("yaku", lambda: yaku_section(result, rb, detail)),
+    ]
     if result.status is Status.NO_YAKU:
         if result.dora.total:
-            sections.append(dora_section(result, rb, detail))
+            builders.append(("dora", lambda: dora_section(result, rb, detail)))
     else:
         if detail >= DETAIL_NORMAL:
-            sections.append(dora_section(result, rb, detail))
-            sections.append(fu_section(result, rb, detail))
-        sections.append(points_section(result, rb, detail))
+            builders.append(("dora", lambda: dora_section(result, rb, detail)))
+            builders.append(("fu", lambda: fu_section(result, rb, detail)))
+        builders.append(("points", lambda: points_section(result, rb, detail)))
         if detail >= DETAIL_NORMAL:
-            sections.append(payment_section(result, rb, detail))
-        sections.append(declaration_section(result, rb, detail))
+            builders.append(("payment", lambda: payment_section(result, rb, detail)))
+        builders.append(("say", lambda: declaration_section(result, rb, detail)))
     if result.rule_notes and detail >= DETAIL_NORMAL:
-        sections.append(rules_section(result, rb))
-    return sections
+        builders.append(("rules", lambda: rules_section(result, rb)))
+    return [build() for key, build in builders if keys is None or key in keys]
 
 
 def explanation_sections(result: Explanation, *, detail: int = DETAIL_FULL, rb: Rubifier | None = None) -> list[Section]:

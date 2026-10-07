@@ -16,6 +16,10 @@ Streamlit Community Cloud ではサーバー側のファイルが残らず、通
 
 保存先は端末とブラウザごとに別。消えることもあるので、大事なデータは別途 JSON で書き出せるようにする。
 
+ブラウザに保存できないとき（保存が禁止されている、容量が足りない、利用者が待たずに始めた）は、このセッションの中だけの
+置き場所に読み書きする。ページを閉じると消えるが、開いているあいだは、保存できるときと同じように動く
+（成績・スタンプ・ドリルの記録がたまり、ファイルへの書き出しもできる）。available が False になるので、画面でそのことを知らせる。
+
 やり取りの仕組み（ブラウザ側は browser_store.js）
 
   * 読み取り：ブラウザの中身は、セッションごとに 1 回だけ、まとめて送ってもらう（snapshot）。
@@ -60,6 +64,7 @@ def initial_state(known: dict[str, str] | None = None) -> dict[str, Any]:
         "next_id": 1,
         "error": None,                       # 保存が使えないと分かったときの理由
         "skipped": False,                    # 利用者が、返事を待たずに進むことを選んだ
+        "memory": None,                      # 待たずに進んだあとの、このセッションの中だけの置き場所
         "again": False,                      # ページを開いたまま、セッションが作り直されたか（通信が長く切れたあと）
     }
 
@@ -110,12 +115,23 @@ class BrowserStore:
         """
         return bool(self._state.get("again"))
 
+    def _values(self) -> dict[str, str] | None:
+        """いま読み書きする置き場所。ブラウザの中身の控えか、このセッションの中だけの置き場所。まだ決まっていなければ None"""
+        state = self._state
+        if state["known"] is not None:
+            return state["known"]
+        if state["skipped"]:
+            if state.get("memory") is None:
+                state["memory"] = {}
+            return state["memory"]
+        return None
+
     def get(self, name: str) -> str | None:
-        known = self._state["known"]
-        return None if known is None else known.get(name)
+        values = self._values()
+        return None if values is None else values.get(name)
 
     def skip(self) -> None:
-        """ブラウザからの返事を待たずに進む（保存なしで動かす）。
+        """ブラウザからの返事を待たずに進む（ブラウザには保存せず、このセッションの中だけに置く）。
 
         このあと返事が届いても使わない。途中から保存を始めると、ブラウザに残っていた記録を
         「読まないまま上書き」してしまうため。
@@ -125,9 +141,10 @@ class BrowserStore:
 
     # ------------------------------------------------------------ 書き込み
 
-    def _writable(self) -> bool:
+    def _persists(self) -> bool:
+        """書いた内容を、ブラウザに送るか（使えないと分かったあと・待たずに始めたあとは、送らない）"""
         state = self._state
-        return state["known"] is not None and not state["error"]     # 使えない／まだ読めていないときは書かない
+        return state["known"] is not None and not state["error"]
 
     def _push(self, op: str, name: str, value: str | None = None, limit: int = 0) -> None:
         state = self._state
@@ -138,16 +155,20 @@ class BrowserStore:
         state["next_id"] += 1
 
     def set(self, name: str, value: str) -> None:
-        if not self._writable() or self._state["known"].get(name) == value:
+        values = self._values()
+        if values is None or values.get(name) == value:       # まだ読めていない間の書き込みは捨てる
             return
-        self._state["known"][name] = value
-        self._push("set", name, value)
+        values[name] = value
+        if self._persists():
+            self._push("set", name, value)
 
     def remove(self, name: str) -> None:
-        if not self._writable() or name not in self._state["known"]:
+        values = self._values()
+        if values is None or name not in values:
             return
-        del self._state["known"][name]
-        self._push("remove", name)
+        del values[name]
+        if self._persists():
+            self._push("remove", name)
 
     def append(self, name: str, item: str, *, limit: int) -> None:
         """保存されている JSON の配列の末尾に、item（JSON の文字列）を 1 件足す。limit 件を超えたら古いものから捨てる。
@@ -155,19 +176,20 @@ class BrowserStore:
         ブラウザ側が「いま入っている配列」に足すので、別のタブで足した記録を消してしまうことがない。
         全体を書き直さないので、記録が増えても通信量は増えない。
         """
-        if not self._writable():
+        values = self._values()
+        if values is None:
             return
         entry = json.loads(item)                        # JSON でなければ、ここで ValueError
-        known = self._state["known"]
         try:
-            items = json.loads(known.get(name) or "[]")
+            items = json.loads(values.get(name) or "[]")
         except (ValueError, RecursionError):
             items = []
         if not isinstance(items, list):
             items = []
         items = [*items, entry][-limit:] if limit > 0 else [*items, entry]
-        known[name] = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
-        self._push("append", name, item, limit)
+        values[name] = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+        if self._persists():
+            self._push("append", name, item, limit)
 
     # ------------------------------------------------------------ ブラウザとのやり取り
 

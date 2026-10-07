@@ -11,7 +11,10 @@ from engine import practice
 from engine.coach import analyze
 from engine.luck import LuckSettings
 from engine.practice import Outcome, PracticeConfig
-from engine.records import load_history
+from engine.progress import Stamp, load_stamps, stamp_keys
+from engine.records import load_history, target_stats
+from engine.scoring.explain import explain
+from engine.target_coach import target_result
 from ui.practice_session import (
     DEFAULT_SETTINGS,
     HAND_NAME,
@@ -24,6 +27,7 @@ from ui.practice_session import (
     preset_name,
 )
 from ui.practice_view import HINT_AFTER, HINT_OFF, LEVEL_FULL, LEVEL_MIN, LEVEL_NORMAL
+from ui.progress_store import STAMPS_NAME
 
 
 class FakeStore:
@@ -81,10 +85,13 @@ def play_to_end(session: PracticeSession, *, use_best: bool = True) -> None:
 
 def test_clean_settings_keeps_good_values_and_resets_bad_ones():
     assert clean_settings(None) == DEFAULT_SETTINGS and clean_settings("x") == DEFAULT_SETTINGS
-    good = {"deal": 0, "draw": 100, "tenpai_deal": True, "mark": False, "hint": HINT_OFF, "level": LEVEL_FULL}
+    good = {"deal": 0, "draw": 100, "tenpai_deal": True, "mark": False, "hint": HINT_OFF, "level": LEVEL_FULL, "target": "sanshoku"}
     assert clean_settings(good) == good
-    bad = {"deal": 101, "draw": "50", "tenpai_deal": 1, "mark": None, "hint": "いつも", "level": 9, "余分": 1}
-    assert clean_settings(bad) == DEFAULT_SETTINGS
+    assert clean_settings({**good, "target": None})["target"] is None
+    bad = {"deal": 101, "draw": "50", "tenpai_deal": 1, "mark": None, "hint": "いつも", "level": 9, "余分": 1, "target": "toitoi"}
+    assert clean_settings(bad) == DEFAULT_SETTINGS                      # 対々和は、役指定練習で選べない
+    for target in (5, "", ["sanshoku"], True):
+        assert clean_settings({"target": target}, base=good)["target"] == "sanshoku"     # おかしな値は、前の値のまま
     assert clean_settings({"deal": True, "level": True}) == DEFAULT_SETTINGS         # 真偽値を数として読まない
     assert clean_settings({"deal": 30})["deal"] == 30 and clean_settings({"deal": 30})["draw"] == DEFAULT_SETTINGS["draw"]
 
@@ -394,3 +401,167 @@ def test_objects_are_rebuilt_when_the_code_is_updated():
 
 def test_levels_are_plain_values():
     assert {LEVEL_MIN, LEVEL_NORMAL, LEVEL_FULL} == {1, 2, 3}
+
+
+# ---------------------------------------------------------------- 役指定練習
+
+
+def play_for_target(session: PracticeSession) -> None:
+    """役を狙うコーチのおすすめどおりに打つ。狙った役が付くあがりの形になったら、あがる"""
+    while not session.state.finished:
+        state = session.state
+        key = state.config.target
+        if state.can_tsumo:
+            win = practice.apply(state, practice.TSUMO).result.win
+            if target_result(explain(win), key).achieved or state.draws_left == 0:
+                assert session.tsumo()
+                continue
+        advice = practice.target_advice_of(state)
+        tile = advice.pick.tile if advice is not None and advice.pick is not None else analyze(practice.position_of(state)).pick.tile
+        assert session.pick(tile)
+
+
+def test_target_setting_applies_from_the_next_hand_and_survives_a_reopen():
+    session, store = new_session()
+    session.start()
+    assert session.target is None and not session.target_changed
+    session.update_settings({"target": "sanshoku"})
+    assert session.target == "sanshoku" and session.target_changed       # いまの局は、ふつうの局のまま
+    assert session.state.config.target is None
+    session.begin()
+    state = session.state
+    assert state.config.target == "sanshoku" and not session.target_changed
+    assert state.deal.target == "sanshoku" and state.deal.chosen_distance is not None
+    assert session.counted
+
+    assert session.pick(practice.target_advice_of(state).pick.tile)
+    decision = session.last_decision
+    assert decision.target is not None and decision.target.is_best and decision.target_advice.key == "sanshoku"
+
+    again = reopen(store)
+    assert again.settings["target"] == "sanshoku" and again.state.config.target == "sanshoku"
+    assert again.decisions[-1].target is not None and again.decisions[-1].target.label == decision.target.label
+
+    session.again()
+    assert session.state.config == state.config and not session.counted
+    session.update_settings({"target": None})
+    session.begin()
+    assert session.state.config.target is None
+
+
+def test_begin_skips_walls_where_the_target_cannot_be_made():
+    """必要な牌が王牌にしか無い山は、どう打っても役が作れない。そういう番号は飛ばす"""
+    luck = LuckSettings(75, 75)
+
+    def feasible(seed: int) -> bool:
+        return practice.start(PracticeConfig(seed=seed, luck=luck, target="daisuushii")).deal.chosen_distance is not None
+
+    seeds = range(200)
+    dead = [seed for seed in seeds if not feasible(seed)][:2]
+    live = next(seed for seed in seeds if feasible(seed))
+    assert len(dead) == 2
+    session, _ = new_session(seeds=(1, *dead, live, 7))
+    session.start()
+    session.update_settings({"target": "daisuushii"})
+    session.begin()
+    assert session.state.config.seed == live and session.state.deal.chosen_distance is not None
+
+    # 番号を指定した局は、作れない山でもそのまま始める（同じ番号は、いつも同じ局にするため）。
+    # コーチは山の中を見ないので、「作れない」とは言わない（実際の麻雀で、欲しい牌が王牌に眠っているのと同じ）
+    session.begin(dead[0])
+    assert session.state.config.seed == dead[0] and session.state.deal.chosen_distance is None and not session.counted
+    assert practice.target_advice_of(session.state).possible
+
+
+def test_target_hand_is_recorded_with_the_target_and_kept_out_of_the_usual_stats():
+    session, store = new_session(seeds=(1, 2, 3, 4))
+    session.start()
+    session.update_settings({"deal": 100, "draw": 100, "target": "tanyao"})
+    session.begin()
+    play_for_target(session)
+    assert session.state.result.outcome is Outcome.TSUMO
+    record = session.history[-1]
+    assert (record.target, record.made, record.win) == ("tanyao", True, True)
+    assert "tanyao" in record.yaku
+    stats = target_stats(load_history(store.values[HISTORY_NAME]))
+    assert (stats["tanyao"].tries, stats["tanyao"].made) == (1, 1)
+
+
+# ---------------------------------------------------------------- スタンプ
+
+
+def win_a_hand(session: PracticeSession) -> list[str]:
+    """あがるまで局をくり返し、あがった手に付いた役（図鑑のページの鍵）を返す"""
+    for _ in range(10):
+        play_to_end(session)
+        if session.state.result.outcome is Outcome.TSUMO:
+            best = explain(session.state.result.win).best
+            return stamp_keys(item.key for item in best.evaluation.yaku)
+        session.begin()
+    raise AssertionError("あがれる局が出なかった")
+
+
+def test_winning_stamps_the_yaku_once():
+    session, store = new_session(seeds=range(300, 330), now=7000.0)
+    session.start()
+    session.update_settings({"deal": 100, "draw": 100})
+    session.begin()
+    assert STAMPS_NAME not in store.values and session.fresh_stamps == []
+    pages = win_a_hand(session)
+    stamps = load_stamps(store.values[STAMPS_NAME])
+    assert set(stamps) == set(pages) and session.fresh_stamps == pages
+    assert all(stamp == Stamp(1, 7000, 7000, 0) for stamp in stamps.values())       # 補正ありの局なので、plain は 0
+
+    # 開き直しても、押し直さない
+    again = reopen(store)
+    assert again.state.finished and again.fresh_stamps == []
+    assert load_stamps(store.values[STAMPS_NAME]) == stamps
+
+    # もう 1 回あがると、回数が増える。はじめての役だけが fresh に入る
+    session.begin()
+    assert session.fresh_stamps == []
+    more = win_a_hand(session)
+    after = load_stamps(store.values[STAMPS_NAME])
+    assert session.fresh_stamps == [page for page in more if page not in pages]
+    for page in more:
+        assert after[page].count == stamps[page].count + 1 if page in stamps else after[page].count == 1
+
+
+def test_replayed_hands_are_stamped_but_not_recorded():
+    session, store = new_session(seeds=range(300, 330))
+    session.start()
+    session.update_settings({"deal": 100, "draw": 100})
+    session.begin()
+    pages = win_a_hand(session)
+    hands = len(session.history)
+    session.again()
+    play_to_end(session)
+    assert session.state.result.outcome is Outcome.TSUMO and len(session.history) == hands
+    replayed = stamp_keys(item.key for item in explain(session.state.result.win).best.evaluation.yaku)
+    stamps = load_stamps(store.values[STAMPS_NAME])
+    assert all(stamps[page].count == 1 + (page in pages) for page in replayed)
+
+
+def test_plain_hands_are_marked_and_old_history_becomes_stamps():
+    old = [{"t": 100, "seed": 1, "deal": 0, "draw": 0, "hinted": False, "win": True, "turn": 9, "riichi": True, "tenpai": True,
+            "pts": 8000, "han": 5, "fu": 30, "yaku": ["riichi", "honitsu"], "n": 8, "best": 8}]
+    store = FakeStore({HISTORY_NAME: json.dumps(old)})          # スタンプができる前の版で打った成績だけがある
+    session, _ = new_session(store, seeds=range(300, 400), now=8000.0)
+    session.start()
+    session.update_settings({"deal": 100, "draw": 100})
+    session.begin()
+    win_a_hand(session)
+    stamps = load_stamps(store.values[STAMPS_NAME])
+    assert stamps["honitsu"] == Stamp(1, 100, 100, 1)           # 前の成績ぶんも、スタンプになっている（補正なしの局）
+    assert stamps["riichi"].first == 100 and stamps["riichi"].plain == 1
+
+
+def test_draws_and_missing_storage_do_not_stamp():
+    session, store = new_session(seeds=(11, 12))
+    session.start()
+    session.update_settings({"deal": 0, "draw": 0})
+    session.begin()
+    while not session.state.finished:                           # ツモ切りを続けて流局させる
+        assert session.pick(session.state.drawn)
+    assert session.state.result.outcome is Outcome.EXHAUSTED
+    assert STAMPS_NAME not in store.values and session.fresh_stamps == []
