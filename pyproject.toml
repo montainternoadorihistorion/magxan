@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+# E501（行の長さ）: 日本語は 1 文字を 2 桁と数えるので、文章を含む行がすぐ超える。ここでは見ない
+# SIM300（定数を左に書くな）: テストの「期待値との比較」で誤検出が多い
+ignore = ["E501", "SIM300"]

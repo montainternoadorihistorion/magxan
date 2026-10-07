@@ -1,0 +1,13 @@
+[server]
+# static/ フォルダ（牌画像）をアプリから配信する
+enableStaticServing = true
+# 通信が切れたあと、同じセッションに戻れる猶予（秒）。既定は 120。
+# スマホで少し別のアプリを見て戻る程度なら、対局状態がそのまま残るようにする
+disconnectedSessionTTL = 900
+
+[client]
+# 開発者向けのメニューを隠す（スマホで誤って触らないように）
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

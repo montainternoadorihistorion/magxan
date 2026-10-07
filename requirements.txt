@@ -1,0 +1,3 @@
+# 実行に必要なもの（Streamlit Community Cloud はこのファイルを読んでインストールする）
+streamlit==1.65.0
+mahjong==2.0.0
