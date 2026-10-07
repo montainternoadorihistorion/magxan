@@ -54,12 +54,23 @@ class LuckSettings:
 
     @classmethod
     def from_dict(cls, data: dict) -> LuckSettings:
-        return cls(int(data.get("deal", 0)), int(data.get("draw", 0)), bool(data.get("allow_tenpai_deal", False)))
+        """保存した形から作る。形や値がおかしければ ValueError"""
+        if not isinstance(data, dict):
+            raise ValueError("ツキ補正の記録の形が違います")
+        allow = data.get("allow_tenpai_deal", False)
+        if not isinstance(allow, bool):
+            raise ValueError(f"ツキ補正の記録の値がおかしい: allow_tenpai_deal={allow!r}")
+        return cls(data.get("deal", 0), data.get("draw", 0), allow)       # 数値は __post_init__ で確かめる
 
 
 def deal_candidates(level: int) -> int:
-    """配牌の候補の数。0 → 1（何もしない）、50 → 16、100 → 256"""
-    return round(MAX_CANDIDATES ** (level / MAX_LEVEL))
+    """配牌の候補の数。0 → 1（何もしない）、25 → 4、50 → 16、75 → 64、100 → 256。
+
+    0 でなければ、必ず 2 個以上にする（式のままだと 1〜7 は 1 個に丸まり、補正を入れたのに何も起きなくなる）。
+    """
+    if level <= 0:
+        return 1
+    return max(2, round(MAX_CANDIDATES ** (level / MAX_LEVEL)))
 
 
 def draw_probability(level: int) -> float:

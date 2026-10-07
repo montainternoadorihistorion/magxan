@@ -116,12 +116,19 @@ class Explanation:
 
     @property
     def declaration(self) -> str:
-        """卓での申告のしかた（発声 → 役 → 点数）。例: ロン。リーチ・ピンフ・ドラ 1。3900。"""
+        """卓での申告のしかた（発声 → 役 → 点数）。例: ロン。リーチ・ピンフ・ドラ 1。3900。
+
+        役が 1 つだけでドラも無い手は「リーチのみ」「ツモのみ」のように言う（役満は除く）。
+        """
         best = self.best
         if best is None or best.points is None:
             return ""
         call = "ツモ" if self.ctx.is_tsumo else "ロン"
-        return f"{call}。{'・'.join(self.spoken_yaku)}。{best.points.declaration}。"
+        words = self.spoken_yaku
+        yaku = "・".join(words)
+        if len(words) == 1 and not best.is_yakuman:
+            yaku += "のみ"
+        return f"{call}。{yaku}。{best.points.declaration}。"
 
     @property
     def rule_notes(self) -> tuple[str, ...]:

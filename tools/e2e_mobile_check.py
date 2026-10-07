@@ -18,6 +18,10 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from e2e_ruby import terms_without_ruby  # noqa: E402
+
 IPHONE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
@@ -187,6 +191,11 @@ def run(base_url: str, out_dir: Path) -> dict:
             result["problems"].append("記録を消したあとの状態が想定と違う")
 
         result["final_report"] = report_text(page)
+
+        # --- 用語の初出に、読み（ルビ）が付いているか
+        result["ruby_missing"] = terms_without_ruby(page)
+        if result["ruby_missing"]:
+            result["problems"].append(f"初出なのにルビが無い用語: {result['ruby_missing']}")
         context.close()
 
         # --- 幅の違う画面でのレイアウト

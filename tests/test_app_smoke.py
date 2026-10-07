@@ -11,6 +11,7 @@ from streamlit.testing.v1 import AppTest
 
 from engine import solo
 from engine.tiles import format_tiles
+from ui.components.browser_store import initial_state
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE_STATE = "mjdojo_store::state"
@@ -28,7 +29,7 @@ def open_check_page(at: AppTest, known: dict | None) -> AppTest:
         skip = next(b for b in at.button if b.label == "保存を使わずに始める")
         skip.click().run()
     else:
-        at.session_state[STORE_STATE] = {"known": dict(known), "pending": {}, "seq": 0, "error": None, "skipped": False}
+        at.session_state[STORE_STATE] = initial_state(known)
         at.switch_page("views/device_check.py").run()
     assert not at.exception, [e.value for e in at.exception]
     return at

@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import replace
 
 import pytest
+from practice_helpers import TENPAI_HAND, crafted_wall, mixed_policy, play, start_on, tile, tsumogiri
 
 from engine import luck, practice
 from engine.analysis.shanten import shanten_of
@@ -29,98 +30,10 @@ from engine.rng import Rng
 from engine.rules import Rules
 from engine.scoring.explain import Status, explain
 from engine.tiles import EAST, NORTH, NUM_TILES, SOUTH, WEST, counts34, format_tiles, kind_of, parse_tiles, sort_tiles
-from engine.wall import DORA_START, LIVE_END, LIVE_START, URA_START, Wall, shuffled_tiles
+from engine.wall import DORA_START, LIVE_END, LIVE_START, URA_START, shuffled_tiles
 
 #: 実際の補正つきで最後まで打って確かめる局数（増やしたいときは環境変数で）
 HANDS = int(os.environ.get("MJDOJO_PRACTICE_HANDS", "240"))
-
-TENPAI_HAND = "123m456p789s23s44z"      # 1索・4索 待ちの平和形（北は、南家にとって役牌ではない）
-
-
-# ---------------------------------------------------------------- 道具
-
-
-def crafted_wall(hand: str, draws: str, *, dora: str = "9p", ura: str = "9p") -> list[int]:
-    """配牌・ツモ・ドラ表示牌を指定した山を作る（残りの位置は、使っていない牌を小さい順に詰める）"""
-    used: set[int] = set()
-
-    def take(text: str) -> list[int]:
-        tiles = parse_tiles(text, used=used)
-        used.update(tiles)
-        return tiles
-
-    placed = {}
-    for position, tile in zip(range(13), take(hand), strict=True):
-        placed[position] = tile
-    for position, tile in enumerate(take(draws), start=LIVE_START):
-        placed[position] = tile
-    placed[DORA_START] = take(dora)[0]
-    placed[URA_START] = take(ura)[0]
-    rest = iter(t for t in range(NUM_TILES) if t not in used)
-    return [placed[p] if p in placed else next(rest) for p in range(NUM_TILES)]
-
-
-def start_on(wall_tiles: list[int], *, seat_wind: int = SOUTH, settings: LuckSettings | None = None) -> PracticeState:
-    """指定した山で始めた状態（start と同じ形。ただし、シードからは作り直せない）"""
-    config = PracticeConfig(seed=0, luck=settings or LuckSettings(), seat_wind=seat_wind)
-    wall = Wall(list(wall_tiles))
-    wall.seal()
-    hand = tuple(sort_tiles(wall.dealt_hand(0)))
-    value = shanten_of(counts34(hand))
-    tile = wall.draw()
-    return PracticeState(
-        config=config, actions=(), seat_wind=seat_wind, wall_tiles=tuple(wall.tiles), hand=hand, drawn=tile,
-        discards=(), riichi_index=None, draws=(Draw(1, tile, NO_DRAW_LUCK),), deal=DealReport(1, 0, value, value),
-    )
-
-
-def tile(state: PracticeState, code: str) -> int:
-    """手牌の中から、その表記の牌を 1 枚選ぶ"""
-    wanted = parse_tiles(code)[0]
-    return next(t for t in state.tiles if kind_of(t) == kind_of(wanted))
-
-
-def play(config: PracticeConfig, choose) -> list[PracticeState]:
-    """choose(state) が返す行動で最後まで打ち、通った状態をすべて返す"""
-    states = [practice.start(config)]
-    while not states[-1].finished:
-        states.append(practice.apply(states[-1], choose(states[-1])))
-    return states
-
-
-def tsumogiri(state: PracticeState) -> Action:
-    return discard(state.drawn)
-
-
-def nearest_discard(state: PracticeState) -> int:
-    """切ったあとの向聴数がいちばん小さくなる牌（速く調べるための簡単な選び方）"""
-    counts = counts34(state.tiles)
-    best_tile, best_value = state.tiles[0], 99
-    for candidate in state.tiles:
-        kind = kind_of(candidate)
-        counts[kind] -= 1
-        value = shanten_of(counts)
-        counts[kind] += 1
-        if value < best_value:
-            best_tile, best_value = candidate, value
-    return best_tile
-
-
-def mixed_policy(seed: int):
-    """あがれるときは半分の確率であがり、リーチできるときは 3 割でリーチし、あとは聴牌に近づく牌か適当な牌を切る"""
-    rng = Rng(seed, "test:policy")
-
-    def choose(state: PracticeState) -> Action:
-        if state.can_tsumo and rng.chance(0.5):
-            return TSUMO
-        options = state.riichi_discards
-        if options and rng.chance(0.3):
-            return riichi(rng.choice(options))
-        if rng.chance(0.7):
-            return discard(nearest_discard(state))
-        return discard(rng.choice(state.tiles))
-
-    return choose
 
 
 def check_invariants(state: PracticeState, raw: list[int]) -> None:
@@ -168,10 +81,20 @@ def test_golden_start_with_luck_is_reproducible():
 def test_config_validation_and_roundtrip():
     config = PracticeConfig(seed=5, luck=LuckSettings(25, 75, True), rules=Rules(kuitan=False), seat_wind=WEST, round_wind=SOUTH)
     assert PracticeConfig.from_dict(json.loads(json.dumps(config.to_dict()))) == config
-    assert PracticeConfig.from_dict({"seed": "12"}) == PracticeConfig(seed=12)
-    for bad in ({"seed": -1}, {"seed": 1.5}, {"seed": True}, {"seed": 1, "seat_wind": 31}, {"seed": 1, "round_wind": 5}):
+    assert PracticeConfig.from_dict({"seed": 12}) == PracticeConfig(seed=12)
+    bad_values = (
+        {"seed": -1}, {"seed": 1.5}, {"seed": True}, {"seed": "12"}, {"seed": None}, {"seed": 10**13}, {"seed": float("inf")},
+        {"seed": 1, "seat_wind": 31}, {"seed": 1, "seat_wind": 27.0}, {"seed": 1, "round_wind": 5}, {"seed": 1, "round_wind": None},
+        {"seed": 1, "luck": {"deal": 1}}, {"seed": 1, "rules": {}},          # 設定は、型の決まったオブジェクトで渡す
+    )
+    for bad in bad_values:
         with pytest.raises(ValueError):
             PracticeConfig(**bad)
+    # 保存した形から作るときも、同じ確かめをする（数に見える文字や小数は受け付けない）
+    for bad in ({"seed": "12"}, {"seed": 4.0}, {}, [], None, "x", {"seed": 4, "luck": [1]}, {"seed": 4, "luck": None},
+                {"seed": 4, "rules": {"aka_dora": "no"}}, {"seed": 4, "rules": {"aka_dora": []}}, {"seed": 4, "seat_wind": "27"}):
+        with pytest.raises(ValueError):
+            PracticeConfig.from_dict(bad)
 
 
 def test_seat_wind_is_fixed_by_the_seed_and_evenly_spread():
@@ -334,6 +257,7 @@ def test_hand_ends_in_exhaustive_draw_after_18_draws():
     assert (final.turn, final.draws_left, len(final.discards)) == (MAX_DRAWS, 0, MAX_DRAWS)
     assert final.hand == states[0].hand and final.tiles == final.hand
     assert final.result.tenpai is False and final.result.waits == ()
+    assert final.result.shanten == shanten_of(counts34(final.hand)) > 0
     assert not final.can_tsumo and final.riichi_discards == ()
     with pytest.raises(PracticeError, match="終わっています"):
         practice.apply(final, discard(final.hand[0]))
@@ -345,7 +269,7 @@ def test_exhaustive_draw_reports_tenpai_and_waits():
     state = start_on(crafted_wall(TENPAI_HAND, "9m5555z6666z7777z1111z2z"))
     while not state.finished:
         state = practice.apply(state, tsumogiri(state))          # リーチせずにツモ切りを続ける
-    assert state.result.outcome is Outcome.EXHAUSTED and state.result.tenpai
+    assert state.result.outcome is Outcome.EXHAUSTED and state.result.tenpai and state.result.shanten == 0
     assert state.result.waits == (kind_of(parse_tiles("1s")[0]), kind_of(parse_tiles("4s")[0]))
     assert not state.in_riichi and all(not d.auto for d in state.draws)
 
@@ -359,7 +283,7 @@ def test_tsumo_without_riichi():
     state = practice.apply(state, discard(tile(state, "9m")))
     assert state.can_tsumo and format_tiles([state.drawn]) == "4s"
     won = practice.apply(state, TSUMO)
-    assert won.finished and won.result.outcome is Outcome.TSUMO and won.result.turn == 2
+    assert won.finished and won.result.outcome is Outcome.TSUMO and won.result.turn == 2 and won.result.shanten is None
     assert won.drawn == state.drawn and won.hand == state.hand and won.actions[-1] == TSUMO
     win = won.result.win
     assert win.is_tsumo and win.win_tile == won.drawn and sorted(win.closed_tiles) == sorted(won.tiles)
@@ -493,10 +417,36 @@ def test_broken_saves_are_rejected():
         {**good, "actions": [["d", 999]]},                    # 手牌にない牌を切っている
         {**good, "actions": [["t"]]},                         # あがれないのにツモあがり
         {**good, "actions": [["d", state.discards[0]]] * 2},  # 同じ牌を 2 回切っている
+        # ここからは、型がおかしいもの。どれも ValueError で（ほかの例外で）断る
+        {**good, "config": []},
+        {**good, "config": "x"},
+        {**good, "config": None},
+        {**good, "config": {**good["config"], "luck": [1]}},
+        {**good, "config": {**good["config"], "luck": "強"}},
+        {**good, "config": {**good["config"], "seed": float("inf")}},
+        {**good, "config": {**good["config"], "seed": 4.7}},
+        {**good, "config": {**good["config"], "luck": {"deal": float("inf")}}},
+        {**good, "config": {**good["config"], "rules": {"aka_dora": [1]}}},
+        {**good, "config": {**good["config"], "rules": {"aka_dora": "no"}}},
+        {**good, "config": {**good["config"], "seat_wind": float("inf")}},
+        {**good, "actions": {}},
+        {**good, "actions": "dd"},
+        {**good, "actions": [["d", float("inf")]]},
+        {**good, "actions": [["d", state.discards[0] + 0.5]]},
+        {**good, "actions": [["d", True]]},
+        {**good, "actions": [[1, 2]]},
+        {**good, "actions": ["d5"]},
+        {**good, "actions": [["d", 1, 2]]},
+        {**good, "actions": [["d", state.discards[0]]] * 5000},     # 1 局にありえない長さ
     ]
     for data in broken:
         with pytest.raises(ValueError):
             practice.from_save(data)
+    # JSON として読める「変な数」も同じ（Infinity や 1e400 は、Python の json では float の無限大になる）
+    for text in ('{"v":1,"config":{"seed":Infinity},"actions":[]}', '{"v":1,"config":{"seed":1e400},"actions":[]}',
+                 '{"v":1,"config":{"seed":4},"actions":[["d",1e400]]}'):
+        with pytest.raises(ValueError):
+            practice.from_save(json.loads(text))
 
 
 # ---------------------------------------------------------------- コーチへの橋渡し

@@ -88,8 +88,9 @@ def test_settings_validation_and_roundtrip():
     for bad in ((-1, 0), (0, 101), (1.5, 0), (True, 0), ("50", 0)):
         with pytest.raises(ValueError):
             LuckSettings(*bad)
-    with pytest.raises(ValueError):
-        LuckSettings.from_dict({"deal": 500})
+    for bad in ({"deal": 500}, {"deal": "5"}, {"deal": 4.0}, {"draw": float("inf")}, {"allow_tenpai_deal": 1}, [1], "強", None):
+        with pytest.raises(ValueError):
+            LuckSettings.from_dict(bad)
 
 
 def test_presets_cover_the_range():
@@ -100,7 +101,9 @@ def test_deal_candidates_curve():
     assert [deal_candidates(level) for level in (0, 25, 50, 75, 100)] == [1, 4, 16, 64, 256]
     values = [deal_candidates(level) for level in range(101)]
     assert values == sorted(values) and values[0] == 1 and values[-1] == 256
-    assert deal_candidates(12) == 2          # 256^(0.12) ≒ 1.9 → 2 個（低い値でも、少しは効く）
+    # 0 でなければ、必ず 2 個以上（式のままだと 1〜7 は 1 個に丸まって、補正を入れたのに何も起きない）
+    assert [deal_candidates(level) for level in (1, 5, 7, 8, 12, 16)] == [2, 2, 2, 2, 2, 2] and deal_candidates(17) == 3
+    assert all(deal_candidates(level) >= 2 for level in range(1, 101))
 
 
 def test_draw_probability_curve():
@@ -141,7 +144,7 @@ def test_zero_probability_draw_touches_nothing_and_uses_no_randomness():
 # ---------------------------------------------------------------- 配牌の補正
 
 
-@pytest.mark.parametrize(("level", "seeds"), [(25, 300), (50, 150), (75, 40), (100, 20)])
+@pytest.mark.parametrize(("level", "seeds"), [(1, 300), (5, 300), (25, 300), (50, 150), (75, 40), (100, 20)])
 def test_deal_luck_only_rearranges_own_hand_and_live_wall(level, seeds):
     for seed in range(seeds):
         order = seed % 4
@@ -159,6 +162,18 @@ def test_deal_luck_only_rearranges_own_hand_and_live_wall(level, seeds):
         assert report.applied == (wall.tiles != raw)
         assert report.chosen_shanten >= 1                                # 配牌で聴牌にはしない
         assert report.chosen_shanten <= report.original_shanten or report.original_shanten == 0
+
+
+def test_any_nonzero_deal_luck_really_does_something():
+    """いちばん弱い補正（1）でも、候補が 2 個になり、配牌が変わる局がある。「補正あり」の表示と中身が食い違わない"""
+    changed = 0
+    for seed in range(200):
+        wall = Wall.from_seed(seed)
+        report = improve_deal(wall, 0, LuckSettings(1, 0), seed, seat_wind=EAST, round_wind=EAST)
+        assert report.candidates == 2
+        changed += report.applied
+        assert report.applied == (wall.tiles != shuffled_tiles(seed))
+    assert 20 < changed < 180
 
 
 def test_stronger_deal_luck_never_gives_a_worse_deal():

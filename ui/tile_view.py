@@ -32,6 +32,24 @@ def tile_short_label(tile_id: int, *, aka: bool = True) -> str:
     return f"{red}{number_of_kind(kind)}{_SUIT_KANJI[suit]}"
 
 
+def tile_img(tile_id: int, *, aka: bool = True, cls: str = "") -> str:
+    """牌 1 枚の <img>（表示専用。大きさは、入れ物の側のスタイルで決める）"""
+    label = escape(tile_label(tile_id, aka=aka))
+    classes = f"mj-img {cls}".strip()
+    return f'<img class="{classes}" src="{tile_image_url(tile_id, aka=aka)}" alt="{label}" title="{label}">'
+
+
+def kind_img(kind: int, *, cls: str = "") -> str:
+    """種類だけが決まっている牌の絵（赤でないほうの牌を使う）"""
+    return tile_img(kind * 4 + 1, aka=True, cls=cls)
+
+
+def back_img(*, cls: str = "") -> str:
+    """裏向きの牌"""
+    classes = f"mj-img {cls}".strip()
+    return f'<img class="{classes}" src="{TILE_IMAGE_BASE}/back.png" alt="裏向きの牌" title="裏向きの牌">'
+
+
 def tiles_row_html(tile_ids: Iterable[int], *, tile_width_px: int = 30, aka: bool = True, empty_text: str = "") -> str:
     """牌を横に並べた HTML（タップはできない表示専用。河や説明図に使う）。幅が足りなければ折り返す"""
     cells = []

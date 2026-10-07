@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from html.parser import HTMLParser
-from pathlib import Path
 
 import pytest
+from html_helpers import ROOT, check_html, headings_of, ruby_parts, ruby_terms, text_of
 
 from engine.scoring.examples import EXAMPLES, EXAMPLES_BY_KEY
 from engine.scoring.explain import Status, explain
 from engine.scoring.notation import make_context
 from engine.scoring.random_hand import random_win
 from engine.tiles import EAST, SOUTH
-from ui.ruby import Rubifier
+from ui.ruby import Rubifier, missing_ruby
 from ui.win_view import (
     DETAIL_BRIEF,
     DETAIL_FULL,
@@ -23,36 +22,6 @@ from ui.win_view import (
     situation_chips,
     tiles_fit_html,
 )
-
-ROOT = Path(__file__).resolve().parent.parent
-VOID_TAGS = {"img", "br"}
-
-
-class _Checker(HTMLParser):
-    """タグの開き閉じが対応していることを確かめる"""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.stack: list[str] = []
-        self.problems: list[str] = []
-        self.images: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "img":
-            self.images.append(dict(attrs)["src"])
-        if tag not in VOID_TAGS:
-            self.stack.append(tag)
-
-    def handle_endtag(self, tag):
-        if not self.stack or self.stack.pop() != tag:
-            self.problems.append(f"閉じタグ </{tag}> が対応していない")
-
-
-def check_html(html: str) -> list[str]:
-    checker = _Checker()
-    checker.feed(html)
-    assert not checker.problems and not checker.stack, (checker.problems, checker.stack)
-    return checker.images
 
 
 def sections_of(key: str, detail: int = DETAIL_FULL):
@@ -64,11 +33,6 @@ def page_of(key: str, detail: int = DETAIL_FULL) -> str:
     return "".join(section.html for section in sections_of(key, detail))
 
 
-def text_of(html: str) -> str:
-    """HTML から、読める文字だけを取り出す（ルビの読みとタグを除く）"""
-    return re.sub(r"<[^>]+>", "", re.sub(r"<rt>.*?</rt>", "", html))
-
-
 def text_page(key: str, detail: int = DETAIL_FULL) -> str:
     return text_of(page_of(key, detail))
 
@@ -78,16 +42,18 @@ def text_page(key: str, detail: int = DETAIL_FULL) -> str:
 def test_every_example_renders_valid_html(example, detail):
     result = explain(example.context(), example.rules)
     sections = explanation_sections(result, detail=detail)
-    assert sections[0].key == "summary" and sections[0].title == ""
-    assert all(section.title for section in sections[1:])
+    assert sections[0].key == "summary" and sections[0].title == "" and sections[0].heading_html == ""
+    assert all(section.title and section.heading for section in sections[1:])
     for section in sections:
-        for src in check_html(section.html):
+        for src in check_html(section.heading_html + section.html):
             assert (ROOT / "static" / "tiles" / src.rsplit("/", 1)[1]).is_file(), src
         assert "None" not in section.html and "nan" not in section.html
-    page = "".join(section.html for section in sections)
-    # ルビは、1 つの用語につき画面の中で 1 回だけ
+    page = "".join(section.heading_html + section.html for section in sections)      # 画面に出る順（見出し → 本文）
+    assert headings_of(page) == [section.title for section in sections[1:]]
+    # ルビは、1 つの用語につき画面の中で 1 回だけ。それも、最初に出てきたところに振る（見出しも含めて）
     for term in set(re.findall(r"<ruby>([^<]+)<rt>", page)):
         assert page.count(f"<ruby>{term}<rt>") == 1, term
+    assert missing_ruby(ruby_parts(page)) == []
 
 
 def test_section_order_by_detail():
@@ -103,13 +69,13 @@ def test_full_explanation_shows_every_step():
     assert "待ち：13索 で 2索 を待つ" in page
     assert "副底" in page and "32 符 → 10 符単位に切り上げ" in page
     assert "40 符 1 翻・子のロン：40 × 2³ ＝ 40 × 8 ＝ 320 → × 4 ＝ 1,280 → 切り上げて 1,300 点" in page
-    assert "「ロン。リーチ。1300。」" in page
+    assert "「ロン。リーチのみ。1300。」" in page
     assert "惜しかった役" in page and "を満たしていれば成立" in page
 
 
 def test_brief_explanation_hides_details():
     brief = page_of("A-1", DETAIL_BRIEF)
-    assert "40 × 2³" in text_of(brief) and "「ロン。リーチ。1300。」" in text_of(brief)
+    assert "40 × 2³" in text_of(brief) and "「ロン。リーチのみ。1300。」" in text_of(brief)
     assert "惜しかった役" not in brief and "mj-checks" not in brief and "mj-steps" not in brief
     normal = page_of("A-1", DETAIL_NORMAL)
     assert "mj-steps" in normal and "mj-checks" not in normal and "惜しかった役" not in normal
@@ -120,10 +86,20 @@ def test_alternative_readings_are_listed_with_results():
     text = text_of(page)
     assert "この 14 枚の読み方は 2 通り。点数が最も高くなる読み方を採用する" in text
     assert page.count('class="mj-alt"') == 2 and "採用" in text
-    assert "6 翻 30 符 → 跳満、12000 点" in text and "3 翻 50 符 → 6400 点" in text
+    assert "6 翻 30 符 → 跳満 12,000 点" in text and "3 翻 50 符 → 6,400 点" in text
     assert "mj-alt" not in page_of("A-1")
     assert "mj-alt" not in page_of("F-1", DETAIL_BRIEF)       # 要点だけのときは、読み方が複数あることだけを知らせる
     assert "この 14 枚の読み方は 2 通り" in text_page("F-1", DETAIL_BRIEF)
+
+
+def test_alternative_readings_show_the_payment_in_the_usual_form():
+    """読み方の一覧の点数は、まとめと同じ書き方（ツモは「子・親」、親のツモは「オール」）"""
+    tsumo = explain(make_context("4566m123p789s111z", "6m", seat_wind=SOUTH, is_tsumo=True))
+    text = text_of("".join(s.html for s in explanation_sections(tsumo)))
+    assert f"→ {headline(tsumo)}" in text and "オール 点" not in text
+    dealer = explain(make_context("4566m123p789s222z", "6m", seat_wind=EAST, is_tsumo=True))
+    text = text_of("".join(s.html for s in explanation_sections(dealer)))
+    assert f"→ {headline(dealer)}" in text and headline(dealer).endswith("点オール") and "オール 点" not in text
 
 
 def test_tied_readings_are_explained_as_equal():
@@ -224,6 +200,29 @@ def test_tiles_fit_html():
     assert html.count("<img ") == 14 and html.count("mj-win") == 1
     assert html.count("minmax(0,34px)") == 14 and "8px" in html
     assert tiles_fit_html([], aka=True) == ""
+
+
+def test_headings_get_ruby_when_the_term_first_appears_there():
+    """見出しに出てくる用語が初出なら、見出しにルビを振る（本文のほうに回さない）"""
+    page = "".join(s.heading_html + s.html for s in sections_of("A-1"))
+    assert '<h3 class="mj-h3">① <ruby>手牌<rt>テハイ</rt></ruby>の読み方</h3>' in page
+    assert page.count("<ruby>手牌<rt>") == 1 and "手牌を倒す" in text_of(page)          # あとの本文では、もう振らない
+    assert '<h3 class="mj-h3">④ 符</h3>' in page                                      # 符は、上のまとめ（1 翻 40 符）で出ている
+    # 役満の手は、まとめに符が出てこない。だから「④ 符」の見出しが初出になる
+    yakuman = "".join(s.heading_html + s.html for s in sections_of("G-9"))
+    assert '<h3 class="mj-h3">④ <ruby>符<rt>フ</rt></ruby></h3>' in yakuman
+    assert ruby_terms(yakuman).count("符") == 1
+
+
+def test_level_badge_keeps_its_ruby_outside_the_coloured_label():
+    """満貫などのバッジは色つき。ルビを中に入れると、読みがバッジの文字色のまま外に出て、暗い画面で読めなくなる"""
+    summary = sections_of("F-1")[0].html
+    assert '<ruby><span class="mj-level">跳満</span><rt>ハネマン</rt></ruby>' in summary
+    rb = Rubifier()
+    rb.html("跳満")                                                                    # 先に出てきていれば、バッジだけ
+    example = EXAMPLES_BY_KEY["F-1"]
+    again = explanation_sections(explain(example.context(), example.rules), rb=rb)[0].html
+    assert '<span class="mj-level">跳満</span>' in again and "<rt>ハネマン</rt>" not in again
 
 
 def test_shared_rubifier_continues_across_page():

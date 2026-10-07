@@ -91,8 +91,13 @@ class Layout:
         return sum(1 for p in self.parts if p.type in types)
 
     def part_with(self, kind: int) -> Part | None:
-        """その種類の牌を使っている、孤立牌でないまとまり（面子 → 対子 → 搭子の順で探す）。無ければ None"""
-        order = (*MENTSU_TYPES, PartType.TOITSU, *TAATSU_TYPES, PartType.YAOCHU)
+        """その種類の牌を使っている、孤立牌でないまとまり。無ければ None。
+
+        その種類を 1 枚切ったときに「くずれるまとまり」を言うために使う。同じ種類が 2 つのまとまりに
+        入っているときは、くずしても損が小さいほう（対子 → 搭子 → 面子の順）を返す。
+        例：567 と 55 を持っていて 5 を切るなら、567 は残せるので、くずれるのは対子の 55。
+        """
+        order = (PartType.TOITSU, *TAATSU_TYPES, *MENTSU_TYPES, PartType.YAOCHU)
         found = [p for p in self.parts if kind in p.kinds and p.type in order]
         return min(found, key=lambda p: order.index(p.type)) if found else None
 

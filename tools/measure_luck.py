@@ -2,7 +2,8 @@
 
 一人練習のエンジンをそのまま使い、機械的な打ち手で何局も打って、補正の段階ごとの結果を表にする。
 
-    打ち手：受け入れがいちばん広い牌を切る（同じなら使いにくい牌から）。聴牌したら必ずリーチ。あがれるときは必ずあがる。
+    打ち手：いつもコーチのおすすめ（受け入れがいちばん広い牌。同じならドラを残し、使いにくい牌から）を切る。
+            聴牌したら必ずリーチ。あがれるときは必ずあがる。
 
 実行:  python tools/measure_luck.py [局数（既定 400）]
 """
@@ -16,11 +17,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine import practice  # noqa: E402
-from engine.analysis.advice import advise, tile_for_discard  # noqa: E402
+from engine.coach import analyze  # noqa: E402
 from engine.luck import PRESETS, LuckSettings, deal_candidates, draw_probability  # noqa: E402
-from engine.scoring.dora import dora_kind_of  # noqa: E402
 from engine.scoring.explain import explain  # noqa: E402
-from engine.tiles import CHUN, HAKU, HATSU, counts34, kind_of  # noqa: E402
 from engine.yaku_table import YAKU  # noqa: E402
 
 
@@ -31,11 +30,9 @@ def play(config: practice.PracticeConfig) -> practice.PracticeState:
         if state.can_tsumo:
             state = practice.apply(state, practice.TSUMO)
             continue
-        value_kinds = (HAKU, HATSU, CHUN, state.seat_wind, config.round_wind)
-        dora_kinds = [dora_kind_of(kind_of(t)) for t in state.dora_indicators]
-        advice = advise(counts34(state.tiles), state.remaining, value_kinds=value_kinds, dora_kinds=dora_kinds)
-        tile = tile_for_discard(state.tiles, advice.pick.kind, drawn=state.drawn)
-        if advice.pick.shanten == 0 and tile in state.riichi_discards:
+        pick = analyze(practice.position_of(state)).pick
+        tile = pick.tile
+        if pick.shanten == 0 and tile in state.riichi_discards:
             state = practice.apply(state, practice.riichi(tile))
         else:
             state = practice.apply(state, practice.discard(tile))

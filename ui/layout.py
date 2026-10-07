@@ -66,6 +66,10 @@ ruby rt { font-size: 0.55em; opacity: 0.85; user-select: none; }
   font-size: 12px;
 }
 .mj-big { font-size: 1.7rem; font-weight: 700; line-height: 1.5; }
+.mj-big > ruby > rt { font-size: 11px; font-weight: 400; }   /* 大きな文字に付けるルビは、文字に合わせて大きくしない */
+/* 解説の見出し。Streamlit の見出し（st.subheader）と同じ見た目にしてある。見出しの中の用語にルビを振りたいので、自前で出している。
+   すぐ下に本文が続くので、部品どうしの間隔（1rem）のぶんを下に空ける。幅の狭い画面では、上の h3 の決まりで小さくなる */
+.mj-h3 { font-size: 1.75rem; font-weight: 600; line-height: 1.2; letter-spacing: -0.005em; padding: 0.75rem 0 1rem; margin: 0 0 1rem; }
 .mj-level {
   font-size: 0.9rem;
   font-weight: 700;
@@ -79,6 +83,7 @@ ruby rt { font-size: 0.55em; opacity: 0.85; user-select: none; }
 .mj-sub { font-size: 12.5px; opacity: 0.85; line-height: 1.7; }
 .mj-note { font-size: 14px; line-height: 1.8; margin-top: 6px; }
 .mj-subhead { font-size: 14px; font-weight: 700; margin: 14px 0 6px; }
+.mj-subhead-first { margin: 2px 0 2px; }
 .mj-table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.7; }
 .mj-table td { padding: 5px 4px; border: none; border-bottom: 1px solid rgba(128, 128, 128, 0.25); vertical-align: top; }
 .mj-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -121,6 +126,110 @@ ruby rt { font-size: 0.55em; opacity: 0.85; user-select: none; }
 .mj-alt-result { font-weight: 400; margin-left: auto; }
 .mj-adopt { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #2e9d57; color: #fff; }
 .mj-lesson { border-left: 4px solid #4a90d9; background: rgba(74, 144, 217, 0.1); padding: 8px 12px; border-radius: 4px; font-size: 14px; line-height: 1.8; }
+
+/* ---- 一人練習 */
+img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
+.mj-statusbar { margin: 0 0 2px; }
+.mj-chip-tiles img.mj-img.mj-s { width: 15px; margin: 1px 0 2px; }
+.mj-chip-luck { background: rgba(232, 164, 0, 0.3); }
+.mj-chip-plain { background: rgba(46, 157, 87, 0.28); }
+.mj-headline {
+  /* 2 行ぶん（牌の画像やルビが入った行を含む）がちょうど収まる高さに固定する。
+     1 行のときも同じ高さにして、巡目によって手牌の位置が上下しないようにする */
+  display: flex;
+  align-items: center;
+  min-height: 72px;
+  box-sizing: border-box;
+  font-size: 15px;
+  line-height: 1.75;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.12);
+  border-left: 4px solid rgba(128, 128, 128, 0.5);
+}
+.mj-headline-in { flex: 1; min-width: 0; }
+.mj-headline-short { display: block; min-height: 0; margin-bottom: 8px; }
+@media (max-width: 350px) {
+  .mj-headline { min-height: 96px; }      /* 幅の狭い画面では 3 行になることが多い */
+  .mj-headline-short { min-height: 0; }
+}
+.mj-headline.good, .mj-review.good { border-left-color: #2e9d57; }
+.mj-headline.soso, .mj-review.soso { border-left-color: #e8a400; }
+.mj-headline.bad, .mj-review.bad { border-left-color: #d9534f; }
+.mj-stage { font-size: 1.05rem; }
+.mj-dimtext { opacity: 0.7; font-size: 13.5px; }
+.mj-icon { display: inline-block; min-width: 1.3em; text-align: center; font-weight: 700; }
+.mj-icon.good { color: #2e9d57; }
+.mj-icon.soso { color: #c98a00; }
+.mj-icon.bad { color: #d9534f; }
+.mj-river { display: grid; grid-template-columns: repeat(6, 27px); gap: 3px 2px; margin-top: 4px; }
+.mj-river > span { display: flex; align-items: center; justify-content: center; width: 27px; height: 36px; }
+.mj-river img.mj-img { width: 27px; }
+.mj-river img.mj-sideways { transform: rotate(90deg) scale(0.8); }
+.mj-draws { row-gap: 9px; padding-top: 6px; }
+.mj-draws > span { position: relative; }
+.mj-star { position: absolute; top: -9px; right: -2px; font-style: normal; font-size: 12px; line-height: 1; color: #c98a00; }
+.mj-lucknote { font-size: 13px; line-height: 1.9; }
+.mj-review {
+  border-left: 4px solid rgba(128, 128, 128, 0.5);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.8;
+  background: rgba(128, 128, 128, 0.08);
+}
+.mj-review.good { background: rgba(46, 157, 87, 0.1); }
+.mj-review.soso { background: rgba(232, 164, 0, 0.1); }
+.mj-review.bad { background: rgba(217, 83, 79, 0.1); }
+.mj-review-head { font-size: 12.5px; opacity: 0.85; }
+.mj-review ul { margin: 4px 0 0; padding-left: 1.3em; font-size: 13px; }
+.mj-cands { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.mj-cand { border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 8px; padding: 6px 8px; }
+.mj-cand-pick { border-color: #e8a400; background: rgba(232, 164, 0, 0.08); }
+.mj-cand-you { outline: 2px dashed rgba(74, 144, 217, 0.85); outline-offset: 1px; }
+.mj-cand-head { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.mj-cand-mark { width: 1.2em; text-align: center; font-weight: 700; color: #c98a00; }
+.mj-cand-name { font-weight: 700; }
+.mj-cand-num { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mj-cand-tiles { display: flex; flex-wrap: wrap; gap: 4px 9px; margin: 5px 0 0 1.6em; }
+.mj-acc { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.mj-acc-dead { opacity: 0.35; }
+.mj-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.6;
+  background: #d9534f;
+  color: #fff;
+  vertical-align: middle;
+}
+.mj-badge-you { background: #4a90d9; }
+.mj-minus { color: #d9534f; font-size: 12px; margin-left: 4px; }
+.mj-farrow { display: flex; flex-wrap: wrap; gap: 5px; }
+.mj-far img.mj-img.mj-s { width: 22px; opacity: 0.8; }
+.mj-far-you img.mj-img.mj-s { outline: 2px dashed rgba(74, 144, 217, 0.9); outline-offset: 1px; opacity: 1; }
+.mj-legend { margin-top: 8px; }
+.mj-waits td { vertical-align: middle; border-bottom: none; padding: 3px 4px; }
+.mj-wait-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; margin-bottom: 2px; }
+.mj-wait-how { width: 6.5em; font-size: 12.5px; opacity: 0.85; white-space: nowrap; }
+.mj-part .mj-block-tiles { padding-bottom: 3px; border-bottom: 4px solid transparent; }
+.mj-part .mj-cap { text-align: center; line-height: 1.4; }
+.mj-part-done .mj-block-tiles { border-bottom-color: #2e9d57; }
+.mj-part-pair .mj-block-tiles { border-bottom-color: #4a90d9; }
+.mj-part-wait .mj-block-tiles { border-bottom-color: #e8a400; }
+.mj-part-float .mj-block-tiles { border-bottom-color: rgba(128, 128, 128, 0.6); }
+.mj-need { font-size: 11px; opacity: 0.85; }
+.mj-key { display: inline-block; width: 14px; height: 5px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.mj-key.mj-part-done { background: #2e9d57; }
+.mj-key.mj-part-pair { background: #4a90d9; }
+.mj-key.mj-part-wait { background: #e8a400; }
+.mj-key.mj-part-float { background: rgba(128, 128, 128, 0.6); }
+.mj-reviewlist td { vertical-align: middle; }
+.mj-stats td { padding-left: 2px; padding-right: 2px; font-size: 13px; }
+.mj-stats tr.mj-skill td { background: rgba(46, 157, 87, 0.12); }
 </style>
 """
 

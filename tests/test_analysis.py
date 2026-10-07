@@ -6,7 +6,7 @@ import random
 import pytest
 from mahjong.shanten import Shanten
 
-from engine.analysis.advice import advise, loose_rank, tile_for_discard
+from engine.analysis.advice import advise, discard_dora, loose_rank, tile_for_discard
 from engine.analysis.blocks import (
     PartType,
     best_layout,
@@ -22,7 +22,7 @@ from engine.rules import Rules
 from engine.scoring.decompose import Form
 from engine.scoring.explain import Status
 from engine.scoring.texts import kind_text
-from engine.tiles import CHUN, EAST, HAKU, HATSU, SOUTH, counts34, parse_tiles
+from engine.tiles import CHUN, EAST, HAKU, HATSU, SOUTH, counts34, kind_of, parse_tiles
 
 
 def counts(text: str) -> list[int]:
@@ -248,6 +248,16 @@ def test_layout_finds_the_block_that_uses_a_tile():
     assert layout.part_with(counts("9s").index(1)) is None            # 持っていない牌
 
 
+def test_layout_names_the_cheapest_block_when_a_tile_is_in_two():
+    """同じ牌が 2 つのまとまりに入っているとき、1 枚切ってくずれるのは、損が小さいほう（面子は残せる）"""
+    layout = regular_layout(counts("4m1205567p1567s23z"))             # 12筒・567筒・55筒 … と分ける
+    five_p = counts("5p").index(1)
+    using = [p.type for p in layout.parts if five_p in p.kinds]
+    assert sorted(using) == sorted([PartType.SHUNTSU, PartType.TOITSU])
+    assert layout.part_with(five_p).type is PartType.TOITSU           # 5筒 を切っても 567筒 は残る。くずれるのは対子
+    assert layout.part_with(counts("6p").index(1)).type is PartType.SHUNTSU
+
+
 def test_layout_formula_text():
     assert regular_layout(counts("1345m2289p3467s15z")).formula == "8 − 2 × 面子 1 組 − 搭子 3 組 − 対子 1 組 ＝ 2"
     crowded = regular_layout(counts("12m46m89m13p79p2s5s1z5m"))
@@ -315,13 +325,37 @@ def test_loose_rank_order():
     west, east, one, two, five = 29, EAST, 0, 1, 4
     ranks = [loose_rank(k, value_kinds=VALUE) for k in (west, east, one, two, five)]
     assert ranks == sorted(ranks)                                   # 客風 → 役牌 → 1・9 → 2・8 → 3〜7
-    assert loose_rank(west, dora_kinds=(west,)) > loose_rank(five)  # ドラは最後まで残す
+    assert loose_rank(west, dora=1) > loose_rank(five)              # ドラは最後まで残す
+    assert loose_rank(west, dora=2) > loose_rank(five, dora=1)      # ドラが多い牌ほど後
 
 
 def test_advice_keeps_dora_when_choices_are_equal():
     hand = parse_tiles("1345m2289p3467s15z")
-    advice = advise(counts34(hand), remaining_counts(hand), value_kinds=VALUE, dora_kinds=(EAST,))
+    dora_of = discard_dora(hand, dora_kinds=(EAST,))
+    assert dora_of[EAST] == 1 and dora_of[HAKU] == 0
+    advice = advise(counts34(hand), remaining_counts(hand), value_kinds=VALUE, dora_of=dora_of)
     assert kind_text(advice.pick.kind) == "白"
+
+
+def test_discard_dora_counts_indicators_and_lone_red_fives():
+    hand = parse_tiles("0m5p05s11122233z")                     # 赤5萬は 1 枚だけ。5索は赤と赤でないものを 1 枚ずつ
+    five_m, five_p, five_s = 4, 13, 22
+    plain = discard_dora(hand)
+    assert (plain[five_m], plain[five_p], plain[five_s]) == (1, 0, 0)     # 赤でない 5索 を切れるので、5索 は 0
+    assert discard_dora(hand, aka=False)[five_m] == 0                   # 赤ドラなしのルール
+    twice = discard_dora(hand, dora_kinds=(five_m, five_m, EAST))       # 同じ牌を指す表示牌が 2 枚
+    assert twice[five_m] == 3 and twice[EAST] == 1
+    assert set(plain) == {kind_of(t) for t in hand}
+
+
+def test_advice_keeps_a_lone_red_five_when_choices_are_equal():
+    """受け入れが同じなら、赤 5 しか持っていない 5 より、ドラでない牌を先に切る"""
+    hand = parse_tiles("0m5p5s11122233344z")                   # 5萬（赤）・5筒・5索 のどれを切っても同じ速さ
+    remaining = remaining_counts(hand)
+    without = advise(counts34(hand), remaining)
+    assert kind_text(without.pick.kind) == "5萬"                # ドラを考えなければ、種類の順でいちばん前
+    advice = advise(counts34(hand), remaining, dora_of=discard_dora(hand))
+    assert kind_text(advice.pick.kind) == "5筒" and names(o.kind for o in advice.best) == ["5萬", "5筒", "5索"]
 
 
 def test_dead_shapes_rank_below_live_ones():

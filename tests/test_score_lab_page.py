@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from html_helpers import headings_of, page_html
 from streamlit.testing.v1 import AppTest
 
 from engine.scoring.examples import EXAMPLES
@@ -38,7 +39,7 @@ def param(at: AppTest, name: str) -> str:
 
 def steps(at: AppTest) -> list[str]:
     """解説の見出し（「ルールによって変わるところ」は、出る手と出ない手があるので除く）"""
-    return [s.value for s in at.subheader if s.value != RULES_STEP]
+    return [title for title in headings_of(page_html(at)) if title != RULES_STEP]
 
 
 def click(at: AppTest, label: str) -> AppTest:
@@ -53,7 +54,7 @@ def test_opens_with_first_example_and_all_steps():
     assert at.selectbox(key="lab_example").value == "A-1"
     assert steps(at) == ALL_STEPS
     text = page_text(at)
-    assert "A-1 リーチのみ（嵌張待ち）" in text and "1,300 点" in text and "「ロン。リーチ。1300。」" in text
+    assert "A-1 リーチのみ（嵌張待ち）" in text and "1,300 点" in text and "「ロン。リーチのみ。1300。」" in text
     assert param(at, "ex") == "A-1"
 
 

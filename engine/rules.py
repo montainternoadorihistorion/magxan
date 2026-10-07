@@ -26,16 +26,26 @@ class Rules:
     kazoe_yakuman: bool = True
 
     def __post_init__(self) -> None:
-        if self.double_wind_pair_fu not in (2, 4):
-            raise ValueError(f"連風牌の雀頭の符は 2 か 4 です: {self.double_wind_pair_fu}")
+        for name in ("aka_dora", "kuitan", "kiriage_mangan", "double_yakuman", "kazoe_yakuman"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"ルールの値は True か False です: {name}={getattr(self, name)!r}")
+        fu = self.double_wind_pair_fu
+        if not isinstance(fu, int) or isinstance(fu, bool) or fu not in (2, 4):
+            raise ValueError(f"連風牌の雀頭の符は 2 か 4 です: {fu!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Rules:
+        """保存した形から作る（知らない項目は無視する）。形や値がおかしければ ValueError"""
+        if not isinstance(data, dict):
+            raise ValueError("ルールの記録の形が違います")
         known = {name: data[name] for name in cls.__dataclass_fields__ if name in data}
-        return cls(**known)
+        try:
+            return cls(**known)
+        except TypeError as error:          # 比べられない値（リストなど）が入っていた
+            raise ValueError(f"ルールの記録の値がおかしい: {error}") from error
 
 
 #: 既定のルール（雀魂の段位戦に合わせたもの）

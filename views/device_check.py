@@ -21,6 +21,7 @@ from engine.tiles import counts34, format_tiles
 from ui.components.browser_store import BrowserStore
 from ui.components.copy_button import copy_button
 from ui.components.tile_hand import Pick, tile_hand
+from ui.ruby import Rubifier
 from ui.tile_view import tile_short_label, tiles_row_html
 from ui.version import APP_VERSION
 
@@ -226,6 +227,7 @@ if "chk_state" not in ss:
     _start_session()
 
 state: solo.SoloState = ss.chk_state
+rb = Rubifier()      # 用語のルビは、この画面で最初に出てきたときだけ振る
 
 st.caption("上から順に試して、最後の「結果」をコピーして送ってください。3〜5 分で終わります。")
 
@@ -260,7 +262,7 @@ else:
     )
 
 done = ss.chk_counts["tap"] + ss.chk_counts["fallback"]
-st.markdown("**河（切った牌）**")
+st.html(f'<b>{rb.html("河（切った牌）")}</b>')
 st.html(tiles_row_html(state.discards, tile_width_px=26, empty_text="まだ切っていません"))
 st.caption(f"切った回数 {done} / 目安 {TARGET_DISCARDS} 回 ・ この局の残りツモ {max(state.draws_left, 0)} 回")
 
@@ -270,13 +272,13 @@ meta = ss.chk_meta
 if store.available:
     if ss.chk_restored:
         st.success("この画面は、ブラウザに残っていた記録から再開したものです。")
-    st.markdown(
-        f"""
-ブラウザ内保存は**使えています**（このブラウザで開いた回数 {meta["opens"]} 回、うち続きから再開 {meta["restores"]} 回）。
-
-1. 何枚か切ったあと、**ページを再読み込み**してください。同じ手牌と河に戻れば合格です。
-2. 余裕があれば、**別のアプリに切り替えて 3 分以上**待ってから戻ってください。続きから打てれば合格です。
-"""
+    st.html(
+        '<div class="mj-note">'
+        + rb.rich(f"ブラウザ内保存は**使えています**（このブラウザで開いた回数 {meta['opens']} 回、うち続きから再開 {meta['restores']} 回）。")
+        + '</div><ol class="mj-steps">'
+        + f"<li>{rb.rich('何枚か切ったあと、**ページを再読み込み**してください。同じ手牌と河に戻れば合格です。')}</li>"
+        + f"<li>{rb.rich('余裕があれば、**別のアプリに切り替えて 3 分以上**待ってから戻ってください。続きから打てれば合格です。')}</li>"
+        + "</ol>"
     )
 else:
     reason = store.error or "ブラウザからの返事を待たずに始めました"
@@ -287,9 +289,10 @@ st.subheader("③ サーバーの計算の速さ")
 st.button("計測する（数秒）", on_click=_run_benchmark)
 if ss.chk_bench_us is not None:
     ratio = ss.chk_bench_us / BENCH_REFERENCE_US
-    st.markdown(
-        f"向聴数の計算 1 回あたり **{ss.chk_bench_us:.0f} マイクロ秒**"
-        f"（開発環境の約 {ratio:.1f} 倍の時間）"
+    st.html(
+        '<div class="mj-note">'
+        + rb.rich(f"向聴数の計算 1 回あたり **{ss.chk_bench_us:.0f} マイクロ秒**（開発環境の約 {ratio:.1f} 倍の時間）")
+        + "</div>"
     )
 
 # ---- ④ 感想

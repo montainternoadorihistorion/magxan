@@ -11,7 +11,7 @@
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 12px 5px;
-  padding-top: 9px; /* 選んだ牌が持ち上がるぶんの余白 */
+  padding-top: 12px; /* 選んだ牌が持ち上がるぶんと、牌の左上に出す印のぶんの余白 */
 }
 
 .mj-tile {
@@ -55,6 +55,14 @@
   display: none;
 }
 
+.mj-tile.mj-noimg > span:not(.mj-mark) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
 .mj-tile[aria-pressed="true"] {
   transform: translateY(-7px);
   outline: 3px solid var(--st-primary-color, #ff4b4b);
@@ -66,24 +74,53 @@
   outline-offset: 1px;
 }
 
+/* ツモ牌の下の文字（既定は「ツモ」。ツキ補正で来た牌には印を付けて出せる） */
 .mj-tile.mj-drawn::after {
-  content: "ツモ";
+  content: attr(data-note);
   position: absolute;
-  left: 0;
-  right: 0;
+  left: -8px;
+  right: -8px;
   bottom: -17px;
   font-size: 11px;
   line-height: 14px;
   text-align: center;
+  white-space: nowrap;
   color: var(--st-text-color, #31333f);
   opacity: 0.75;
 }
 
+/* 牌の左上に出す印（コーチのおすすめなど） */
+.mj-mark {
+  position: absolute;
+  top: -8px;
+  left: -3px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 2px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: #e8a400;
+  color: #1b1b1b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+/* リーチを選んでいるあいだ、切れない牌は暗くする */
+.mj-tile.mj-dim {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
 .mj-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
   min-height: 48px;
   margin-top: 24px;
 }
@@ -92,14 +129,32 @@
   font-size: 15px;
 }
 
-.mj-confirm {
+.mj-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.mj-hand-root.mj-two-rows .mj-bar {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.mj-hand-root.mj-two-rows .mj-status {
+  min-height: 22px;
+}
+
+.mj-hand-root.mj-two-rows .mj-buttons {
+  margin-left: 0;
+  justify-content: flex-end;
+}
+
+.mj-confirm,
+.mj-riichi {
   flex: none;
   min-height: 48px;
-  padding: 0 20px;
-  border: 0;
   border-radius: 10px;
-  background: var(--st-primary-color, #ff4b4b);
-  color: #fff;
   font: inherit;
   font-size: 16px;
   font-weight: 600;
@@ -108,7 +163,31 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.mj-confirm:disabled {
+.mj-confirm {
+  padding: 0 20px;
+  border: 0;
+  background: var(--st-primary-color, #ff4b4b);
+  color: #fff;
+}
+
+.mj-riichi {
+  padding: 0 14px;
+  border: 2px solid var(--st-primary-color, #ff4b4b);
+  background: transparent;
+  color: var(--st-primary-color, #ff4b4b);
+}
+
+.mj-riichi[aria-pressed="true"] {
+  border-color: rgba(128, 128, 128, 0.6);
+  color: var(--st-text-color, #31333f);
+}
+
+.mj-riichi[hidden] {
+  display: none;
+}
+
+.mj-confirm:disabled,
+.mj-riichi:disabled {
   opacity: 0.35;
   cursor: default;
 }

@@ -18,6 +18,10 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from e2e_ruby import terms_without_ruby  # noqa: E402
+
 IPHONE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
@@ -37,8 +41,17 @@ def big(page: Page) -> str:
     return page.locator(".mj-big").first.inner_text().split("\n")[0].strip()
 
 
+#: 要素の中の文字を、ルビ（読みがな）を除いて取り出す式
+TEXT_WITHOUT_RUBY = """e => {
+    const copy = e.cloneNode(true);
+    copy.querySelectorAll('rt').forEach(x => x.remove());
+    return copy.textContent.replace(/\\s+/g, ' ').trim();
+}"""
+
+
 def headings(page: Page) -> list[str]:
-    return [h.inner_text().strip() for h in page.locator("h3").all()]
+    """解説の見出し（ルビを除く）"""
+    return [h.evaluate(TEXT_WITHOUT_RUBY) for h in page.locator("h3").all()]
 
 
 def run(base_url: str, out_dir: Path) -> dict:
@@ -168,6 +181,35 @@ def run(base_url: str, out_dir: Path) -> dict:
         settle(page)
         expect(len(headings(page)) >= 2, "答えが開いていない")
         shot("7_revealed")
+
+        # --- 用語の初出に、読み（ルビ）が付いているか。折りたたみをすべて開いて、画面の上から順に調べる
+        ruby_missing = {}
+
+        def check_ruby(name: str) -> None:
+            ruby_missing[name] = terms_without_ruby(page)
+            expect(not ruby_missing[name], f"{name}: 初出なのにルビが無い用語: {ruby_missing[name]}")
+
+        check_ruby("答えを開いたあと")
+        for name, path in (("最初の例題", "/lab"), ("役満の例題", "/lab?ex=G-9"), ("鳴いた手", "/lab?kind=open&n=12")):
+            page.goto(base_url.rstrip("/") + path)
+            page.locator(".mj-big").first.wait_for(timeout=60000)
+            settle(page)
+            check_ruby(name)
+        page.goto(base_url.rstrip("/") + "/lab")
+        page.locator(".mj-big").first.wait_for(timeout=60000)
+        page.get_by_role("radio", name="自分で入力").tap()
+        settle(page)
+        check_ruby("自分で入力")
+        page.goto(base_url.rstrip("/") + "/lab")
+        page.locator(".mj-big").first.wait_for(timeout=60000)
+        page.get_by_text("先に自分で計算する").tap()
+        settle(page)
+        check_ruby("先に自分で計算する（答えを隠した状態）")
+        page.goto(base_url)
+        page.get_by_text("点数計算ラボを開く").wait_for(timeout=60000)
+        settle(page, 500)
+        check_ruby("ホーム")
+        result["ruby_missing"] = ruby_missing
 
         browser.close()
 

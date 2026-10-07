@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +26,7 @@ class Pick:
     """確定された 1 枚と、一緒に届く計測値"""
 
     tile_id: int
+    riichi: bool                    # リーチを宣言して切るか
     prev_response_ms: int | None    # ひとつ前の確定から画面更新までの時間（体感の応答時間）
     viewport_width: int | None
     viewport_height: int | None
@@ -42,13 +43,14 @@ def _int(value: object) -> int | None:
     return None if number is None else int(number)
 
 
-def parse_pick(payload: object, *, rev: int, tile_ids: Sequence[int]) -> Pick | None:
+def parse_pick(payload: object, *, rev: int, tile_ids: Sequence[int], riichi_ids: Collection[int] = ()) -> Pick | None:
     """部品から届いた値を確かめて Pick にする。
 
     次の場合は None（無視）:
       * 形が違う
       * rev が今の番号と違う（古い画面から届いた確定。二重送信の防止）
       * 牌IDが今の手牌に無い
+    リーチの指定は、その牌がリーチで切れる牌（riichi_ids）のときだけ受け付ける。
     """
     if not isinstance(payload, dict) or _int(payload.get("rev")) != rev:
         return None
@@ -57,6 +59,7 @@ def parse_pick(payload: object, *, rev: int, tile_ids: Sequence[int]) -> Pick | 
         return None
     return Pick(
         tile_id=tile_id,
+        riichi=payload.get("riichi") is True and tile_id in riichi_ids,
         prev_response_ms=_int(payload.get("prevMs")),
         viewport_width=_int(payload.get("vw")),
         viewport_height=_int(payload.get("vh")),
@@ -76,26 +79,39 @@ def tile_hand(
     aka: bool = True,
     prompt: str = "牌をタップして選ぶ",
     confirm_label: str = "この牌を切る",
+    marks: Mapping[int, tuple[str, str]] | None = None,
+    riichi_ids: Collection[int] = (),
+    drawn_label: str = "ツモ",
+    two_rows: bool = False,
+    scroll_top: bool = False,
 ) -> None:
     """手牌を表示する。牌が確定されたら on_pick(Pick) を呼ぶ。
 
-    tile_ids  並べる順の牌ID（ツモ牌を含める場合は最後に置く）
-    rev       呼び出し側が行動を 1 つ処理するたびに必ず増やす番号。
-              部品はこの番号が変わったことで「サーバーが応答した」と判断し、次の入力を受け付ける。
-    on_pick   確定されたときの処理。Streamlit のコールバックとして、画面を描き直す前に呼ばれる。
-              ここで状態を進めて rev を増やせば、1 回の再実行で新しい局面が描かれる。
+    tile_ids     並べる順の牌ID（ツモ牌を含める場合は最後に置く）
+    rev          呼び出し側が行動を 1 つ処理するたびに必ず増やす番号。
+                 部品はこの番号が変わったことで「サーバーが応答した」と判断し、次の入力を受け付ける。
+    on_pick      確定されたときの処理。Streamlit のコールバックとして、画面を描き直す前に呼ばれる。
+                 ここで状態を進めて rev を増やせば、1 回の再実行で新しい局面が描かれる。
+    marks        牌の左上に出す印。{牌ID: (印の文字, 読み上げ用の説明)}。例: {52: ("◎", "おすすめ")}
+    riichi_ids   リーチを宣言して切れる牌ID。1 つでもあれば「リーチ」のボタンが出る
+    drawn_label  ツモ牌の下に出す文字
+    two_rows     真なら、案内文とボタンをいつも 2 段に分ける。リーチのボタンが出る巡目と出ない巡目で、
+                 確定ボタンの位置が変わらないようにする（リーチを使うページでは真にする）
+    scroll_top   真なら、画面のいちばん上までスクロールを戻す（新しい局を始めた直後の 1 回だけ真にする）
     """
     tile_ids = list(tile_ids)
+    riichi_ids = [t for t in tile_ids if t in set(riichi_ids)]
+    marks = marks or {}
     memo_key = f"{key}::shown"
     # 「いま画面に出している内容」を覚えておく。確定が届いたとき、それがこの画面からのものか確かめるため
-    st.session_state[memo_key] = {"rev": rev, "tile_ids": tile_ids}
+    st.session_state[memo_key] = {"rev": rev, "tile_ids": tile_ids, "riichi_ids": riichi_ids}
 
     def _on_pick_change() -> None:
         shown = st.session_state.get(memo_key)
         payload = getattr(st.session_state.get(key), "pick", None)
         if not shown:
             return
-        pick = parse_pick(payload, rev=shown["rev"], tile_ids=shown["tile_ids"])
+        pick = parse_pick(payload, rev=shown["rev"], tile_ids=shown["tile_ids"], riichi_ids=shown.get("riichi_ids", ()))
         if pick is not None:
             on_pick(pick)
 
@@ -109,13 +125,19 @@ def tile_hand(
                     "src": tile_image_url(tile_id, aka=aka),
                     "label": tile_label(tile_id, aka=aka),
                     "short": tile_short_label(tile_id, aka=aka),
+                    "mark": marks[tile_id][0] if tile_id in marks else "",
+                    "markLabel": marks[tile_id][1] if tile_id in marks else "",
                 }
                 for tile_id in tile_ids
             ],
             "drawnId": drawn_id,
+            "drawnLabel": drawn_label,
             "enabled": enabled,
             "prompt": prompt,
             "confirmLabel": confirm_label,
+            "riichiIds": riichi_ids,
+            "twoRows": two_rows,
+            "scrollTop": scroll_top,
         },
         on_pick_change=_on_pick_change,
     )

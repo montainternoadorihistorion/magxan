@@ -20,9 +20,10 @@ from ui.ruby import Rubifier
 from ui.win_view import (
     DETAIL_FULL,
     DETAIL_LABELS,
-    explanation_sections,
+    detail_sections,
     hand_html,
     situation_chips,
+    summary_section,
     tiles_fit_html,
 )
 
@@ -209,12 +210,20 @@ if "lab_hand" not in ss:
 # ---------------------------------------------------------------- 画面
 
 st.title("点数計算ラボ")
-rb = Rubifier()     # 用語のルビは、この画面で最初に出てきたときだけ振る
+# 用語のルビは、この画面で最初に出てきたときだけ振る。文章は画面の上から順に作る。
+# 折りたたみの中身は rb.fork() に通す（閉じていると読まれないので、そこで振ったルビを「もう出てきた」と数えない）
+rb = Rubifier()
 
 mode = st.segmented_control("手の選び方", MODES, key="lab_mode", on_change=_on_mode_change, label_visibility="collapsed") or MODE_EXAMPLE
 
 
-def _hand_inputs() -> None:
+def _note(text: str, ruby: Rubifier) -> None:
+    """入力欄のそばに置く説明文。入力欄の名前にはルビを振れないので、その前に置く説明文のほうで振る"""
+    st.html(f'<div class="mj-sub">{ruby.rich(text)}</div>')
+
+
+def _hand_inputs(ruby: Rubifier) -> None:
+    _note("手牌・和了牌と、副露（鳴いた面子と暗槓）を、牌の書き方に合わせて入れます。", ruby)
     st.text_input("手牌（和了牌を除く。鳴いていなければ 13 枚）", key="lab_hand", placeholder="例: 123m456p789s23s44z")
     with st.container(horizontal=True):
         st.text_input("和了牌（1 枚）", key="lab_win", placeholder="例: 4s")
@@ -223,12 +232,15 @@ def _hand_inputs() -> None:
     st.text_input("裏ドラ表示牌（リーチしたときだけ）", key="lab_ura", placeholder="例: 9s")
 
 
-def _notation_help() -> None:
+def _notation_help(ruby: Rubifier) -> None:
     sample = parse_tiles("123m456p789s1234567z0m0p0s")
     st.html(
-        '<div class="mj-sub">数字のあとに種類の文字を付けます。<b>m</b> ＝ 萬子、<b>p</b> ＝ 筒子、<b>s</b> ＝ 索子、<b>z</b> ＝ 字牌。'
-        "字牌は 1z 東・2z 南・3z 西・4z 北・5z 白・6z 發・7z 中。赤い 5 は 0（0m・0p・0s）と書きます。<br>"
-        "例: <code>123m456p789s1234567z0m0p0s</code> は下の並びになります。</div>"
+        '<div class="mj-sub">'
+        + ruby.rich(
+            "数字のあとに種類の文字を付けます。**m** ＝ 萬子、**p** ＝ 筒子、**s** ＝ 索子、**z** ＝ 字牌。"
+            "字牌は 1z 東・2z 南・3z 西・4z 北・5z 白・6z 發・7z 中。赤い 5 は 0（0m・0p・0s）と書きます。"
+        )
+        + "<br>例: <code>123m456p789s1234567z0m0p0s</code> は下の並びになります。</div>"
         + tiles_fit_html(sample, aka=True, max_px=26)
     )
 
@@ -259,9 +271,9 @@ elif mode == MODE_RANDOM:
         st.button("次の手を出す", on_click=_show_random, type="primary")
     st.caption(f"手の番号 {ss.get('lab_seed', '—')}（同じ種類・同じ番号なら、いつでも同じ手が出ます）")
 else:
-    _hand_inputs()
-    with st.expander("牌の書き方"):
-        _notation_help()
+    _hand_inputs(rb)
+    with st.expander("牌の書き方", key="lab_x_notation"):
+        _notation_help(rb.fork())
 
 # ---- 入力を読んで計算する（入力欄を描く前でも、値は session_state から読める）
 signature = _signature()
@@ -283,13 +295,24 @@ except ValueError as error:      # 牌の書き方、枚数、状況の組み合
 quiz_hidden = bool(ss.get("lab_quiz")) and ss.get("lab_revealed") != signature
 detail = DETAILS.get(ss.get("lab_detail"), DETAIL_FULL)
 
-# ルビは「画面で最初に出てきたとき」に振るので、文章は画面の上から順に作る
+# ルビは「画面で最初に出てきたとき」に振るので、文章は画面の上から順に作る：
+# 例題の要点 → まとめ（または問題）→ 折りたたみ 2 つ（それぞれ別に数える）→ 解説の本体
 example = EXAMPLES_BY_KEY[ss.lab_example] if mode == MODE_EXAMPLE else None
 example_changed = signature != ss.get("lab_loaded")
 lesson_html = ""
 if example is not None and not example_changed and not quiz_hidden:
     lesson_html = f'<div class="mj-lesson"><b>{example.key} {rb.html(example.title)}</b><br>{rb.html(example.lesson)}</div>'
-sections = explanation_sections(result, detail=detail, rb=rb) if result is not None and not quiz_hidden else []
+top_html = ""
+if result is not None and quiz_hidden:
+    chips = "".join(f'<span class="mj-chip">{rb.html(chip)}</span>' for chip in situation_chips(result))
+    top_html = (
+        f'<div class="mj-card"><div class="mj-chips">{chips}</div><b>この手は何点？</b>'
+        f'<div class="mj-sub">{rb.html("役 → ドラ → 符 → 点数 の順に数えてから、答えを開いてください。")}</div></div>' + hand_html(result, rb)
+    )
+elif result is not None:
+    top_html = summary_section(result, rb).html
+situation_rb, rules_rb = rb.fork(), rb.fork()
+sections = detail_sections(result, rb, detail=detail) if result is not None and not quiz_hidden else []
 
 
 def _reveal() -> None:
@@ -307,32 +330,41 @@ elif lesson_html:
 if problem is not None:
     st.error(problem)
 elif quiz_hidden:
-    chips = "".join(f'<span class="mj-chip">{rb.html(chip)}</span>' for chip in situation_chips(result))
-    st.html(
-        f'<div class="mj-card"><div class="mj-chips">{chips}</div><b>この手は何点？</b>'
-        '<div class="mj-sub">役 → ドラ → 符 → 点数 の順に数えてから、答えを開いてください。</div></div>' + hand_html(result, rb)
-    )
+    st.html(top_html)
     st.button("答えと解説を見る", type="primary", on_click=_reveal, width="stretch")
 else:
-    st.html(sections[0].html)
+    st.html(top_html)
 
 # ---- 条件を変える（入力に誤りがあっても必ず描く。描かなかった入力欄の値は消えてしまうため）
-with st.expander("状況を変えてみる（ツモ／ロン、親／子、リーチ など）"):
-    st.caption("同じ手でも、状況で点数が変わります。切り替えて、計算がどう変わるかを見てください。")
+with st.expander("状況を変えてみる（ツモ／ロン、親／子、リーチ など）", key="lab_x_situation"):
+    _note("同じ手でも、状況で点数が変わります。切り替えて、計算がどう変わるかを見てください。", situation_rb)
     st.segmented_control("あがり方", ["ロン", "ツモ"], key="lab_how")
+    _note("**自風**は自分の席の風、**場風**はその場の風です。自風が東の人が親になります。", situation_rb)
     st.segmented_control("自風（東なら親）", list(SEATS), key="lab_seat")
     st.segmented_control("場風", list(ROUNDS), key="lab_round")
+    _note("あがったときの状況で付く役：リーチ・ダブルリーチ・一発・嶺上開花・槍槓・海底摸月・河底撈魚・天和・地和。", situation_rb)
     st.pills("付いた状況", list(FLAGS), selection_mode="multi", key="lab_flags")
+    _note(
+        "**本場**は、親が続いたり流局したりするたびに 1 つ増える数です（1 本場につき、あがりの点に 300 点を上乗せ）。"
+        "**供託**は、場に出たままになっているリーチ棒で、次にあがった人がもらいます。",
+        situation_rb,
+    )
     with st.container(horizontal=True):
         st.number_input("本場", min_value=0, max_value=20, step=1, key="lab_honba")
         st.number_input("供託のリーチ棒", min_value=0, max_value=10, step=1, key="lab_kyotaku")
     if mode != MODE_CUSTOM:
         st.divider()
-        _hand_inputs()
-        _notation_help()
+        _hand_inputs(situation_rb)
+        _notation_help(situation_rb)
 
-with st.expander("ルール設定（流派で違うところ）"):
-    st.caption("初期値は雀魂の段位戦と同じです。友人と打つときは、その場の決まりに合わせてください。")
+with st.expander("ルール設定（流派で違うところ）", key="lab_x_rules"):
+    _note("初期値は雀魂の段位戦と同じです。友人と打つときは、その場の決まりに合わせてください。", rules_rb)
+    _note(
+        "変えられるのは、喰いタン（鳴いた断么九）、赤ドラ、切り上げ満貫（30 符 4 翻・60 符 3 翻）、"
+        "連風牌（東場の親の東など）を雀頭にしたときの符、"
+        "ダブル役満（四暗刻単騎・国士無双十三面待ち・純正九蓮宝燈・大四喜）、数え役満の 6 つです。",
+        rules_rb,
+    )
     st.toggle("喰いタンあり（鳴いた断么九を認める）", key="lab_rule_kuitan")
     st.toggle("赤ドラあり（各色の 5 に 1 枚ずつ）", key="lab_rule_aka")
     st.toggle("切り上げ満貫あり（30 符 4 翻・60 符 3 翻を満貫にする）", key="lab_rule_kiriage")
@@ -345,9 +377,8 @@ with st.container(horizontal=True, vertical_alignment="center"):
     st.selectbox("解説の詳しさ", list(DETAILS), key="lab_detail", label_visibility="collapsed")
 
 # ---- 解説の本体
-for section in sections[1:]:
-    st.subheader(section.title, anchor=False)
-    st.html(section.html)
+for section in sections:
+    st.html(section.heading_html + section.html)
 
 if result is not None and result.status is Status.WIN and not result.consistent:
     st.warning("解説の計算が判定ライブラリと食い違いました。お手数ですが、この画面の手牌と状況を開発者に知らせてください。")

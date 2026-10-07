@@ -204,6 +204,10 @@ def test_near_misses_are_capped_and_never_already_achieved():
         ("234567m234p67s55s", "8s", {"riichi": True, "honba": 2}, "ロン。リーチ・ピンフ・タンヤオ。3900は4500。"),
         ("0m345567p234678s", "5m", {"riichi": True, "dora": "4m", "ura": "7s"}, "ロン。リーチ・タンヤオ・ドラ 2・赤 1・裏 1。跳満、12000。"),
         ("119m19p19s123456z", "7z", {}, "ロン。コクシムソウ。役満、32000。"),
+        # 役が 1 つだけでドラも無い手は「〜のみ」と言う
+        ("123m456p789s13s44z", "2s", {"riichi": True}, "ロン。リーチのみ。1300。"),
+        ("123m456p789s13s44z", "2s", {"is_tsumo": True}, "ツモ。ツモのみ。300・500。"),
+        ("123m456p789s13s44z", "2s", {"riichi": True, "dora": "3z"}, "ロン。リーチ・ドラ 2。5200。"),     # 3 翻 40 符
     ],
 )
 def test_declaration_sentence(hand, win, kw, say):

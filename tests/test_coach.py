@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from coach_helpers import TENPAI_PLUS_ONE, TWO_SHANTEN, judge, names, position
 
 from engine import practice
 from engine.analysis.blocks import PartType
@@ -13,42 +14,6 @@ from engine.scoring.decompose import Form
 from engine.scoring.explain import Status
 from engine.scoring.texts import kind_text
 from engine.tiles import CHUN, EAST, HAKU, HATSU, SOUTH, counts34, is_red, kind_of, parse_tiles
-
-TWO_SHANTEN = "1345m2289p3467s15z"       # 345萬 が面子。1萬・東・白 が浮いている 2 向聴
-TENPAI_PLUS_ONE = "123m456p789s23s44z9m"  # 9萬 を切れば 1索・4索 待ち
-
-
-def position(hand: str, *, visible: str = "", dora: str = "", drawn: str = "", **kwargs) -> Position:
-    """文字で書いた局面。visible は河など、dora はドラ表示牌（どちらも「見えている牌」に入る）"""
-    used: set[int] = set()
-
-    def take(text: str) -> tuple[int, ...]:
-        tiles = parse_tiles(text, used=used)
-        used.update(tiles)
-        return tuple(tiles)
-
-    tiles = take(hand)
-    seen = take(visible)
-    indicators = take(dora)
-    drawn_tile = next(t for t in tiles if kind_of(t) == kind_of(parse_tiles(drawn)[0])) if drawn else None
-    defaults = {"seat_wind": SOUTH, "round_wind": EAST, "draws_left": 10, "can_riichi": True}
-    return Position(tiles=tiles, visible=(*seen, *indicators), dora_indicators=indicators, drawn=drawn_tile, **{**defaults, **kwargs})
-
-
-def held(pos: Position, code: str) -> int:
-    """手牌の中の、その表記の牌（"0s" なら赤、"5s" なら赤でないほう）"""
-    wanted = parse_tiles(code)[0]
-    red = code[0] == "0"
-    return next(t for t in pos.tiles if kind_of(t) == kind_of(wanted) and is_red(t) == red)
-
-
-def judge(pos: Position, code: str, *, riichi: bool = False):
-    return judge_discard(analyze(pos), held(pos, code), riichi=riichi)
-
-
-def names(candidates) -> list[str]:
-    return [kind_text(c.kind) for c in candidates]
-
 
 # ---------------------------------------------------------------- 局面
 
@@ -62,7 +27,8 @@ def test_position_checks_its_input():
         Position(tiles=tuple(parse_tiles("123m456p789s23s44z")))
     with pytest.raises(ValueError, match="ツモ牌"):
         Position(tiles=tuple(parse_tiles(TWO_SHANTEN)), drawn=135)
-    assert Position(tiles=parse_tiles("123m456p78s22p3s")).unseen == 136 - 11      # 鳴いている手（11 枚）も受け付ける
+    with pytest.raises(ValueError, match="14 枚"):                                  # 鳴いた手（11 枚）は、まだ扱わない
+        Position(tiles=parse_tiles("123m456p78s22p3s"))
 
 
 # ---------------------------------------------------------------- 調べる
@@ -120,6 +86,25 @@ def test_dora_is_kept_when_choices_are_equal():
     assert names(result.best) == ["1萬", "東", "白"]            # 速さは同じ
 
 
+def test_lone_red_five_is_kept_when_choices_are_equal():
+    """赤 5 を 1 枚だけ持っているとき、同じ速さの牌がほかにあれば、そちらをおすすめにする"""
+    pos = position("0m5p5s11122233344z")                     # 5萬（赤）・5筒・5索 のどれを切っても同じ速さ
+    result = analyze(pos)
+    assert names(result.best) == ["5萬", "5筒", "5索"] and kind_text(result.pick.kind) == "5筒"
+    assert (result.candidate(4).dora, result.pick.dora) == (1, 0)
+    assert not judge(pos, "5p").dora_wasted                   # おすすめを切って「ドラを切った」と言われることはない
+    careless = judge(pos, "0m")
+    assert careless.is_best and careless.dora_wasted
+    assert careless.reasons == ("赤5萬はドラ。受け入れの枚数が同じなら、ドラでない 5筒を先に切ると打点を残せる。",)
+    # 七対子の聴牌：赤5萬 を切って 7索 を待つより、7索 を切って 5萬 を待つ（どちらも残り 3 枚）
+    tenpai = position("44077m056688p557s")
+    result = analyze(tenpai)
+    assert kind_text(result.pick.kind) == "7索" and [c.total for c in result.best] == [3, 3]
+    assert "待ちの枚数が同じなら、ドラでない 7索を先に切ると" in judge(tenpai, "0m").reasons[0]
+    # 赤ドラなしのルールでは、ただの 5 なので、種類の順で 5萬 から
+    assert kind_text(analyze(position("0m5p5s11122233344z", rules=Rules(aka_dora=False))).pick.kind) == "5萬"
+
+
 def test_red_five_is_not_the_tile_to_cut():
     pos = position("123m456p789s4056s4z")                    # 456索 ＋ 5索（片方が赤）＋ 北。5索 を切れば北単騎
     result = analyze(pos)
@@ -136,7 +121,9 @@ def test_dead_tenpai_is_not_recommended():
     dead = result.candidate(8)                               # 9萬 を切ると、2索 待ち（残り 0 枚）の聴牌
     assert (dead.shanten, dead.total, dead.grade) == (0, 0, Grade.DEAD)
     assert result.pick.shanten == 1 and result.pick.total > 0 and result.shanten == 0
+    assert result.stalled                                    # 形の上では聴牌にとれるが、おすすめは 1 向聴にとる切り方
     assert result.waits == ()
+    assert not analyze(position(TENPAI_PLUS_ONE)).stalled and not analyze(position(TWO_SHANTEN)).stalled
 
 
 def test_waits_come_with_scores_when_the_pick_reaches_tenpai():
@@ -171,6 +158,17 @@ def test_verdict_best():
     assert judge(pos, "9m").text == "9萬切りは、おすすめの 1萬切りと同じ受け入れ（4 種 12 枚）。"
 
 
+def test_verdict_says_same_acceptance_only_when_the_tiles_are_the_same():
+    """枚数は同じでも、有効牌の中身が違うときは「同じ受け入れ」と言わない"""
+    pos = position("066667m56p4577s33z", visible="4s", dora="5m")
+    result = analyze(pos)
+    assert [(kind_text(c.kind), c.kinds, c.total) for c in result.best] == [("4索", 5, 16), ("7索", 4, 16), ("西", 4, 16)]
+    assert kind_text(result.pick.kind) == "西"
+    assert judge(pos, "4s").text == "4索切りの受け入れは 5 種 16 枚。おすすめの西切り（4 種 16 枚）と、枚数が同じ。"
+    assert judge(pos, "7s").text == "7索切りは、おすすめの西切りと同じ受け入れ（4 種 16 枚）。"
+    assert judge(pos, "4s").label == judge(pos, "7s").label == "おすすめと同じ速さ"
+
+
 def test_verdict_narrower_explains_which_tiles_are_lost():
     pos = position("123m456p789s2s1445z")
     verdict = judge(pos, "2s")
@@ -194,6 +192,10 @@ def test_verdict_farther_names_the_broken_block():
     assert verdict.reasons == ("3索は「34索」（両面）に使っていた牌。切ると、そのまとまりがくずれる。",)
     assert "「345萬」（順子）" in judge(pos, "4m").reasons[0]
     assert "「22筒」（対子）" in judge(pos, "2p").reasons[0]
+    # 同じ牌が順子と対子の両方に入っているとき：1 枚切っても順子は残せるので、くずれるのは対子のほう
+    pos = position("4m1205567p1567s23z")
+    assert judge(pos, "5p").reasons == ("5筒は「55筒」（対子）に使っていた牌。切ると、そのまとまりがくずれる。",)
+    assert judge(pos, "6p").reasons == ("6筒は「567筒」（順子）に使っていた牌。切ると、そのまとまりがくずれる。",)
 
 
 def test_verdict_farther_in_seven_pairs_explains_the_kind_shortage():
@@ -268,8 +270,44 @@ def test_verdict_warns_about_cutting_dora_among_equals():
     verdict = judge(pos, "1z")
     assert verdict.is_best and verdict.dora_wasted
     assert verdict.text == "東切りは、おすすめの白切りと同じ受け入れ（4 種 16 枚）。"
-    assert verdict.reasons == ("東はドラ。受け入れが同じなら、ドラでない白を先に切ると打点を残せる。",)
+    assert verdict.reasons == ("東はドラ。受け入れの枚数が同じなら、ドラでない白を先に切ると打点を残せる。",)
     assert not judge(pos, "5z").dora_wasted and not judge(pos, "1m").dora_wasted
+
+
+def test_last_discard_only_cares_about_ending_in_tenpai():
+    # 聴牌にとれない手：このあとツモが無いので、どれを切っても同じ
+    hopeless = position(TWO_SHANTEN, draws_left=0, can_riichi=False)
+    result = analyze(hopeless)
+    assert result.last_discard and not result.can_end_tenpai
+    assert all(c.is_best and c.shanten_loss == 0 and c.tiles_loss == 0 for c in result.candidates)
+    verdict = judge(hopeless, "3s")                  # ふだんなら「遠ざかる」打牌
+    assert verdict.is_best and verdict.label == "どれを切っても同じ" and verdict.reasons == ()
+    assert verdict.text == "最後の打牌。聴牌にとれない手なので、どれを切っても結果は同じ（ノーテンで流局）。"
+
+    # 聴牌にとれる手：聴牌で終われる牌だけが正解
+    pos = position(TENPAI_PLUS_ONE, draws_left=0, can_riichi=False)
+    result = analyze(pos)
+    assert result.can_end_tenpai and kind_text(result.pick.kind) == "9萬" and names(result.best) == ["9萬"]
+    keep = judge(pos, "9m")
+    assert keep.is_best and keep.label == "聴牌で流局" and keep.text == "最後の打牌。9萬切りで、聴牌したまま流局。"
+    assert keep.reasons == ("対局では、流局したときに聴牌していると、聴牌していない人から点をもらえる（ノーテン罰符）。",)
+    assert not keep.missed_riichi
+    broke = judge(pos, "2s")
+    assert broke.grade is Grade.FARTHER and broke.label == "聴牌をくずした" and broke.broken.type is PartType.RYANMEN
+    assert broke.text == "最後の打牌。2索を切ると、聴牌をくずして流局になる。9萬切りなら、聴牌したまま終われた。"
+
+
+def test_last_discard_keeps_even_a_dead_tenpai_and_ignores_dora():
+    # 待ち牌がすべて見えていても、流局のときは「聴牌」に数える（形式聴牌）
+    dead = position("123m456p789s13s44z9m", visible="2222s", draws_left=0, can_riichi=False)
+    result = analyze(dead)
+    assert kind_text(result.pick.kind) == "9萬" and result.pick.total == 0 and result.can_end_tenpai
+    assert judge(dead, "9m").is_best and not judge(dead, "1s").is_best
+    # ふだんは「赤 5 を残す」「ドラを残す」と注意するが、最後の打牌では言わない
+    red = position("123m456p789s4056s4z", draws_left=0, can_riichi=False)
+    assert not judge(red, "0s").red_wasted and judge(red, "0s").is_best
+    dora = position(TWO_SHANTEN, dora="4z", draws_left=0, can_riichi=False)
+    assert not judge(dora, "1z").dora_wasted
 
 
 def test_judging_a_tile_that_is_not_in_the_hand_fails():
@@ -292,12 +330,20 @@ def test_coach_is_consistent_on_real_hands():
             result = analyze(pos)
             pick = result.pick
             assert result.candidates[0].is_best and pick.is_best and pick in result.best
+            assert result.stalled == (pick.shanten > result.shanten)
+            if not result.last_discard:
+                # おすすめは、同じ速さの候補の中で、手放すドラがいちばん少ない。だから、おすすめを切って「ドラを切った」と言われることはない
+                assert pick.dora == min(c.dora for c in result.best)
+                assert not judge_discard(result, pick.tile).dora_wasted
             if not result.can_win:               # あがりの形（−1）からは、何を切っても聴牌（0）になる
                 assert result.shanten == min(c.shanten for c in result.candidates)
             assert sorted(t for group in result.layout_tiles for t in group) == sorted(pos.tiles)
             for candidate in result.candidates:
-                same_rank = (candidate.option.reach, candidate.total) == (pick.option.reach, pick.total)
-                assert candidate.is_best == same_rank
+                if result.last_discard:           # 最後の打牌は、聴牌で終われるかどうかだけで比べる
+                    assert candidate.is_best == (not result.can_end_tenpai or candidate.shanten <= 0)
+                else:
+                    same_rank = (candidate.option.reach, candidate.total) == (pick.option.reach, pick.total)
+                    assert candidate.is_best == same_rank
                 assert candidate.tile in pos.tiles and kind_of(candidate.tile) == candidate.kind
                 assert candidate.held == counts34(pos.tiles)[candidate.kind]
             for tile in pos.tiles:

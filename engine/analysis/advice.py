@@ -4,12 +4,13 @@
 
     advise(counts14, remaining)          打牌候補の表と、おすすめ
     tile_for_discard(tiles, kind)        その種類を切るなら、どの牌を切るか（赤 5 は残す）
+    discard_dora(tiles)                  種類ごとの「切るときに手放すドラの数」
 
 切った牌の評価（おすすめと比べてどうだったか）は engine/coach.py にある。
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from engine.analysis.ukeire import DiscardOption, discard_options
@@ -31,29 +32,53 @@ class Advice:
         return next((o for o in self.options if o.kind == kind), None)
 
 
-def loose_rank(kind: int, *, value_kinds: Sequence[int] = (), dora_kinds: Sequence[int] = ()) -> tuple[int, int]:
+def loose_rank(kind: int, *, value_kinds: Sequence[int] = (), dora: int = 0) -> tuple[int, int, int]:
     """受け入れが同じ候補の中で、先に切る順番（小さいほど先）。
 
-    迷ったら使いにくい牌から切る、という基本の順：
+    まず、ドラの少ない牌から切る。ドラは打点になるので、なるべく残す。
+    dora は「その種類を切るときに手放すドラの数」（ドラ表示牌ぶん＋赤。discard_dora で求める）。
+
+    ドラの数が同じなら、使いにくい牌から切る、という基本の順：
         役牌でない字牌 → 役牌の字牌 → 1・9 → 2・8 → 3〜7
-    ドラは打点になるので、なるべく残す（順番を後ろにする）。
     """
     if is_honor_kind(kind):
         rank = 1 if kind in value_kinds else 0
     else:
         distance = min(number_of_kind(kind) - 1, 9 - number_of_kind(kind))    # 端からの距離（1・9 が 0）
         rank = 2 + min(distance, 2)
-    if kind in dora_kinds:
-        rank += 10
-    return (rank, kind)
+    return (dora, rank, kind)
 
 
-def advise(counts: Sequence[int], remaining: Sequence[int], *, value_kinds: Sequence[int] = (), dora_kinds: Sequence[int] = ()) -> Advice:
-    """14 枚（副露があれば 14 − 3n 枚）の手で、どれを切るのがよいかを比べる"""
+def discard_dora(tiles: Sequence[int], *, dora_kinds: Sequence[int] = (), aka: bool = True, drawn: int | None = None) -> dict[int, int]:
+    """手牌の種類ごとに「その種類を 1 枚切るとき、手放すドラの数」を返す。
+
+    ドラ表示牌が指している種類なら、表示牌 1 枚につき 1。赤 5 は 1。
+    赤でない同じ牌を持っていれば、切るのはそちらなので（tile_for_discard）、赤のぶんは数えない。
+    """
+    result = {}
+    for kind in {kind_of(tile) for tile in tiles}:
+        tile = tile_for_discard(tiles, kind, aka=aka, drawn=drawn)
+        result[kind] = list(dora_kinds).count(kind) + (1 if is_red(tile, aka=aka) else 0)
+    return result
+
+
+def advise(
+    counts: Sequence[int],
+    remaining: Sequence[int],
+    *,
+    value_kinds: Sequence[int] = (),
+    dora_of: Mapping[int, int] | None = None,
+) -> Advice:
+    """14 枚の手で、どれを切るのがよいかを比べる。
+
+    dora_of は {種類: その種類を切るときに手放すドラの数}（discard_dora で求める）。
+    受け入れが同じ候補の中では、ドラの少ない牌を先に切る。
+    """
+    dora_of = dora_of or {}
     options = discard_options(counts, remaining)
     top = options[0]
     best = tuple(o for o in options if (o.reach, o.total) == (top.reach, top.total))
-    pick = min(best, key=lambda o: loose_rank(o.kind, value_kinds=value_kinds, dora_kinds=dora_kinds))
+    pick = min(best, key=lambda o: loose_rank(o.kind, value_kinds=value_kinds, dora=dora_of.get(o.kind, 0)))
     return Advice(tuple(options), best, pick)
 
 

@@ -24,18 +24,25 @@ from typing import Any
 from engine.analysis.shanten import TENPAI, shanten_of
 from engine.analysis.ukeire import acceptance, remaining_counts
 from engine.analysis.waits import is_win_shape, wait_kinds
-from engine.coach import Position, Verdict, analyze, judge_discard
+from engine.coach import Analysis, Position, Verdict, analyze, judge_discard
 from engine.luck import NO_DRAW_LUCK, DealReport, DrawReport, LuckSettings, draw_probability, improve_deal, improve_draw
 from engine.rng import Rng
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.context import WinContext
-from engine.tiles import EAST, NORTH, SOUTH, WEST, counts34, kind_of, sort_tiles
+from engine.tiles import EAST, NORTH, NUM_TILES, SOUTH, WEST, counts34, kind_of, sort_tiles
 from engine.wall import DORA_START, URA_START, Wall
 
 #: 1 局でツモれる回数（4 人打ちの 1 人ぶんにほぼ相当: 70 枚 ÷ 4 人 ≒ 18）
 MAX_DRAWS = 18
 SEAT_WINDS = (EAST, SOUTH, WEST, NORTH)
 SAVE_VERSION = 1
+#: 局の番号（シード）の上限。保存したデータに極端な値が入っていても困らないように、範囲を決めておく
+MAX_SEED = 10**12
+
+
+def _is_int(value: object) -> bool:
+    """整数か（True / False と小数は、整数として扱わない）"""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 class PracticeError(ValueError):
@@ -51,11 +58,13 @@ class PracticeConfig:
     round_wind: int = EAST
 
     def __post_init__(self) -> None:
-        if not isinstance(self.seed, int) or isinstance(self.seed, bool) or self.seed < 0:
-            raise ValueError(f"局の番号（シード）は 0 以上の整数です: {self.seed!r}")
-        if self.seat_wind is not None and self.seat_wind not in SEAT_WINDS:
+        if not _is_int(self.seed) or not 0 <= self.seed <= MAX_SEED:
+            raise ValueError(f"局の番号（シード）は 0〜{MAX_SEED} の整数です: {self.seed!r}")
+        if not isinstance(self.luck, LuckSettings) or not isinstance(self.rules, Rules):
+            raise ValueError("ツキ補正とルールの設定の形が違います")
+        if self.seat_wind is not None and (not _is_int(self.seat_wind) or self.seat_wind not in SEAT_WINDS):
             raise ValueError(f"自風は 27（東）〜30（北）です: {self.seat_wind!r}")
-        if self.round_wind not in SEAT_WINDS:
+        if not _is_int(self.round_wind) or self.round_wind not in SEAT_WINDS:
             raise ValueError(f"場風は 27（東）〜30（北）です: {self.round_wind!r}")
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,13 +78,15 @@ class PracticeConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PracticeConfig:
-        seat = data.get("seat_wind")
+        """保存した形から作る。形や値がおかしければ ValueError（数値は __post_init__ で確かめる）"""
+        if not isinstance(data, dict):
+            raise ValueError("設定の記録の形が違います")
         return cls(
-            seed=int(data["seed"]),
-            luck=LuckSettings.from_dict(data.get("luck") or {}),
-            rules=Rules.from_dict(data.get("rules") or {}),
-            seat_wind=None if seat is None else int(seat),
-            round_wind=int(data.get("round_wind", EAST)),
+            seed=data.get("seed"),
+            luck=LuckSettings.from_dict(data.get("luck", {})),
+            rules=Rules.from_dict(data.get("rules", {})),
+            seat_wind=data.get("seat_wind"),
+            round_wind=data.get("round_wind", EAST),
         )
 
 
@@ -95,10 +106,15 @@ class Action:
 
     @classmethod
     def from_list(cls, data: Sequence) -> Action:
-        move = Move(data[0])
-        tile = int(data[1]) if len(data) > 1 else None
+        """保存した形（["d", 牌ID] など）から作る。形がおかしければ ValueError"""
+        if not isinstance(data, (list, tuple)) or not 1 <= len(data) <= 2 or not isinstance(data[0], str):
+            raise ValueError(f"行動の形がおかしい: {data!r}")
+        move = Move(data[0])            # 知らない文字なら ValueError
+        tile = data[1] if len(data) > 1 else None
         if (move is Move.TSUMO) != (tile is None):
             raise ValueError(f"行動の形がおかしい: {list(data)!r}")
+        if tile is not None and (not _is_int(tile) or not 0 <= tile < NUM_TILES):
+            raise ValueError(f"牌の番号がおかしい: {tile!r}")
         return cls(move, tile)
 
 
@@ -133,6 +149,7 @@ class Result:
     win: WinContext | None = None       # あがったときの状況（解説は engine.scoring.explain に渡して作る）
     tenpai: bool = False                # 流局したとき、聴牌していたか
     waits: tuple[int, ...] = ()         # 流局したときの待ち牌（種類）
+    shanten: int | None = None          # 流局したときの手牌の向聴数（あがった局は None）
 
 
 @dataclass(frozen=True)
@@ -324,7 +341,7 @@ def apply(state: PracticeState, action: Action) -> PracticeState:
     while True:
         if len(draws) >= MAX_DRAWS:
             waits = wait_kinds(hand)
-            result = Result(Outcome.EXHAUSTED, len(draws), tenpai=bool(waits), waits=waits)
+            result = Result(Outcome.EXHAUSTED, len(draws), tenpai=bool(waits), waits=waits, shanten=shanten_of(counts34(hand)))
             return replace(
                 state, actions=actions, wall_tiles=tuple(wall.tiles), hand=hand, drawn=None, discards=discards,
                 riichi_index=riichi_index, draws=tuple(draws), result=result,
@@ -367,6 +384,7 @@ class Decision:
     turn: int             # 何回目のツモのあとの打牌か（1 始まり）
     action: Action
     verdict: Verdict
+    analysis: Analysis    # 切る前の局面の分析（答え合わせで、候補の表を見せるため）
 
 
 def position_of(state: PracticeState) -> Position:
@@ -390,8 +408,9 @@ def assess(state: PracticeState, action: Action) -> Decision | None:
     """これからする打牌を評価する（apply の前に呼ぶ）。ツモあがりは評価の対象外なので None"""
     if action.move is Move.TSUMO or action.tile is None:
         return None
-    verdict = judge_discard(analyze(position_of(state)), action.tile, riichi=action.move is Move.RIICHI)
-    return Decision(state.turn, action, verdict)
+    analysis = analyze(position_of(state))
+    verdict = judge_discard(analysis, action.tile, riichi=action.move is Move.RIICHI)
+    return Decision(state.turn, action, verdict, analysis)
 
 
 def decisions_of(config: PracticeConfig, actions: Sequence[Action]) -> tuple[Decision, ...]:
@@ -415,12 +434,22 @@ def to_save(state: PracticeState) -> dict[str, Any]:
 
 
 def from_save(data: dict[str, Any]) -> PracticeState:
-    """記録から状態を作り直す。形が違う・できない行動が入っている場合は ValueError"""
+    """記録から状態を作り直す。形が違う・できない行動が入っている場合は ValueError。
+
+    記録はブラウザに置いてあるので、壊れていたり、書き換えられていたりすることがある。
+    どんな中身でも、ValueError 以外の例外を出さないようにする（開くたびにエラーで止まるのを防ぐ）。
+    """
     if not isinstance(data, dict) or data.get("v") != SAVE_VERSION:
         raise ValueError("記録の形が違います")
+    items = data.get("actions")
+    # 1 局の行動は、多くても「ツモの回数ぶんの打牌＋ツモあがり」
+    if not isinstance(items, list) or len(items) > MAX_DRAWS + 1:
+        raise ValueError("記録の形が違います（行動の列）")
     try:
-        config = PracticeConfig.from_dict(data["config"])
-        actions = [Action.from_list(item) for item in data["actions"]]
-    except (KeyError, TypeError, IndexError) as error:
+        config = PracticeConfig.from_dict(data.get("config"))
+        actions = [Action.from_list(item) for item in items]
+        return replay(config, actions)
+    except ValueError:
+        raise
+    except (KeyError, TypeError, IndexError, AttributeError, ArithmeticError) as error:
         raise ValueError(f"記録を読めません: {error}") from error
-    return replay(config, actions)

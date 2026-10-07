@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 
-from engine.analysis.advice import advise, tile_for_discard
+from engine.analysis.advice import Advice, advise, discard_dora, loose_rank, tile_for_discard
 from engine.analysis.blocks import PART_NAMES, Layout, Part, best_layout
 from engine.analysis.shanten import AGARI, TENPAI, ShantenInfo, shanten_info, shanten_text
 from engine.analysis.ukeire import Acceptance, DiscardOption, chance_within, draw_chance, remaining_counts
@@ -27,13 +27,15 @@ from engine.scoring.dora import dora_kind_of
 from engine.scoring.texts import kind_text, kinds_text
 from engine.tiles import CHUN, EAST, HAKU, HATSU, NUM_TILES, counts34, is_red, kind_of
 
+HAND_SIZE = 14      # 打牌の前の手牌の枚数（門前）
+
 
 @dataclass(frozen=True)
 class Position:
     """コーチに見せる局面（自分から見えている情報だけ）"""
 
-    tiles: tuple[int, ...]                    # 手牌（ツモ牌を含む 14 枚。副露があれば 14 − 3n 枚）
-    visible: tuple[int, ...] = ()             # 手牌以外で見えている牌（河・ドラ表示牌・副露）
+    tiles: tuple[int, ...]                    # 手牌（ツモ牌を含む 14 枚。いまは門前の手だけを扱う）
+    visible: tuple[int, ...] = ()             # 手牌以外で見えている牌（河・ドラ表示牌）
     seat_wind: int = EAST
     round_wind: int = EAST
     dora_indicators: tuple[int, ...] = ()
@@ -46,8 +48,9 @@ class Position:
         object.__setattr__(self, "tiles", tuple(self.tiles))
         object.__setattr__(self, "visible", tuple(self.visible))
         object.__setattr__(self, "dora_indicators", tuple(self.dora_indicators))
-        if len(self.tiles) % 3 != 2:
-            raise ValueError(f"打牌の前の手牌は 14 枚（副露があれば 14 − 3n 枚）です: {len(self.tiles)} 枚")
+        if len(self.tiles) != HAND_SIZE:
+            # 鳴いた手（14 − 3n 枚）は、まだ扱わない（副露の情報を持たせる必要がある。鳴きを実装するときに足す）
+            raise ValueError(f"打牌の前の手牌は {HAND_SIZE} 枚です（門前の手だけを扱う）: {len(self.tiles)} 枚")
         if self.drawn is not None and self.drawn not in self.tiles:
             raise ValueError("ツモ牌が手牌に含まれていません")
 
@@ -115,7 +118,7 @@ class Candidate:
 @dataclass(frozen=True)
 class Analysis:
     position: Position
-    shanten: int                              # この手の向聴数（いちばん良い打牌をしたあと）
+    shanten: int                              # この手の向聴数（形の上で、いちばん聴牌に近い切り方をしたあと。有効牌が残っているかは見ない）
     info: ShantenInfo                         # 形ごとの向聴数（4 面子 1 雀頭・七対子・国士無双）
     candidates: tuple[Candidate, ...]         # 打牌候補（良い順）
     pick: Candidate                           # おすすめ
@@ -131,6 +134,15 @@ class Analysis:
         return self.shanten == AGARI
 
     @property
+    def stalled(self) -> bool:
+        """形の上ではもっと近い切り方があるが、その有効牌（待ち牌）が 1 枚も残っていないので、おすすめは別の切り方になっているか。
+
+        例：聴牌にとれる形だが、待ち牌がすべて見えている（空聴）。おすすめは、1 向聴に戻して受け入れを広げる切り方になる。
+        このとき shanten（形の上の向聴数）より pick.shanten（おすすめを切ったあとの向聴数）が大きい。
+        """
+        return self.pick.shanten > self.shanten
+
+    @property
     def best(self) -> tuple[Candidate, ...]:
         """おすすめと同じ速さの候補すべて"""
         return tuple(c for c in self.candidates if c.is_best)
@@ -139,6 +151,16 @@ class Analysis:
     def layout_matches(self) -> bool:
         """分け方から数えた向聴数が、判定ライブラリの向聴数と同じか（式を見せてよいか）"""
         return self.layout.shanten == self.shanten
+
+    @property
+    def last_discard(self) -> bool:
+        """これが最後の打牌か（このあとツモが無い。違いは、聴牌で終われるかどうかだけ）"""
+        return self.position.draws_left <= 0
+
+    @property
+    def can_end_tenpai(self) -> bool:
+        """おすすめを切れば、聴牌の形になるか"""
+        return self.pick.shanten <= TENPAI
 
     def candidate(self, kind: int) -> Candidate | None:
         return next((c for c in self.candidates if c.kind == kind), None)
@@ -154,6 +176,21 @@ def _grade(option: DiscardOption, pick: DiscardOption) -> Grade:
     return Grade.NARROWER
 
 
+def _last_pick(advice: Advice, position: Position, dora_of: dict[int, int]) -> DiscardOption:
+    """最後の打牌のおすすめ。聴牌で終われる牌があれば、その中から選ぶ（待ちが残っているかは問わない）"""
+    tenpai = [o for o in advice.options if o.shanten <= TENPAI]
+    if not tenpai:
+        return advice.pick
+    return min(tenpai, key=lambda o: loose_rank(o.kind, value_kinds=position.value_kinds, dora=dora_of.get(o.kind, 0)))
+
+
+def _last_grade(option: DiscardOption, pick: DiscardOption) -> Grade:
+    """最後の打牌の評価。聴牌にとれない手は、どれを切っても同じ。とれる手は、聴牌で終われるかどうか"""
+    if pick.shanten > TENPAI or option.shanten <= TENPAI:
+        return Grade.BEST
+    return Grade.FARTHER
+
+
 def _dora_count(tile: int, position: Position) -> int:
     return position.dora_kinds.count(kind_of(tile)) + (1 if is_red(tile, aka=position.rules.aka_dora) else 0)
 
@@ -164,22 +201,26 @@ def analyze(position: Position) -> Analysis:
     tiles = position.tiles
     counts = counts34(tiles)
     remaining = remaining_counts(tiles, position.visible)
-    advice = advise(counts, remaining, value_kinds=position.value_kinds, dora_kinds=position.dora_kinds)
-    top = advice.pick
+    # 受け入れが同じ候補の中では、ドラ（赤 5 を含む）を手放さない牌を先に切る
+    dora_of = discard_dora(tiles, dora_kinds=position.dora_kinds, aka=position.rules.aka_dora, drawn=position.drawn)
+    advice = advise(counts, remaining, value_kinds=position.value_kinds, dora_of=dora_of)
+    last = position.draws_left <= 0          # 最後の打牌：このあとツモが無いので、受け入れの広さは関係ない
+    top = _last_pick(advice, position, dora_of) if last else advice.pick
 
     candidates = []
     for option in advice.options:
         tile = tile_for_discard(tiles, option.kind, aka=position.rules.aka_dora, drawn=position.drawn)
+        grade = _last_grade(option, top) if last else _grade(option, top)
         same_shanten = option.shanten == top.shanten
         candidates.append(
             Candidate(
                 option=option,
                 tile=tile,
                 held=counts[option.kind],
-                dora=_dora_count(tile, position),
-                grade=_grade(option, top),
-                shanten_loss=max(0, option.shanten - top.shanten),
-                tiles_loss=top.total - option.total if same_shanten else 0,
+                dora=dora_of[option.kind],
+                grade=grade,
+                shanten_loss=0 if grade is Grade.BEST else max(0, option.shanten - top.shanten),
+                tiles_loss=top.total - option.total if same_shanten and not last else 0,
                 is_pick=option is top,
             )
         )
@@ -228,6 +269,7 @@ class Verdict:
     red_wasted: bool                           # 赤 5 を切ったが、赤でない同じ牌も持っていた
     dora_wasted: bool                          # 同じ速さの候補の中で、ドラのほうを切った
     missed_riichi: bool                        # リーチできたのに、宣言せずに聴牌をとった
+    label: str                                 # 評価の短い呼び方（例: いちばん速い打牌、受け入れが 4 枚少ない）
     text: str                                  # ひとことの評価
     reasons: tuple[str, ...]                   # 理由と補足
 
@@ -289,10 +331,26 @@ def judge_discard(analysis: Analysis, tile: int, *, riichi: bool = False) -> Ver
     lost: tuple[tuple[int, int], ...] = ()
     broken: Part | None = None
 
+    last = analysis.last_discard
     if grade is Grade.PASSED:
+        label = "あがりを見送った"
         text = f"あがりの形だったが、あがらずに{_sp(name)}を切った。"
         reasons.append("あがるときは、牌を切らずに「ツモ」を押す。")
+    elif last:
+        if not analysis.can_end_tenpai:
+            label = "どれを切っても同じ"
+            text = "最後の打牌。聴牌にとれない手なので、どれを切っても結果は同じ（ノーテンで流局）。"
+        else:
+            if grade is Grade.BEST:
+                label = "聴牌で流局"
+                text = f"最後の打牌。{name}切りで、聴牌したまま流局。"
+            else:
+                label = "聴牌をくずした"
+                text = f"最後の打牌。{name}を切ると、聴牌をくずして流局になる。{pick_name}切りなら、聴牌したまま終われた。"
+                broken = analysis.layout.part_with(chosen.kind)
+            reasons.append("対局では、流局したときに聴牌していると、聴牌していない人から点をもらえる（ノーテン罰符）。")
     elif grade is Grade.BEST:
+        label = "いちばん速い打牌"
         if pick.total == 0:
             text = f"{name}切り。どれを切っても、有効牌は残っていなかった。"
         elif chosen.shanten == TENPAI:
@@ -301,13 +359,22 @@ def judge_discard(analysis: Analysis, tile: int, *, riichi: bool = False) -> Ver
         elif chosen.is_pick or len(analysis.best) == 1:
             text = f"{name}切りは、いちばん受け入れが広い（{_width(chosen)}）。"
         else:
-            text = f"{name}切りは、おすすめの{_sp(pick_name)}切りと同じ受け入れ（{_width(chosen)}）。"
+            label = "おすすめと同じ速さ"
+            if chosen.acceptance.live == pick.acceptance.live:
+                text = f"{name}切りは、おすすめの{_sp(pick_name)}切りと同じ受け入れ（{_width(chosen)}）。"
+            else:       # 有効牌の中身は違うが、残り枚数の合計が同じ
+                text = (
+                    f"{name}切りの受け入れは {_width(chosen)}。"
+                    f"おすすめの{_sp(pick_name)}切り（{_width(pick)}）と、枚数が同じ。"
+                )
     elif grade is Grade.DEAD:
+        label = "有効牌が残っていない形"
         text = (
             f"{name}を切ると{_stage(chosen.shanten)}の形だが、有効牌がすべて見えていて残り 0 枚（何を引いても進まない）。"
             f"{pick_name}切りなら{_stage(pick.shanten)}で、{_noun(pick)}は {_width(pick)}。"
         )
     elif grade is Grade.FARTHER:
+        label = "聴牌をくずした" if pick.shanten == TENPAI else "聴牌から遠ざかった"
         if pick.shanten == TENPAI:
             head = f"{name}を切ると、聴牌をくずして{_stage(chosen.shanten)}に戻る。"
         else:
@@ -327,6 +394,7 @@ def judge_discard(analysis: Analysis, tile: int, *, riichi: bool = False) -> Ver
             )
     else:
         noun = _noun(chosen)
+        label = f"{noun}が {chosen.tiles_loss} 枚少ない"
         text = f"{name}切りの{noun}は {_width(chosen)}。{pick_name}切りなら {_width(pick)}で、{chosen.tiles_loss} 枚多い。"
         mine, theirs = dict(chosen.acceptance.live), dict(pick.acceptance.live)
         gained = tuple((kind, count) for kind, count in pick.acceptance.live if kind not in mine)
@@ -337,19 +405,21 @@ def judge_discard(analysis: Analysis, tile: int, *, riichi: bool = False) -> Ver
             reasons.append(f"{name}切りにだけある有効牌は、{_tiles_text(lost)}。")
 
     is_red_tile = is_red(tile, aka=rules.aka_dora)
-    red_wasted = is_red_tile and any(kind_of(t) == chosen.kind and t != tile for t in position.tiles)
+    # 最後の打牌では、手に残すドラはもう点にならない（聴牌で終われるかだけが違い）ので、ドラの注意はしない
+    red_wasted = not last and is_red_tile and any(kind_of(t) == chosen.kind and t != tile for t in position.tiles)
     if red_wasted:
         reasons.append(f"赤い 5 はドラ（1 枚で 1 翻）。赤でない{_sp(kind_text(chosen.kind))}を切れば、受け入れは同じままドラを残せた。")
 
     dora_wasted = False
-    if grade is Grade.BEST and not red_wasted:
+    if grade is Grade.BEST and not red_wasted and not last:
         mine = _dora_count(tile, position)
         fewer = [c for c in analysis.best if c.dora < mine]
         if fewer:
             dora_wasted = True
             other = pick if pick in fewer else min(fewer, key=lambda c: c.dora)
             less = "ドラでない" if other.dora == 0 else "ドラの少ない"
-            reasons.append(f"{name}はドラ。受け入れが同じなら、{less}{_sp(_tile_text(other.tile, rules))}を先に切ると打点を残せる。")
+            same = "待ちの枚数" if chosen.shanten == TENPAI else "受け入れの枚数"
+            reasons.append(f"{name}はドラ。{same}が同じなら、{less}{_sp(_tile_text(other.tile, rules))}を先に切ると打点を残せる。")
 
     missed_riichi = (
         position.can_riichi and chosen.shanten == TENPAI and chosen.total > 0 and not riichi and grade is not Grade.PASSED
@@ -368,6 +438,7 @@ def judge_discard(analysis: Analysis, tile: int, *, riichi: bool = False) -> Ver
         red_wasted=red_wasted,
         dora_wasted=dora_wasted,
         missed_riichi=missed_riichi,
+        label=label,
         text=text,
         reasons=tuple(reasons),
     )

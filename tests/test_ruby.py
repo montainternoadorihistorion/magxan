@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from engine.terms import READINGS
 from engine.yaku_table import YAKU
-from ui.ruby import Rubifier
+from ui.ruby import Rubifier, missing_ruby
 
 
 def test_readings_are_katakana_and_cover_yaku_names():
@@ -51,3 +51,34 @@ def test_disabled_rubifier_only_escapes():
 def test_custom_readings():
     rb = Rubifier({"山": "ヤマ", "山越し": "ヤマゴシ"})
     assert rb.html("山越しと山") == "<ruby>山越し<rt>ヤマゴシ</rt></ruby>と<ruby>山<rt>ヤマ</rt></ruby>"
+
+
+def test_wrap_puts_the_ruby_outside_the_decoration():
+    rb = Rubifier()
+    assert rb.wrap("満貫", "<b>", "</b>") == "<ruby><b>満貫</b><rt>マンガン</rt></ruby>"
+    assert rb.wrap("満貫", "<b>", "</b>") == "<b>満貫</b>"                 # 2 回目は、飾りだけ
+    assert rb.wrap("役満 2 つぶん", "<b>", "</b>") == "<b><ruby>役満<rt>ヤクマン</rt></ruby> 2 つぶん</b>"   # 用語 1 つでなければ、中に振る
+    assert rb.wrap("<点>", "<b>", "</b>") == "<b>&lt;点&gt;</b>"
+    assert Rubifier(enabled=False).wrap("満貫", "<b>", "</b>") == "<b>満貫</b>"
+
+
+def test_fork_inherits_what_was_seen_but_does_not_report_back():
+    """折りたたみの中身は fork() に通す。中で振ったルビは、外やほかの折りたたみでは「まだ出てきていない」扱い"""
+    rb = Rubifier()
+    rb.html("配牌")
+    inner = rb.fork()
+    assert inner.html("配牌と有効牌") == "配牌と<ruby>有効牌<rt>ユウコウハイ</rt></ruby>"
+    assert inner.html("有効牌") == "有効牌"
+    assert rb.fork().html("有効牌") == "<ruby>有効牌<rt>ユウコウハイ</rt></ruby>"       # ほかの折りたたみでは、もう一度振る
+    assert rb.html("有効牌") == "<ruby>有効牌<rt>ユウコウハイ</rt></ruby>" and rb.seen == {"配牌", "有効牌"}
+    assert Rubifier(enabled=False).fork().html("配牌") == "配牌"
+
+
+def test_missing_ruby_finds_first_appearances_without_ruby():
+    assert missing_ruby([("聴牌", True), ("にとれる。聴牌した。", False)]) == []
+    assert missing_ruby([("聴牌にとれる。", False), ("聴牌", True)]) == ["聴牌"]            # 最初に出てきたところに、ルビが無い
+    assert missing_ruby([("三暗刻と暗刻", False)]) == ["三暗刻", "暗刻"]                    # 長い用語を先に見る
+    # 折りたたみ（範囲 1・2）の中で振ったルビは、その折りたたみの中でだけ数える
+    parts = [("配牌", True), ("有効牌", True, 1), ("有効牌と配牌", False, 1), ("有効牌", False, 2), ("有効牌", False)]
+    assert missing_ruby(parts) == ["有効牌", "有効牌"]
+    assert missing_ruby([("山", False)], {"山": "ヤマ"}) == ["山"]
