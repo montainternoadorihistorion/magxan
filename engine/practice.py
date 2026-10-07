@@ -1,0 +1,426 @@
+"""一人練習：相手なしで、配牌からツモと打牌をくり返す。
+
+牌効率（どれを切ると聴牌に近いか）と役作りだけに集中するためのモード。
+
+進み方
+    配牌 13 枚 → ツモ → 1 枚切る → ツモ → …  を最大 18 回（4 人で打つときの 1 人ぶんのツモ回数）。
+    あがりの形になったら「ツモ」を宣言できる。聴牌したら、リーチを宣言して切ることもできる。
+    リーチのあとは、あがり牌が来るまで自動でツモ切りになる（実戦と同じ）。
+    18 回ツモってもあがれなければ流局。
+
+あがりはツモだけ（相手がいないのでロンは無い）。鳴きもカンも無いので、手はいつも門前。
+海底摸月（山の最後の 1 枚でのあがり）は付けない。一人練習の 18 枚目は、本当の山の最後の牌ではないため。
+
+状態は「設定（シード・ツキ補正・ルール）＋行動の列」から完全に作り直せる（replay）。
+通信が切れてセッションが消えても、ブラウザに残した小さな記録から続きを打てる。
+"""
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from typing import Any
+
+from engine.analysis.shanten import TENPAI, shanten_of
+from engine.analysis.ukeire import acceptance, remaining_counts
+from engine.analysis.waits import is_win_shape, wait_kinds
+from engine.coach import Position, Verdict, analyze, judge_discard
+from engine.luck import NO_DRAW_LUCK, DealReport, DrawReport, LuckSettings, draw_probability, improve_deal, improve_draw
+from engine.rng import Rng
+from engine.rules import DEFAULT_RULES, Rules
+from engine.scoring.context import WinContext
+from engine.tiles import EAST, NORTH, SOUTH, WEST, counts34, kind_of, sort_tiles
+from engine.wall import DORA_START, URA_START, Wall
+
+#: 1 局でツモれる回数（4 人打ちの 1 人ぶんにほぼ相当: 70 枚 ÷ 4 人 ≒ 18）
+MAX_DRAWS = 18
+SEAT_WINDS = (EAST, SOUTH, WEST, NORTH)
+SAVE_VERSION = 1
+
+
+class PracticeError(ValueError):
+    """できない操作（手牌にない牌を切る、聴牌していないのにリーチする、など）"""
+
+
+@dataclass(frozen=True)
+class PracticeConfig:
+    seed: int
+    luck: LuckSettings = field(default_factory=LuckSettings)
+    rules: Rules = DEFAULT_RULES
+    seat_wind: int | None = None      # 自風。None なら、シードから決める（東南西北のどれか）
+    round_wind: int = EAST
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.seed, int) or isinstance(self.seed, bool) or self.seed < 0:
+            raise ValueError(f"局の番号（シード）は 0 以上の整数です: {self.seed!r}")
+        if self.seat_wind is not None and self.seat_wind not in SEAT_WINDS:
+            raise ValueError(f"自風は 27（東）〜30（北）です: {self.seat_wind!r}")
+        if self.round_wind not in SEAT_WINDS:
+            raise ValueError(f"場風は 27（東）〜30（北）です: {self.round_wind!r}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "seed": self.seed,
+            "luck": self.luck.to_dict(),
+            "rules": self.rules.to_dict(),
+            "seat_wind": self.seat_wind,
+            "round_wind": self.round_wind,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PracticeConfig:
+        seat = data.get("seat_wind")
+        return cls(
+            seed=int(data["seed"]),
+            luck=LuckSettings.from_dict(data.get("luck") or {}),
+            rules=Rules.from_dict(data.get("rules") or {}),
+            seat_wind=None if seat is None else int(seat),
+            round_wind=int(data.get("round_wind", EAST)),
+        )
+
+
+class Move(StrEnum):
+    DISCARD = "d"     # 1 枚切る
+    RIICHI = "r"      # リーチを宣言して 1 枚切る
+    TSUMO = "t"       # ツモあがり
+
+
+@dataclass(frozen=True)
+class Action:
+    move: Move
+    tile: int | None = None     # 切る牌（ツモあがりでは None）
+
+    def to_list(self) -> list:
+        return [self.move.value] if self.tile is None else [self.move.value, self.tile]
+
+    @classmethod
+    def from_list(cls, data: Sequence) -> Action:
+        move = Move(data[0])
+        tile = int(data[1]) if len(data) > 1 else None
+        if (move is Move.TSUMO) != (tile is None):
+            raise ValueError(f"行動の形がおかしい: {list(data)!r}")
+        return cls(move, tile)
+
+
+def discard(tile: int) -> Action:
+    return Action(Move.DISCARD, tile)
+
+
+def riichi(tile: int) -> Action:
+    return Action(Move.RIICHI, tile)
+
+
+TSUMO = Action(Move.TSUMO)
+
+
+@dataclass(frozen=True)
+class Draw:
+    turn: int               # 何回目のツモか（1 始まり）
+    tile: int
+    luck: DrawReport        # このツモに補正が働いたか
+    auto: bool = False      # リーチ後の自動ツモ切りで、そのまま河に出たか
+
+
+class Outcome(StrEnum):
+    TSUMO = "tsumo"            # ツモあがり
+    EXHAUSTED = "exhausted"    # 流局（ツモれる回数を使い切った）
+
+
+@dataclass(frozen=True)
+class Result:
+    outcome: Outcome
+    turn: int                           # 終わったときのツモ回数
+    win: WinContext | None = None       # あがったときの状況（解説は engine.scoring.explain に渡して作る）
+    tenpai: bool = False                # 流局したとき、聴牌していたか
+    waits: tuple[int, ...] = ()         # 流局したときの待ち牌（種類）
+
+
+@dataclass(frozen=True)
+class PracticeState:
+    config: PracticeConfig
+    actions: tuple[Action, ...]
+    seat_wind: int
+    wall_tiles: tuple[int, ...]         # いまの山の並び（補正で入れ替えたあと）
+    hand: tuple[int, ...]               # 手牌 13 枚（理牌済み）
+    drawn: int | None                   # いまのツモ牌（局が終わっていれば None）
+    discards: tuple[int, ...]           # 河（切った順）
+    riichi_index: int | None            # リーチを宣言した打牌が、河の何枚目か（0 始まり）。していなければ None
+    draws: tuple[Draw, ...]             # ツモの記録
+    deal: DealReport                    # 配牌の補正の記録
+    result: Result | None = None
+
+    # ------------------------------------------------------------ 状態の読み取り
+
+    @property
+    def finished(self) -> bool:
+        return self.result is not None
+
+    @property
+    def turn(self) -> int:
+        """これまでにツモった回数"""
+        return len(self.draws)
+
+    @property
+    def draws_left(self) -> int:
+        """このあとツモれる回数"""
+        return MAX_DRAWS - self.turn
+
+    @property
+    def tiles(self) -> tuple[int, ...]:
+        """手牌 13 枚＋ツモ牌（あれば）"""
+        return self.hand if self.drawn is None else (*self.hand, self.drawn)
+
+    @property
+    def in_riichi(self) -> bool:
+        return self.riichi_index is not None
+
+    @property
+    def dora_indicators(self) -> tuple[int, ...]:
+        return (self.wall_tiles[DORA_START],)
+
+    @property
+    def ura_indicators(self) -> tuple[int, ...]:
+        """裏ドラ表示牌（リーチしてあがったときだけ見る）"""
+        return (self.wall_tiles[URA_START],)
+
+    @property
+    def visible(self) -> tuple[int, ...]:
+        """自分から見えている、手牌以外の牌（河とドラ表示牌）"""
+        return (*self.discards, *self.dora_indicators)
+
+    @property
+    def remaining(self) -> list[int]:
+        """種類ごとの「まだ見えていない枚数」"""
+        return remaining_counts(self.tiles, self.visible)
+
+    @property
+    def unseen_total(self) -> int:
+        """見えていない牌の合計枚数"""
+        return 136 - len(self.tiles) - len(self.visible)
+
+    @property
+    def last_draw(self) -> Draw | None:
+        return self.draws[-1] if self.draws else None
+
+    @property
+    def can_tsumo(self) -> bool:
+        """いま「ツモ」を宣言できるか"""
+        return not self.finished and self.drawn is not None and is_win_shape(self.tiles)
+
+    @property
+    def riichi_discards(self) -> tuple[int, ...]:
+        """リーチを宣言して切れる牌（切っても聴牌が残る牌）。リーチできなければ空"""
+        if self.finished or self.drawn is None or self.in_riichi or self.draws_left < 1:
+            return ()
+        counts = counts34(self.tiles)
+        tenpai_kinds = set()
+        for kind in {kind_of(t) for t in self.tiles}:
+            counts[kind] -= 1
+            if shanten_of(counts) == TENPAI:
+                tenpai_kinds.add(kind)
+            counts[kind] += 1
+        return tuple(t for t in self.tiles if kind_of(t) in tenpai_kinds)
+
+
+# ---------------------------------------------------------------- 進行
+
+
+def seat_wind_of(config: PracticeConfig) -> int:
+    if config.seat_wind is not None:
+        return config.seat_wind
+    return Rng(config.seed, "seat").choice(SEAT_WINDS)
+
+
+def _wall(state: PracticeState) -> Wall:
+    return Wall(list(state.wall_tiles), live_drawn=state.turn, sealed=True)
+
+
+def _next_draw(wall: Wall, state: PracticeState, hand: Sequence[int], discards: Sequence[int]) -> tuple[int, DrawReport]:
+    """次の 1 枚をツモる（その前に、ツモの補正を試す）"""
+    probability = draw_probability(state.config.luck.draw)
+    if probability <= 0:              # 補正なし：乱数も作らず、山の先頭をそのままツモる
+        return wall.draw(), NO_DRAW_LUCK
+    turn = wall.live_drawn + 1
+    visible = (*discards, *state.dora_indicators)
+
+    def wanted() -> list[int]:
+        return [kind for kind, _ in acceptance(counts34(hand), remaining_counts(hand, visible)).tiles]
+
+    report = improve_draw(wall, probability, wanted, Rng(state.config.seed, f"luck:draw:{turn}"))
+    return wall.draw(), report
+
+
+def _win_context(state: PracticeState, hand: Sequence[int], win_tile: int, turn: int, riichi_index: int | None) -> WinContext:
+    in_riichi = riichi_index is not None
+    first_draw = turn == 1
+    return WinContext(
+        closed_tiles=(*hand, win_tile),
+        win_tile=win_tile,
+        is_tsumo=True,
+        seat_wind=state.seat_wind,
+        round_wind=state.config.round_wind,
+        riichi=in_riichi,
+        double_riichi=riichi_index == 0,                               # 最初の打牌でリーチ
+        ippatsu=in_riichi and turn == riichi_index + 2,                # リーチの次のツモであがった
+        tenhou=first_draw and state.seat_wind == EAST,                 # 親が最初のツモであがっていた
+        chiihou=first_draw and state.seat_wind != EAST,                # 子が最初のツモであがった
+        dora_indicators=state.dora_indicators,
+        ura_indicators=state.ura_indicators if in_riichi else (),
+    )
+
+
+def start(config: PracticeConfig) -> PracticeState:
+    """配牌 13 枚を取り、最初の 1 枚をツモった状態"""
+    seat = seat_wind_of(config)
+    wall = Wall.from_seed(config.seed)
+    deal = improve_deal(wall, 0, config.luck, config.seed, seat_wind=seat, round_wind=config.round_wind)
+    wall.seal()
+    hand = tuple(sort_tiles(wall.dealt_hand(0)))
+    state = PracticeState(
+        config=config,
+        actions=(),
+        seat_wind=seat,
+        wall_tiles=tuple(wall.tiles),
+        hand=hand,
+        drawn=None,
+        discards=(),
+        riichi_index=None,
+        draws=(),
+        deal=deal,
+    )
+    tile, report = _next_draw(wall, state, hand, ())
+    return replace(state, wall_tiles=tuple(wall.tiles), drawn=tile, draws=(Draw(1, tile, report),))
+
+
+def apply(state: PracticeState, action: Action) -> PracticeState:
+    """行動を 1 つ進める。できない行動なら PracticeError"""
+    if state.finished or state.drawn is None:
+        raise PracticeError("この局は終わっています")
+    actions = (*state.actions, action)
+
+    if action.move is Move.TSUMO:
+        if not state.can_tsumo:
+            raise PracticeError("あがりの形になっていません")
+        win = _win_context(state, state.hand, state.drawn, state.turn, state.riichi_index)
+        return replace(state, actions=actions, hand=tuple(sort_tiles(state.hand)), result=Result(Outcome.TSUMO, state.turn, win=win))
+
+    tile = action.tile
+    if tile not in state.tiles:
+        raise PracticeError(f"手牌にない牌は切れません: {tile}")
+    # リーチした局は、その場で最後まで進めて終わらせる。だから、ここに来る局面は必ずリーチ前
+    riichi_index = None
+    if action.move is Move.RIICHI:
+        if state.draws_left < 1:
+            raise PracticeError("もうツモが残っていないので、リーチできません")
+        if tile not in state.riichi_discards:
+            raise PracticeError("その牌を切ると聴牌にならないので、リーチできません")
+        riichi_index = len(state.discards)
+
+    hand = tuple(sort_tiles(t for t in state.tiles if t != tile))
+    discards = (*state.discards, tile)
+    draws = list(state.draws)
+    wall = _wall(state)
+
+    while True:
+        if len(draws) >= MAX_DRAWS:
+            waits = wait_kinds(hand)
+            result = Result(Outcome.EXHAUSTED, len(draws), tenpai=bool(waits), waits=waits)
+            return replace(
+                state, actions=actions, wall_tiles=tuple(wall.tiles), hand=hand, drawn=None, discards=discards,
+                riichi_index=riichi_index, draws=tuple(draws), result=result,
+            )
+        drawn, report = _next_draw(wall, state, hand, discards)
+        turn = len(draws) + 1
+        if riichi_index is None:
+            draws.append(Draw(turn, drawn, report))
+            return replace(
+                state, actions=actions, wall_tiles=tuple(wall.tiles), hand=hand, drawn=drawn, discards=discards,
+                riichi_index=None, draws=tuple(draws),
+            )
+        # リーチ後：あがり牌ならあがり、そうでなければツモ切りして次へ
+        if is_win_shape((*hand, drawn)):
+            draws.append(Draw(turn, drawn, report))
+            win = _win_context(state, hand, drawn, turn, riichi_index)
+            return replace(
+                state, actions=actions, wall_tiles=tuple(wall.tiles), hand=hand, drawn=drawn, discards=discards,
+                riichi_index=riichi_index, draws=tuple(draws), result=Result(Outcome.TSUMO, turn, win=win),
+            )
+        draws.append(Draw(turn, drawn, report, auto=True))
+        discards = (*discards, drawn)
+
+
+def replay(config: PracticeConfig, actions: Sequence[Action]) -> PracticeState:
+    """設定と行動の列から、状態を作り直す"""
+    state = start(config)
+    for action in actions:
+        state = apply(state, action)
+    return state
+
+
+# ---------------------------------------------------------------- コーチ
+
+
+@dataclass(frozen=True)
+class Decision:
+    """自分で選んだ打牌 1 回ぶんの評価"""
+
+    turn: int             # 何回目のツモのあとの打牌か（1 始まり）
+    action: Action
+    verdict: Verdict
+
+
+def position_of(state: PracticeState) -> Position:
+    """いまの局面を、コーチに見せる形にする（打牌の前だけ）"""
+    if state.finished or state.drawn is None:
+        raise PracticeError("この局は終わっています")
+    return Position(
+        tiles=state.tiles,
+        visible=state.visible,
+        seat_wind=state.seat_wind,
+        round_wind=state.config.round_wind,
+        dora_indicators=state.dora_indicators,
+        draws_left=state.draws_left,
+        drawn=state.drawn,
+        can_riichi=not state.in_riichi and state.draws_left >= 1,
+        rules=state.config.rules,
+    )
+
+
+def assess(state: PracticeState, action: Action) -> Decision | None:
+    """これからする打牌を評価する（apply の前に呼ぶ）。ツモあがりは評価の対象外なので None"""
+    if action.move is Move.TSUMO or action.tile is None:
+        return None
+    verdict = judge_discard(analyze(position_of(state)), action.tile, riichi=action.move is Move.RIICHI)
+    return Decision(state.turn, action, verdict)
+
+
+def decisions_of(config: PracticeConfig, actions: Sequence[Action]) -> tuple[Decision, ...]:
+    """行動の列を最初からたどり、自分で選んだ打牌をすべて評価する（続きから再開したときに使う）"""
+    state = start(config)
+    found = []
+    for action in actions:
+        decision = assess(state, action)
+        if decision is not None:
+            found.append(decision)
+        state = apply(state, action)
+    return tuple(found)
+
+
+# ---------------------------------------------------------------- 保存
+
+
+def to_save(state: PracticeState) -> dict[str, Any]:
+    """ブラウザなどに残すための小さな記録（設定＋行動の列）"""
+    return {"v": SAVE_VERSION, "config": state.config.to_dict(), "actions": [a.to_list() for a in state.actions]}
+
+
+def from_save(data: dict[str, Any]) -> PracticeState:
+    """記録から状態を作り直す。形が違う・できない行動が入っている場合は ValueError"""
+    if not isinstance(data, dict) or data.get("v") != SAVE_VERSION:
+        raise ValueError("記録の形が違います")
+    try:
+        config = PracticeConfig.from_dict(data["config"])
+        actions = [Action.from_list(item) for item in data["actions"]]
+    except (KeyError, TypeError, IndexError) as error:
+        raise ValueError(f"記録を読めません: {error}") from error
+    return replay(config, actions)
