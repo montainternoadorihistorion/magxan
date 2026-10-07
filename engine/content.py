@@ -1,8 +1,10 @@
-"""役図鑑と用語辞典の内容を、data/ のファイル（YAML）から読み込む。
+"""役図鑑・用語辞典などの内容を、data/ のファイル（YAML）から読み込む。
 
     yaku_pages()     役図鑑のページ（役ごとの定義・成立例・ひっかけ例・複合・コツ・由来）
     yaku_stats()     役の出やすさの統計（出典つき）
     glossary()       用語辞典の項目（読み・意味・由来）
+    table_guide()    実際の卓で打つときの手順
+    rule_book()      ルールによって違うところ（卓に着く前に確かめること）
 
 内容（文章と例）はデータとして持ち、プログラムと分けてある。例として載せる手牌は、テストで点数計算に
 かけて「成立例には必ずその役が付く」「ひっかけ例には付かない」ことを確かめる（tests/test_content.py）。
@@ -36,8 +38,14 @@ GROUPS: dict[str, str] = {
     "yakuman": "役満",
     "other": "そのほか",
 }
-#: 由来の確かさ
-CERTAINTIES = ("確実", "有力", "諸説あり", "不明")
+#: 由来の確かさと、その意味
+CERTAINTY_MEANINGS: dict[str, str] = {
+    "確実": "辞書や当時の本など、系統の違う複数の資料が一致している。",
+    "有力": "くわしい人の説明があり、食い違う資料は見つからなかった。ただし、裏付けは 1 つの系統だけ。",
+    "諸説あり": "資料どうしで説明が食い違う。または、資料そのものが「はっきりしない」と書いている。",
+    "不明": "読みと意味は確かめられたが、由来を説明する資料が見つからなかった。",
+}
+CERTAINTIES = tuple(CERTAINTY_MEANINGS)
 #: ひっかけ例の結果（その手は実際にはどうなるか）
 TRAP_RESULTS = {
     "win": "ほかの役であがれる",
@@ -438,6 +446,25 @@ def yaku_stats() -> YakuStats:
     return YakuStats(source, pages, _texts(data["notes"], "yaku_stats.yaml notes"), tuple(references))
 
 
+# ---------------------------------------------------------------- 出典
+
+
+@dataclass(frozen=True)
+class Source:
+    title: str
+    url: str
+
+
+def _sources(items: Sequence[Any], where: str) -> tuple[Source, ...]:
+    result = []
+    for index, item in enumerate(items):
+        raw = _take(item, f"{where} sources[{index}]", title=(str, ...), url=(str, ...))
+        if not raw["url"].startswith("https://"):
+            raise ContentError(f"{where} sources[{index}]: URL は https:// で始めます")
+        result.append(Source(raw["title"].strip(), raw["url"].strip()))
+    return tuple(result)
+
+
 # ---------------------------------------------------------------- 用語辞典
 
 
@@ -464,6 +491,7 @@ class Term:
 class Glossary:
     categories: Mapping[str, str]    # 分類の鍵 → 表示名（表示する順）
     terms: tuple[Term, ...]
+    sources: tuple[Source, ...] = ()   # 由来を調べるのに使った資料（役図鑑の由来も同じ資料による）
 
     def of(self, category: str) -> tuple[Term, ...]:
         return tuple(t for t in self.terms if t.category == category)
@@ -474,7 +502,7 @@ class Glossary:
 
 @cache
 def glossary() -> Glossary:
-    data = _take(_load("terms.yaml"), "terms.yaml", categories=(dict, ...), terms=(list, ...))
+    data = _take(_load("terms.yaml"), "terms.yaml", categories=(dict, ...), terms=(list, ...), sources=(list, []))
     categories = {str(key): str(name) for key, name in data["categories"].items()}
     terms = []
     for index, item in enumerate(data["terms"]):
@@ -518,4 +546,132 @@ def glossary() -> Glossary:
         missing = [s for s in term.see if s not in known]
         if missing:
             raise ContentError(f"terms.yaml（{term.term}）: 関連語が辞典にありません {missing}")
-    return Glossary(categories, tuple(terms))
+    return Glossary(categories, tuple(terms), _sources(data["sources"], "terms.yaml"))
+
+
+# ---------------------------------------------------------------- 卓で打つとき
+
+
+@dataclass(frozen=True)
+class GuideSection:
+    key: str
+    title: str
+    summary: str                 # ひとことで
+    steps: tuple[str, ...]       # 順番にすること
+    points: tuple[str, ...]      # 覚えておくこと
+    differ: tuple[str, ...]      # 卓やルールによって違うところ
+
+
+@dataclass(frozen=True)
+class TableGuide:
+    intro: str
+    sections: tuple[GuideSection, ...]
+    sources: tuple[Source, ...]
+
+
+@cache
+def table_guide() -> TableGuide:
+    data = _take(_load("table.yaml"), "table.yaml", intro=(str, ...), sections=(list, ...), sources=(list, ...))
+    sections = []
+    for index, item in enumerate(data["sections"]):
+        where = f"table.yaml sections[{index}]"
+        raw = _take(
+            item, where,
+            key=(str, ...), title=(str, ...), summary=(str, ...), steps=(list, ...), points=(list, []), differ=(list, []),
+        )
+        sections.append(
+            GuideSection(
+                raw["key"], raw["title"].strip(), raw["summary"].strip(),
+                _texts(raw["steps"], f"{where} steps"), _texts(raw["points"], f"{where} points"), _texts(raw["differ"], f"{where} differ"),
+            )
+        )
+    keys = [section.key for section in sections]
+    if len(set(keys)) != len(keys):
+        raise ContentError("table.yaml: 同じ鍵の節が 2 つあります")
+    return TableGuide(data["intro"].strip(), tuple(sections), _sources(data["sources"], "table.yaml"))
+
+
+# ---------------------------------------------------------------- ルールの違い
+
+
+@dataclass(frozen=True)
+class RuleSide:
+    answer: str          # 採っている決まり
+    who: str             # それを採っているルール
+
+
+@dataclass(frozen=True)
+class RuleItem:
+    key: str
+    group: str                       # RuleBook.groups の鍵
+    title: str
+    ask: str                         # 何を確かめるか
+    sides: tuple[RuleSide, ...]
+    app: str = ""                    # このアプリの扱い（まだ関係しないものは空）
+    setting: str | None = None       # ルール設定（engine.rules.Rules）の項目名
+    default: Any = None              # その初期値（設定と食い違っていないかをテストで確かめる）
+    note: str = ""
+    check: bool = False              # 卓に着く前に確かめたい項目か
+
+
+@dataclass(frozen=True)
+class RuleBook:
+    intro: str
+    surveyed: str                    # 調べた日
+    names: Mapping[str, str]         # 読みくらべたルールの呼び名
+    groups: Mapping[str, str]        # まとまりの鍵 → 表示名（表示する順）
+    items: tuple[RuleItem, ...]
+    sources: tuple[Source, ...]
+    caveats: tuple[str, ...]
+
+    def of(self, group: str) -> tuple[RuleItem, ...]:
+        return tuple(item for item in self.items if item.group == group)
+
+    @property
+    def checklist(self) -> tuple[RuleItem, ...]:
+        return tuple(item for item in self.items if item.check)
+
+
+@cache
+def rule_book() -> RuleBook:
+    data = _take(
+        _load("rules.yaml"), "rules.yaml",
+        intro=(str, ...), surveyed=(str, ...), names=(dict, ...), groups=(dict, ...), items=(list, ...),
+        sources=(list, ...), caveats=(list, []),
+    )
+    groups = {str(key): str(name) for key, name in data["groups"].items()}
+    items = []
+    for index, item in enumerate(data["items"]):
+        where = f"rules.yaml items[{index}]"
+        if isinstance(item, Mapping) and isinstance(item.get("key"), str):
+            where = f"rules.yaml（{item['key']}）"
+        raw = _take(
+            item, where,
+            key=(str, ...), group=(str, ...), title=(str, ...), ask=(str, ...), sides=(list, ...), app=(str, ""),
+            setting=(str, None), default=((bool, int), None), note=(str, ""), check=(bool, False),
+        )
+        if raw["group"] not in groups:
+            raise ContentError(f"{where}: group は {list(groups)} のどれかです")
+        if raw["setting"] is not None and raw["setting"] not in _RULE_FLAGS:
+            raise ContentError(f"{where}: ルール設定に無い項目です（{raw['setting']!r}）")
+        if (raw["setting"] is None) != (raw["default"] is None):
+            raise ContentError(f"{where}: setting と default は、両方書くか、両方書かないかです")
+        sides = []
+        for number, side in enumerate(raw["sides"]):
+            pair = _take(side, f"{where} sides[{number}]", answer=(str, ...), who=(str, ...))
+            sides.append(RuleSide(pair["answer"].strip(), pair["who"].strip()))
+        if not sides:
+            raise ContentError(f"{where}: sides が空です")
+        items.append(
+            RuleItem(
+                raw["key"], raw["group"], raw["title"].strip(), raw["ask"].strip(), tuple(sides), raw["app"].strip(),
+                raw["setting"], raw["default"], raw["note"].strip(), raw["check"],
+            )
+        )
+    keys = [item.key for item in items]
+    if len(set(keys)) != len(keys):
+        raise ContentError("rules.yaml: 同じ鍵の項目が 2 つあります")
+    return RuleBook(
+        data["intro"].strip(), data["surveyed"], {str(k): str(v) for k, v in data["names"].items()}, groups,
+        tuple(items), _sources(data["sources"], "rules.yaml"), _texts(data["caveats"], "rules.yaml caveats"),
+    )

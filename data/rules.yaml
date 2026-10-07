@@ -1,0 +1,390 @@
+# ルールの違い（「ルールの違い」のページの内容）。
+#
+# 麻雀は、打つ場所によって細かいルールが違う。ここでは、6 つのルールを読みくらべて、違いをまとめた。
+#   雀魂（段位戦）／天鳳（段位戦）／Mリーグ／日本プロ麻雀連盟（公式ルール）／最高位戦日本プロ麻雀協会／日本プロ麻雀協会
+#
+#   ask      何を確かめるか
+#   app      このアプリの扱い（setting があれば、ルール設定 engine/rules.py の項目名。default はその初期値）
+#   sides    どのルールが、どちらを採っているか
+#   check    true なら「卓に着く前に確かめること」の一覧に出す（6 つのルールで割れている、または卓ごとに決めるもの）
+#
+# 調べた日：2026-10-08。ルールは改定されることがある。
+
+intro: >-
+  このアプリの初期設定は、ネット麻雀の「雀魂」の段位戦に合わせてある。友だちの卓や雀荘では、違うルールで打つことも多い。
+  ここには、ルールによって分かれるところを並べた。初めての卓では、★ の付いた項目を、打つ前に聞いておくと安心。
+
+surveyed: "2026-10-08"
+
+names:
+  jantama: 雀魂
+  tenhou: 天鳳
+  mleague: Mリーグ
+  renmei: 連盟
+  saikouisen: 最高位戦
+  kyoukai: 協会
+
+groups:
+  score: 点数に関わること
+  win: あがり・流局に関わること
+  game: 試合の進め方
+  table: 卓での決まり
+
+items:
+  # ============================================================ 点数に関わること
+  - key: aka
+    group: score
+    title: 赤ドラ
+    ask: 赤い 5 の牌を使うか。使うなら、何枚入れるか。
+    app: 使う（5萬・5筒・5索 に 1 枚ずつ、合わせて 3 枚）。
+    setting: aka_dora
+    default: true
+    check: true
+    sides:
+      - answer: 各色 1 枚ずつ使う
+        who: 雀魂、Mリーグ、天鳳（赤あり卓）
+      - answer: 使わない
+        who: 連盟、最高位戦、協会、天鳳（赤なし卓）
+    note: 5筒 だけ 2 枚入れるなど、枚数が違う卓もある。
+
+  - key: kuitan
+    group: score
+    title: 喰いタン
+    ask: 鳴いた断么九を、役として認めるか。
+    app: 認める（喰いタンあり）。
+    setting: kuitan
+    default: true
+    sides:
+      - answer: 認める
+        who: 雀魂、Mリーグ、連盟、最高位戦、協会、天鳳（喰いタンあり卓）
+      - answer: 認めない
+        who: 天鳳（喰いタンなし卓）
+    note: 「喰いタンあり・後付けあり」のルールを、まとめて「アリアリ」と呼ぶ。
+
+  - key: atozuke
+    group: score
+    title: 後付け
+    ask: 役が決まらないうちに鳴いて、あとから役を付けてあがってよいか。
+    app: よい（後付けあり）。
+    sides:
+      - answer: よい
+        who: 雀魂、天鳳、Mリーグ、連盟、最高位戦、協会
+    note: 6 つのルールは、どれも「あり」。認めないルール（完全先付け）で打つ場もあるので、初めての卓では聞いておく。
+
+  - key: ippatsu_ura
+    group: score
+    title: 一発・裏ドラ・槓ドラ
+    ask: 一発、裏ドラ、槓ドラを使うか。
+    app: すべて使う。
+    sides:
+      - answer: すべて使う
+        who: 雀魂、天鳳、Mリーグ、最高位戦、協会
+      - answer: 使わない（表のドラだけ）
+        who: 連盟（公式ルール）
+
+  - key: kiriage
+    group: score
+    title: 切り上げ満貫
+    ask: 30 符 4 翻・60 符 3 翻（子 7700 点、親 11600 点）を、満貫（8000 点、12000 点）に切り上げるか。
+    app: 切り上げない（7700 点・11600 点のまま）。
+    setting: kiriage_mangan
+    default: false
+    check: true
+    sides:
+      - answer: 切り上げる
+        who: Mリーグ、最高位戦、協会
+      - answer: 切り上げない
+        who: 雀魂、天鳳、連盟（公式ルール）
+
+  - key: renfon
+    group: score
+    title: 連風牌の雀頭の符
+    ask: 場風でも自風でもある牌（東場の親の東など）を雀頭にしたとき、符を 2 符とするか、4 符とするか。
+    app: 4 符。
+    setting: double_wind_pair_fu
+    default: 4
+    check: true
+    sides:
+      - answer: 4 符
+        who: 雀魂、天鳳
+      - answer: 2 符
+        who: Mリーグ、連盟、協会、最高位戦（規定の符の表から、2 符と読める）
+    note: 符の合計が 10 符の境目をまたぐときだけ、点数が変わる。
+
+  - key: kazoe
+    group: score
+    title: 数え役満
+    ask: 役とドラの合計が 13 翻以上になったとき、役満として扱うか。
+    app: 役満として扱う。
+    setting: kazoe_yakuman
+    default: true
+    check: true
+    sides:
+      - answer: 役満として扱う
+        who: 雀魂、天鳳
+      - answer: 三倍満まで
+        who: Mリーグ、最高位戦、協会
+      - answer: 「四倍満」として扱う（点は役満と同じ）
+        who: 連盟
+
+  - key: double_yakuman
+    group: score
+    title: ダブル役満
+    ask: 四暗刻単騎・国士無双十三面待ち・純正九蓮宝燈・大四喜を、役満 2 つぶんにするか。
+    app: 2 つぶんにする。
+    setting: double_yakuman
+    default: true
+    check: true
+    sides:
+      - answer: 2 つぶんにする
+        who: 雀魂
+      - answer: ふつうの役満（1 つぶん）
+        who: 天鳳、Mリーグ、連盟、最高位戦、協会
+    note: 別々の役満が 1 つの手で重なったとき（大三元と字一色など）は、6 つのルールとも、重なったぶんを数える。
+
+  - key: pao
+    group: score
+    title: 責任払い（包）
+    ask: 役満を確定させる牌を鳴かせた人に、点を払わせるか。どの役満が対象か。
+    check: true
+    sides:
+      - answer: 大三元・大四喜が対象
+        who: 雀魂、天鳳
+      - answer: 大三元・大四喜・四槓子が対象
+        who: Mリーグ、連盟
+      - answer: 責任払いなし
+        who: 最高位戦、協会
+    note: 対象になるのは、たとえば、白と發をポンしている人に、中をポンさせた場合。ツモあがりなら 1 人で全部払い、ロンなら放銃した人と半分ずつ払う、とするのが一般的。
+
+  # ============================================================ あがり・流局に関わること
+  - key: double_ron
+    group: win
+    title: 2 人が同じ牌でロンしたとき
+    ask: 2 人ともあがりにするか（ダブロン）、1 人だけにするか（頭ハネ）。
+    check: true
+    sides:
+      - answer: 2 人ともあがり（ダブロン）
+        who: 雀魂、天鳳
+      - answer: 捨てた人から見て、順番が先の 1 人だけ（頭ハネ）
+        who: Mリーグ、連盟、最高位戦、協会
+    note: 3 人が同時にロンしたときは、3 人ともあがり（雀魂）、流局（天鳳）、1 人だけ（頭ハネ）の 3 通りに分かれる。
+
+  - key: tochuu
+    group: win
+    title: 途中流局
+    ask: 山が無くなる前に、局を流す決まりを使うか。
+    check: true
+    sides:
+      - answer: 使う
+        who: 雀魂、天鳳
+      - answer: 使わない
+        who: Mリーグ、連盟、最高位戦、協会
+    note: >-
+      使うルールでは、次のようなときに流局になる。配牌と最初のツモで么九牌が 9 種類以上あって、流すと宣言したとき（九種九牌）。
+      最初の 1 巡で、4 人が同じ風牌を捨てたとき（四風連打）。2 人以上が合わせて 4 回カンをしたとき（四槓散了）。4 人がリーチしたとき（四家立直）。
+
+  - key: nagashi
+    group: win
+    title: 流し満貫
+    ask: 流局まで、捨て牌がすべて 1・9・字牌で、1 枚も鳴かれなかったとき、満貫ぶんの点をもらえるか。
+    check: true
+    sides:
+      - answer: もらえる
+        who: 雀魂、天鳳
+      - answer: 採用しない
+        who: Mリーグ、連盟、協会、最高位戦（規定に書かれていない）
+
+  - key: kokushi_ankan
+    group: win
+    title: 国士無双の暗槓ロン
+    ask: 国士無双を聴牌しているとき、ほかの人の暗槓の牌でロンできるか。
+    check: true
+    sides:
+      - answer: できる
+        who: 雀魂
+      - answer: できない
+        who: 天鳳、Mリーグ、連盟、最高位戦。協会も、規定のロンの定義から、できないと読める
+
+  - key: renhou
+    group: win
+    title: 人和
+    ask: 最初の 1 巡のうちに、ほかの人の捨て牌でロンすることを、役にするか。
+    app: 役にしない。
+    check: true
+    sides:
+      - answer: 役にしない
+        who: 雀魂（段位戦）、天鳳、Mリーグ、連盟、最高位戦、協会
+    note: 6 つのルールは、どれも採用していない。雀荘や仲間内では、採用していることがある。その場合の点（満貫・跳満・役満など）も、場によって違う。
+
+  - key: kuikae
+    group: win
+    title: 喰い替え
+    ask: 鳴いた直後に、鳴いた牌と同じ牌や、同じ順子の反対側の牌を捨ててよいか。
+    sides:
+      - answer: 禁止
+        who: 雀魂、天鳳、Mリーグ、連盟、最高位戦、協会
+
+  - key: keiten
+    group: win
+    title: 形式聴牌とノーテン罰符
+    ask: 流局のとき、役のない聴牌を聴牌として扱うか。ノーテンの罰符はいくらか。
+    sides:
+      - answer: 役がなくても聴牌として扱う。罰符は、場に 3000 点
+        who: 雀魂、Mリーグ、連盟、最高位戦、協会、天鳳（罰符の額は、マニュアルに書かれていない）
+
+  # ============================================================ 試合の進め方
+  - key: mochiten
+    group: game
+    title: 持ち点と返し
+    ask: 最初の持ち点は何点か。精算の基準（返し）は何点か。
+    check: true
+    sides:
+      - answer: 25000 点持ち・30000 点返し
+        who: 天鳳、Mリーグ、協会
+      - answer: 30000 点持ち・30000 点返し
+        who: 連盟、最高位戦
+      - answer: 25000 点持ち・25000 点返し
+        who: 雀魂
+    note: 持ち点と返しに差があるとき、その差を 4 人ぶん集めたもの（オカ）が、1 位に入る。25000 点持ち・30000 点返しが、いちばん一般的と説明されることが多い。
+
+  - key: uma
+    group: game
+    title: 順位点（ウマ）
+    ask: 試合のあと、順位に応じて、何点を足し引きするか。
+    check: true
+    sides:
+      - answer: 10-20（1 位 ＋20、2 位 ＋10、3 位 −10、4 位 −20）
+        who: 天鳳
+      - answer: 10-30
+        who: 最高位戦
+      - answer: 1 位 ＋50、2 位 ＋10、3 位 −10、4 位 −30（オカを含めた数）
+        who: Mリーグ、協会
+      - answer: 5-15
+        who: 雀魂
+    note: 連盟は、ルールの種類によって違う。仲間内では、卓ごとに決める。
+
+  - key: renchan
+    group: game
+    title: 連荘の条件
+    ask: 親が続くのは、どんなときか。
+    check: true
+    sides:
+      - answer: 親があがったとき、または流局で親が聴牌していたとき
+        who: 雀魂、天鳳、Mリーグ、連盟、最高位戦、協会
+    note: 6 つのルールは同じ。親があがったときだけ連荘、とする雀荘もある。
+
+  - key: tobi
+    group: game
+    title: 飛び
+    ask: 誰かの持ち点が 0 点より少なくなったら、そこで試合を終わるか。
+    check: true
+    sides:
+      - answer: 終わる（0 点ちょうどは続ける）
+        who: 雀魂、天鳳
+      - answer: 終わらない（最後の局まで打つ）
+        who: Mリーグ、協会、最高位戦（終わる決まりが書かれていない）
+    note: 連盟の扱いは、確かめられなかった。0 点ちょうどで終わりにする雀荘もある。
+
+  - key: agariyame
+    group: game
+    title: 最後の局の親の「あがりやめ」
+    ask: 最後の局で、親が 1 位のままあがった（または聴牌で流局した）とき、連荘せずに試合を終わるか。
+    check: true
+    sides:
+      - answer: 終わる
+        who: 雀魂、天鳳
+      - answer: 終わらない（連荘する）
+        who: Mリーグ、連盟、最高位戦、協会
+
+  - key: shaanyuu
+    group: game
+    title: 延長（西入）
+    ask: 最後の局が終わったとき、1 位が 30000 点に届いていなければ、延長するか。
+    sides:
+      - answer: 延長する（西場に入る）
+        who: 雀魂、天鳳
+      - answer: 延長しない
+        who: Mリーグ、連盟、最高位戦、協会
+
+  - key: kyotaku_end
+    group: game
+    title: 試合が終わったときに残ったリーチ棒
+    ask: 最後の局が流局して、卓にリーチ棒が残ったとき、誰のものになるか。
+    check: true
+    sides:
+      - answer: 1 位の人がもらう
+        who: 雀魂、天鳳、Mリーグ
+      - answer: 誰のものにもならない
+        who: 連盟、最高位戦、協会
+
+  # ============================================================ 卓での決まり
+  - key: kandora
+    group: table
+    title: 槓ドラをめくる時点
+    ask: カンをしたとき、槓ドラをいつめくるか。
+    check: true
+    sides:
+      - answer: どのカンでも、すぐめくる
+        who: Mリーグ、最高位戦、協会
+      - answer: 暗槓はすぐ。大明槓と加槓は、1 枚捨てたあと
+        who: 雀魂、天鳳
+    note: 連盟の公式ルールは、槓ドラを使わない。
+
+  - key: chombo
+    group: table
+    title: チョンボの罰
+    ask: 重い反則をしたとき、何点払うか。
+    check: true
+    sides:
+      - answer: 満貫ぶんを払う（子なら、親に 4000 点、子 2 人に 2000 点ずつ）
+        who: 一般的な説明（Wikipedia など）、調べた雀荘の例
+      - answer: 親も子も、3 人に 3000 点ずつ払う
+        who: 日本健康麻将協会
+      - answer: 試合のあとの成績から、決まった点を引く
+        who: Mリーグ、連盟、最高位戦、協会
+    note: 親がチョンボしたとき、親が移るかどうかも、場によって違う。
+
+  - key: hassei
+    group: table
+    title: ポンとチーが同時のとき
+    ask: 同じ捨て牌に、ポンとチーの声が同時にかかったら、どちらを優先するか。
+    check: true
+    sides:
+      - answer: ポン（カン）が優先
+        who: 競技団体の規定
+      - answer: 先に声を出した方が優先。ほぼ同時なら、ポン（カン）
+        who: 調べた雀荘の例
+    note: ロンは、どのルールでも、ポン・チーより優先される。
+
+sources:
+  - title: Wikipedia「雀魂」（ゲーム内のルール説明をもとにした記述）
+    url: https://ja.wikipedia.org/wiki/雀魂
+  - title: 天鳳マニュアル
+    url: https://tenhou.net/man/
+  - title: Mリーグ 公式戦ルール
+    url: https://m-league.jp/about/
+  - title: 日本プロ麻雀連盟 競技ルール
+    url: https://www.ma-jan.or.jp/activity/game_rule.html
+  - title: 最高位戦日本プロ麻雀協会 ルール概要
+    url: https://saikouisen.com/about/rules/
+  - title: 日本プロ麻雀協会 公式ルール
+    url: https://npm2001.com/about/rule/
+  - title: 日本健康麻将協会 ルール
+    url: https://kenko-mahjong.com/rule_manner.php
+  - title: Wikipedia「麻雀のルール」
+    url: https://ja.wikipedia.org/wiki/麻雀のルール
+  - title: Wikipedia「麻雀の得点計算」
+    url: https://ja.wikipedia.org/wiki/麻雀の得点計算
+  - title: Wikipedia「麻雀の点」
+    url: https://ja.wikipedia.org/wiki/麻雀の点
+  - title: Wikipedia「流局」
+    url: https://ja.wikipedia.org/wiki/流局
+  - title: Wikipedia「包 (麻雀)」
+    url: https://ja.wikipedia.org/wiki/包_(麻雀)
+  - title: Wikipedia「麻雀の反則行為」
+    url: https://ja.wikipedia.org/wiki/麻雀の反則行為
+
+caveats:
+  - 雀魂のルールは、公式サイトではなくゲームの中で説明されている。ここでは、それをもとにした Wikipedia などの記述によった。
+  - 団体のルールは、年度ごとに改定されることがある。大会や雀荘は、それぞれ独自のルールを持つことが多い。
+  - 「一般的」と言える統計は、見つからなかった。ここに書いたのは、6 つのルールと、いくつかの雀荘の例を読みくらべた結果。

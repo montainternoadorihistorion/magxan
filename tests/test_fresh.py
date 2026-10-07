@@ -20,6 +20,7 @@ def make_tree(tmp_path: Path) -> Path:
         "ui/components/hand/hand.js": "// js\n",
         "ui/__pycache__/x.pyc": "ignored",
         "views/home.py": "import streamlit\n",
+        "data/yaku.yaml": "- key: riichi\n",
         "notes.txt": "ignored",
     }.items():
         path = tmp_path / name
@@ -84,6 +85,26 @@ def test_added_removed_and_asset_files_count_as_changes(tmp_path):
     assert drop_stale_modules(root, PACKAGES, holder, loaded(), started_at=time.time() + 60) == []
 
 
+def test_data_files_count_as_changes_when_watched(tmp_path):
+    """図鑑や辞典の内容（data/ の YAML）が変わったときも、読み込み済みのモジュールを捨てる（内容を読み直させるため）"""
+    root = make_tree(tmp_path)
+    assert "data/yaku.yaml" in [entry[0] for entry in source_stamp(root, (*PACKAGES, "data"))]
+    holder: dict = {}
+    modules = loaded()
+    watch = {"started_at": time.time() + 60, "data_folders": ("data",)}
+    assert drop_stale_modules(root, PACKAGES, holder, modules, **watch) == []
+    touch(root / "data" / "yaku.yaml")
+    assert sorted(drop_stale_modules(root, PACKAGES, holder, modules, **watch)) == [
+        "engine", "engine.scoring.judge", "engine.tiles", "ui", "ui.layout",
+    ]
+    assert drop_stale_modules(root, PACKAGES, holder, modules, **watch) == []
+    # 見張っていなければ、data/ の変更では捨てない
+    holder = {}
+    drop_stale_modules(root, PACKAGES, holder, loaded(), started_at=time.time() + 60)
+    touch(root / "data" / "yaku.yaml")
+    assert drop_stale_modules(root, PACKAGES, holder, loaded(), started_at=time.time() + 60) == []
+
+
 def test_first_display_drops_modules_if_files_changed_after_the_server_started(tmp_path):
     """見張りを入れて最初の表示。サーバーの起動よりあとに書き換わったファイルがあれば、古いモジュールが残っている"""
     root = make_tree(tmp_path)
@@ -108,6 +129,8 @@ def test_real_tree_has_a_stamp_and_app_uses_the_guard():
     stamp = source_stamp(ROOT, PACKAGES)
     names = {entry[0] for entry in stamp}
     assert {"engine/tiles.py", "ui/fresh.py", "ui/components/tile_hand/tile_hand.js"} <= names
+    assert "data/yaku.yaml" in {entry[0] for entry in source_stamp(ROOT, ("data",))}
     app = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert 'data_folders=("data",)' in app                  # 図鑑や辞典の内容が変わったときも、読み直す
     guard = app.index("drop_stale_modules")
     assert guard < app.index("from ui.layout import")       # 自作モジュールを読み込む前に、見張りを通す

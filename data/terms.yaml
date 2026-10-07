@@ -1,0 +1,1298 @@
+# 用語辞典の内容。
+#
+#   term      見出し語            reading  読み（カタカナ）
+#   category  分類（下の categories の鍵）
+#   meaning   意味                alt      別の読み・別の書き方・略称
+#   kanji     字義（漢字それぞれの意味）
+#   origin    由来（text と certainty）。certainty は 確実 / 有力 / 諸説あり / 不明。
+#             はっきりしないことは、断定せずにそう書く。資料が見つからないものは、origin を書かない。
+#   example   例（牌の書き方。画面で牌の絵にする）   example_note  例の説明
+#   ruby      true なら、アプリの文章でこの語が最初に出てきたとき、読みがな（ルビ）を振る
+#   see       関連する見出し語
+#
+# 役の名前（立直・平和など）は、ここには書かない。役図鑑（yaku.yaml）から、辞典の「役の名前」に自動で並ぶ。
+
+categories:
+  agari: あがりと手の状態
+  mentsu: 面子と手の形
+  machi: 待ちの形
+  hai: 牌の呼び方
+  naki: 鳴き
+  ba: 卓・場・進行
+  ten: 点数
+  mamori: 守り
+  sahou: 卓での作法と反則
+
+terms:
+  # ============================================================ あがりと手の状態
+  - term: 和了
+    reading: ホーラ
+    category: agari
+    meaning: あがること。あがりの形を完成させて、点をもらうこと。
+    alt: ふつうは「あがり」と言う。「和了る」「和がる」と書いて「あがる」と読ませることもある。
+    kanji: 和＝あがる（中国語の、麻雀での使い方）／了＝完了。
+    origin:
+      text: 中国語から。中国語の読み「フーラ」が、日本で「ホーラ」に変わったと説明される。中国では、あがりを「胡」とも書く。
+      certainty: 確実
+    ruby: true
+    see: [自摸, 栄和]
+
+  - term: 自摸
+    reading: ツモ
+    category: agari
+    meaning: 山から牌を 1 枚取ること。その牌であがること（ツモあがり）も、同じ言葉で言う。
+    alt: 「ツモる」とも言う。「自模」と書くのは誤り。
+    kanji: 自＝自分で／摸＝さぐる・手に取る。
+    origin:
+      text: 中国語から。古くは「ツーモー」と読んだ。
+      certainty: 確実
+    ruby: true
+    see: [栄和, ツモ切り]
+
+  - term: 栄和
+    reading: ロンホー
+    category: agari
+    meaning: ほかの人の捨て牌であがること。ふつうは「ロン」と言う。
+    kanji: 栄＝音を写した当て字／和＝あがり。もとの字は「攏」（集める・整える）とされる。
+    origin:
+      text: 「ロン」という発声は中国にあった。日本に麻雀を広めた人が、その音に「栄」の字を当てた、と伝えられる。あとで本来の字は「攏」だと分かったが、「栄」が定着した。
+      certainty: 有力
+    ruby: true
+    see: [自摸, 放銃, 振聴]
+
+  - term: 聴牌
+    reading: テンパイ
+    category: agari
+    meaning: あと 1 枚であがれる状態。
+    alt: 「テンパる」「張る」とも言う。
+    kanji: 聴＝（あがりに必要な牌を）待つ／牌。
+    origin:
+      text: 中国語から。「テンパる」は、日本でできた言い方。
+      certainty: 確実
+    example: "123m456p789s23s55z"
+    example_note: 1索 か 4索 が来ればあがり。この状態が聴牌。
+    ruby: true
+    see: [向聴, 待ち, 不聴]
+
+  - term: 向聴
+    reading: シャンテン
+    category: agari
+    meaning: 聴牌までに、あと何枚の役に立つ牌が要るかを数える単位。「向聴数」が 1 なら、あと 1 枚で聴牌。
+    kanji: 向＋聴（聴牌）。
+    origin:
+      text: なぜ「向」と書くのか、中国語のもとの言葉が何かを説明する資料は、見つかっていない。
+      certainty: 不明
+    ruby: true
+    see: [一向聴, 聴牌, 有効牌]
+
+  - term: 一向聴
+    reading: イーシャンテン
+    category: agari
+    meaning: あと 1 枚、役に立つ牌が来れば聴牌になる状態。あと 2 枚なら二向聴（リャンシャンテン）、3 枚なら三向聴（サンシャンテン）。
+    example: "123m9m456p3478s55z"
+    example_note: 2索・5索・6索・9索 のどれかが来れば、9萬 を捨てて聴牌になる。
+    ruby: true
+    see: [向聴]
+
+  - term: 有効牌
+    reading: ユウコウハイ
+    category: agari
+    meaning: 引くと、向聴数が 1 つ進む牌。
+    ruby: true
+    see: [受け入れ, 向聴]
+
+  - term: 受け入れ
+    reading: ウケイレ
+    category: agari
+    meaning: 有効牌の種類と、その残り枚数。「受け入れが 20 枚」のように言う。多いほど、手が進みやすい。
+    see: [有効牌, 牌効率]
+
+  - term: 牌効率
+    reading: ハイコウリツ
+    category: agari
+    meaning: 受け入れがなるべく多くなるように、捨てる牌を選ぶ考え方。
+    ruby: true
+    see: [受け入れ]
+
+  - term: 門前
+    reading: メンゼン
+    category: agari
+    meaning: 鳴いていない状態（チー・ポン・明槓をしていない）。暗槓は、していても門前のまま。
+    alt: 「門前清」（メンゼンチン）の略。「面前」と書くのは誤りとされる。
+    kanji: 門前＝自分の手牌の前／清＝きよらか →「手牌の前に、何も晒していない」。
+    origin:
+      text: 中国語から。昔の麻雀では、鳴いた牌を手牌の前に置いたので、鳴いていない状態を「門前が清らか」と言ったのだろう、と推定されている。
+      certainty: 有力
+    ruby: true
+    see: [副露, 鳴き]
+
+  - term: 副露
+    reading: フーロ
+    category: agari
+    meaning: 鳴いて、面子を卓に晒すこと（チー・ポン・明槓）。「鳴き」と同じ意味。
+    kanji: 「露わにしておく」という意味、と説明される。
+    origin:
+      text: 中国語から。
+      certainty: 有力
+    ruby: true
+    see: [鳴き, 門前]
+
+  - term: 振聴
+    reading: フリテン
+    category: agari
+    meaning: >-
+      自分のあがり牌を、自分で捨てている状態。この状態では、ロンであがれない（ツモならあがれる）。
+      待ちが 2 種類以上あるときは、そのうち 1 種類でも捨てていれば、どの牌でもロンできない。
+      ほかに、あがり牌を見逃した直後は、次の自分の番までロンできない（同巡内フリテン）。
+      リーチのあとに見逃すと、その局はずっとロンできない。
+    alt: ふつうは、カタカナで「フリテン」と書く。
+    kanji: 振り（自分で捨てた）＋聴（聴牌）。
+    origin:
+      text: 日本でできた決まり。ロンされた人が 1 人で払う決まり（放銃一人払い）ができたのに合わせて、昭和の初めに生まれたとされる。
+      certainty: 有力
+    example: "123m456p789s23s55z"
+    example_note: 待ちは 1索 と 4索。自分の捨て牌に 1索 があれば、4索 が出てもロンできない。
+    ruby: true
+    see: [栄和, 現物]
+
+  - term: 放銃
+    reading: ホウジュウ
+    category: agari
+    meaning: 自分の捨て牌で、ほかの人にロンされること。ロンされた人が、点を 1 人で払う。
+    alt: 「振り込み」「振り込む」とも言う。
+    kanji: 放＝放つ／銃＝鉄砲。
+    origin:
+      text: 中国語から。いまは、日本語の読みで「ほうじゅう」と言うのがふつう。
+      certainty: 確実
+    ruby: true
+    see: [栄和]
+
+  - term: 流局
+    reading: リュウキョク
+    category: agari
+    meaning: 誰もあがらないまま、その局が終わること。山のツモれる牌が無くなったときに起きる。ルールによっては、途中で流す決まり（途中流局）もある。
+    alt: 「流れる」とも言う。
+    origin:
+      text: 日本の言い方。中国語では「平局」と言う。
+      certainty: 有力
+    ruby: true
+    see: [不聴, 罰符, 連荘]
+
+  - term: 不聴
+    reading: ノーテン
+    category: agari
+    meaning: 流局したとき、聴牌していないこと。聴牌している人に、罰符を払う。
+    alt: ふつうは、カタカナで「ノーテン」と書く。
+    kanji: 英語の No ＋聴（テン）。「不聴」は、あとから当てた字。
+    origin:
+      text: 日本でできた言葉。
+      certainty: 有力
+    see: [聴牌, 罰符, 形式聴牌]
+
+  - term: 形式聴牌
+    reading: ケイシキテンパイ
+    category: agari
+    meaning: 役がなくてあがれないが、形だけは聴牌していること。流局のときは聴牌として扱われ、ノーテンの罰符を払わなくてよい。
+    alt: 「形テン」（ケイテン）と略す。
+    see: [聴牌, 役なし, 罰符]
+
+  - term: 空聴
+    reading: カラテン
+    category: agari
+    meaning: 聴牌しているが、あがり牌がもう 1 枚も残っていない（全部見えている）こと。
+    ruby: true
+    see: [聴牌]
+
+  - term: 黙聴
+    reading: ダマテン
+    category: agari
+    meaning: リーチをかけずに、黙って聴牌していること。役があればロンできる。相手に気づかれにくい。
+    alt: 「ダマ」「闇聴」（ヤミテン）とも言う。
+    origin:
+      text: 日本語。「黙って聴牌」を縮めた言い方。
+      certainty: 確実
+    see: [聴牌]
+
+  - term: 役なし
+    reading: ヤクナシ
+    category: agari
+    meaning: あがりの形はできているが、役が 1 つもない状態。あがれない。ドラは役ではないので、ドラだけでもあがれない。
+    see: [形式聴牌, 後付け]
+
+  - term: 高目
+    reading: タカメ
+    category: agari
+    meaning: 待ちが 2 種類以上あるとき、点が高くなる方のあがり牌。安くなる方は「安目」（ヤスメ）。
+    example: "234m234p23s789m44z"
+    example_note: 4索 なら三色同順が付く（高目）。1索 だと付かない（安目）。
+    see: [片あがり, 待ち]
+
+  - term: 片あがり
+    reading: カタアガリ
+    category: agari
+    meaning: 待ちが 2 種類以上あるのに、そのうちの片方でしか役が付かない（あがれない）聴牌。
+    example: "23m456p678s22s666s"
+    example_note: 4萬 なら断么九であがれる。1萬 では役がなく、あがれない。
+    see: [高目, 役なし, 後付け]
+
+  - term: 手牌
+    reading: テハイ
+    category: agari
+    meaning: 自分の持っている牌。ふつうは 13 枚で、ツモった直後だけ 14 枚になる。
+    ruby: true
+
+  - term: 打牌
+    reading: ダハイ
+    category: agari
+    meaning: 手牌から 1 枚を捨てること。捨てた牌そのものも言う。
+    alt: 「切る」とも言う。
+    ruby: true
+    see: [ツモ切り, 手出し]
+
+  # ============================================================ 面子と手の形
+  - term: 面子
+    reading: メンツ
+    category: mentsu
+    meaning: 3 枚 1 組のまとまり（順子・刻子）と、4 枚 1 組の槓子。あがりの基本の形は、面子 4 つと雀頭 1 つ。
+    origin:
+      text: 中国語から。昭和の初めの本では、まだ完成していない組（搭子・対子など）を指す言葉だった。完成した組を指すようになったのは、日本での変化とみられる。
+      certainty: 有力
+    ruby: true
+    see: [順子, 刻子, 槓子, 雀頭]
+
+  - term: 雀頭
+    reading: ジャントウ
+    category: mentsu
+    meaning: あがりの形に 1 組だけ必要な、同じ牌 2 枚。
+    alt: 「頭」（あたま）とも言う。
+    kanji: 雀＝麻雀／頭。
+    origin:
+      text: 中国語から。1914 年に上海で出た本に、すでに使われている。単に「頭」と言うのは、日本の言い方。
+      certainty: 確実
+    example: "55z"
+    ruby: true
+    see: [面子, 対子]
+
+  - term: 順子
+    reading: シュンツ
+    category: mentsu
+    meaning: 同じ色の、数字が続いた 3 枚。字牌では作れない。9 と 1 はつながらない（891 は順子ではない）。
+    kanji: 順＝数の順番／子＝小さな 1 組。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "345m"
+    ruby: true
+    see: [刻子, 搭子]
+
+  - term: 刻子
+    reading: コーツ
+    category: mentsu
+    meaning: 同じ牌 3 枚。自分でそろえたものを暗刻、ポンして作ったものを明刻と言う。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "777p"
+    ruby: true
+    see: [暗刻, 明刻, 順子]
+
+  - term: 槓子
+    reading: カンツ
+    category: mentsu
+    meaning: 同じ牌 4 枚を、カンを宣言して 1 組にしたもの。4 枚持っているだけでは、槓子ではない。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "8888s"
+    ruby: true
+    see: [カン, 暗槓, 大明槓, 加槓]
+
+  - term: 対子
+    reading: トイツ
+    category: mentsu
+    meaning: 同じ牌 2 枚。雀頭になるか、もう 1 枚来れば刻子になる。
+    kanji: 対＝ペア／子。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "22s"
+    ruby: true
+    see: [雀頭, 刻子]
+
+  - term: 搭子
+    reading: ターツ
+    category: mentsu
+    meaning: あと 1 枚で順子になる 2 枚。待ち方によって、両面・嵌張・辺張の 3 種類がある。
+    alt: 「塔子」と書くのは誤りとされる。
+    kanji: 搭＝組み合わせる／子。
+    origin:
+      text: 中国語から。
+      certainty: 有力
+    example: "45m"
+    ruby: true
+    see: [両面, 嵌張, 辺張, 順子]
+
+  - term: 孤立牌
+    reading: コリツハイ
+    category: mentsu
+    meaning: まわりの牌とつながっていない 1 枚（対子でも搭子でもない牌）。ふつうは、ここから捨てていく。
+    ruby: true
+    see: [搭子]
+
+  - term: 暗刻
+    reading: アンコー
+    category: mentsu
+    meaning: 鳴かずに、自分で 3 枚そろえた刻子。明刻より符が大きい。
+    kanji: 暗＝手の内にある（見せていない）／刻＝刻子。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    ruby: true
+    see: [明刻, 刻子]
+
+  - term: 明刻
+    reading: ミンコー
+    category: mentsu
+    meaning: ポンして作った刻子。ロンで完成した刻子も、明刻として数える。
+    kanji: 明＝晒した（見せた）／刻＝刻子。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    ruby: true
+    see: [暗刻, ポン]
+
+  - term: 暗槓
+    reading: アンカン
+    category: mentsu
+    meaning: 同じ牌を自分で 4 枚そろえて、宣言するカン。鳴きではないので、門前のまま。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    ruby: true
+    see: [カン, 明槓]
+
+  - term: 明槓
+    reading: ミンカン
+    category: mentsu
+    meaning: 鳴いて作るカン。大明槓と加槓の 2 種類がある。単に「明槓」と言うと、大明槓を指すことが多い。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    ruby: true
+    see: [大明槓, 加槓, 暗槓]
+
+  - term: 大明槓
+    reading: ダイミンカン
+    category: mentsu
+    meaning: 手の中の同じ牌 3 枚に、ほかの人が捨てた 4 枚目を加えるカン。
+    ruby: true
+    see: [明槓, 加槓]
+
+  - term: 加槓
+    reading: カカン
+    category: mentsu
+    meaning: ポンした刻子に、自分で引いた 4 枚目を加えるカン。この 4 枚目は、ほかの人がロンできる（槍槓）。
+    alt: 「小明槓」（ショウミンカン）とも言う。
+    kanji: 加＝加える／槓。
+    ruby: true
+    see: [明槓, 大明槓]
+
+  - term: 4 面子 1 雀頭
+    reading: ヨンメンツ イチジャントウ
+    category: mentsu
+    meaning: あがりの基本の形。面子（3 枚 1 組）が 4 つと、雀頭（同じ牌 2 枚）が 1 つで、合わせて 14 枚。これ以外のあがりの形は、七対子と国士無双だけ。
+    example: "123m456p789s234s55z"
+    see: [面子, 雀頭]
+
+  # ============================================================ 待ちの形
+  - term: 待ち
+    reading: マチ
+    category: machi
+    meaning: 聴牌したとき、あがりになる牌。その形（両面・嵌張・辺張・単騎・双碰）も言う。
+    see: [両面, 嵌張, 辺張, 単騎, 双碰]
+
+  - term: 両面
+    reading: リャンメン
+    category: machi
+    meaning: 続いた 2 枚の、両側を待つ形。2 種類・最大 8 枚を待てるので、いちばんあがりやすい。符は付かない。
+    kanji: 両＝ 2 つ／面は、もとは「門」（両門）。
+    origin:
+      text: 中国語の「両門張」から。「面」は、日本で生まれた書き方で、いまは両方使われる。
+      certainty: 有力
+    example: "45m"
+    example_note: 3萬 か 6萬 を待つ。
+    ruby: true
+    see: [嵌張, 辺張, 搭子]
+
+  - term: 嵌張
+    reading: カンチャン
+    category: machi
+    meaning: 1 つ飛ばしの 2 枚で、間の 1 枚を待つ形。1 種類・最大 4 枚。2 符が付く。
+    kanji: 嵌＝はめる／張＝牌 →「牌をはめる」。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "46m"
+    example_note: 5萬 を待つ。
+    ruby: true
+    see: [両面, 辺張]
+
+  - term: 辺張
+    reading: ペンチャン
+    category: machi
+    meaning: 12 で 3 を、89 で 7 を待つ形。端なので、片側しか待てない。1 種類・最大 4 枚。2 符が付く。
+    kanji: 辺＝端／張＝牌。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "12m"
+    example_note: 3萬 を待つ。
+    ruby: true
+    see: [両面, 嵌張]
+
+  - term: 単騎
+    reading: タンキ
+    category: machi
+    meaning: 面子が 4 つできていて、雀頭になる 1 枚を待つ形。1 種類・最大 3 枚。2 符が付く。
+    kanji: 単騎＝ただ一騎（1 人だけの騎馬）。
+    origin:
+      text: 日本語の言い方。中国語では、別の言葉（単吊）を使う。
+      certainty: 有力
+    example: "123m456p789s234s5z"
+    example_note: 白をもう 1 枚待つ。
+    ruby: true
+    see: [双碰, 延べ単騎]
+
+  - term: 双碰
+    reading: シャンポン
+    category: machi
+    meaning: 対子が 2 組あって、どちらかが刻子になるのを待つ形。2 種類・最大 4 枚。待ちそのものに符は付かない（できた刻子に付く）。
+    alt: 「シャボ」「バッタ」とも言う。
+    kanji: 双＝ 2 つ／碰＝ポン。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "123m456p789s22s55z"
+    example_note: 2索 か白を待つ。
+    ruby: true
+    see: [単騎, 対子]
+
+  - term: 延べ単騎
+    reading: ノベタンキ
+    category: machi
+    meaning: 1234 のように 4 枚が続いた形で、両端の 2 種類を待つ単騎待ち。2 種類を待てるが、両面待ちではないので、平和にはならない。
+    alt: 「ノベタン」と略す。
+    example: "1234m456p789s234s"
+    example_note: 1萬 か 4萬 を待つ（どちらも雀頭になる）。
+    see: [単騎, 両面]
+
+  - term: 多面張
+    reading: タメンチャン
+    category: machi
+    meaning: 3 種類以上の牌を待てる形。3 種類なら三面張（サンメンチャン）。
+    example: "23456m456p789s55z"
+    example_note: 1萬・4萬・7萬 の三面張。
+    see: [両面, 待ち]
+
+  # ============================================================ 牌の呼び方
+  - term: 萬子
+    reading: マンズ
+    category: hai
+    meaning: 「萬」の字が書かれた数牌。一萬から九萬まで。
+    alt: 「ワンズ」とも読む。
+    kanji: 萬＝万（お金の単位）。
+    origin:
+      text: 中国語から。「マン」は日本語の読み、「ワン」は中国語の読みで、どちらも使われる。
+      certainty: 確実
+    example: "123456789m"
+    ruby: true
+    see: [数牌, 筒子, 索子]
+
+  - term: 筒子
+    reading: ピンズ
+    category: hai
+    meaning: 丸い模様が描かれた数牌。一筒から九筒まで。
+    kanji: 筒＝つつ。読みの「ピン」は、別名の「餅子」（丸いもち）の音。
+    origin:
+      text: 中国語から。字は「筒」、読みは別名の「餅子」から、という食い違いが残った。模様は、穴のあいた銭から来ている。
+      certainty: 確実
+    example: "123456789p"
+    ruby: true
+    see: [数牌, 萬子, 索子]
+
+  - term: 索子
+    reading: ソーズ
+    category: hai
+    meaning: 竹のような模様が描かれた数牌。一索から九索まで。一索だけは、鳥の絵のことが多い。
+    kanji: 索＝縄・ひも。
+    origin:
+      text: 中国語から。模様は、穴のあいた銭を通したひもから来ている。
+      certainty: 確実
+    example: "123456789s"
+    ruby: true
+    see: [数牌, 萬子, 筒子]
+
+  - term: 数牌
+    reading: シューパイ
+    category: hai
+    meaning: 数字のある牌。萬子・筒子・索子の 3 種類で、それぞれ 1 から 9 まで。
+    alt: 「すうはい」とも読む。
+    ruby: true
+    see: [字牌, 萬子, 筒子, 索子]
+
+  - term: 字牌
+    reading: ジハイ
+    category: hai
+    meaning: 文字だけの牌。風牌（東・南・西・北）と、三元牌（白・發・中）の 7 種類。順子は作れない。
+    alt: 「ツーパイ」とも読む。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "1234567z"
+    ruby: true
+    see: [風牌, 三元牌, 数牌]
+
+  - term: 風牌
+    reading: カゼハイ
+    category: hai
+    meaning: 東・南・西・北の 4 種類。
+    alt: 「フォンパイ」とも読む。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    example: "1234z"
+    ruby: true
+    see: [場風, 自風, 客風]
+
+  - term: 三元牌
+    reading: サンゲンパイ
+    category: hai
+    meaning: 白（ハク）・發（ハツ）・中（チュン）の 3 種類。どれも、3 枚そろえると役になる（役牌）。
+    origin:
+      text: >-
+        「三元」という言葉と、白・發・中の意味は、説が分かれる。科挙（昔の中国の役人の試験）の首席の称号から、
+        という説が有力とされるが、ほかの説もある。日本の読みは、「チュン」だけが中国語の音で、「ハク」「ハツ」は日本の漢字の音。
+      certainty: 諸説あり
+    example: "567z"
+    ruby: true
+    see: [役牌, 字牌]
+
+  - term: 東・南・西・北
+    reading: トン・ナン・シャー・ペー
+    category: hai
+    meaning: 風牌の読み。席や場の名前も同じ読みで、東家（トンチャ）・南場（ナンバ）のように言う。
+    origin:
+      text: 中国語の音から。ただし、西を「シャー」と読む理由は、分かっていない（いまの中国語の読みとは合わない）。
+      certainty: 確実
+    example: "1234z"
+    see: [風牌, 東家, 東場]
+
+  - term: 数字の読み
+    reading: イー・リャン・サン・スー・ウー・ロー・チー・パー・チュー
+    category: hai
+    meaning: 麻雀では、1 から 9 を中国語ふうに読む。一萬＝イーワン（イーマン）、二筒＝リャンピン、三索＝サンゾー のように言う。
+    alt: 9 は「キュー」とも読む。
+    origin:
+      text: 中国語の音から。2 は、「二」ではなく「両」の音（リャン）。6 を「ロー」と読む理由は、分かっていない。
+      certainty: 確実
+    see: [萬子, 筒子, 索子]
+
+  - term: 么九牌
+    reading: ヤオチューハイ
+    category: hai
+    meaning: 数牌の 1 と 9、それに字牌。合わせて 13 種類。
+    alt: 「ヤオチューパイ」とも読む。「一九字牌」とも言う。
+    kanji: 么＝小さい → 数の 1 ／九＝ 9。
+    origin:
+      text: もとは「1 と 9 の牌」という意味。日本では、字牌も含めた 13 種類をまとめて言う。
+      certainty: 確実
+    example: "19m19p19s1234567z"
+    ruby: true
+    see: [中張牌, 老頭牌]
+
+  - term: 中張牌
+    reading: チュンチャンパイ
+    category: hai
+    meaning: 数牌の 2 から 8。順子を作りやすいので、使いやすい。
+    alt: 「タンヤオ牌」とも言う。
+    kanji: 中＝中間／張＝牌。
+    origin:
+      text: 中国語から。「張」にも牌の意味があるので、「中張牌」は「中の牌の牌」という重なった言い方になっている。
+      certainty: 有力
+    ruby: true
+    see: [么九牌]
+
+  - term: 老頭牌
+    reading: ロートーパイ
+    category: hai
+    meaning: 数牌の 1 と 9。6 種類。字牌は含まない。
+    kanji: 老＝いちばん年上の数（9）／頭＝先頭の数（1）、と説明される。
+    origin:
+      text: 中国語から。
+      certainty: 有力
+    example: "19m19p19s"
+    ruby: true
+    see: [么九牌]
+
+  - term: 役牌
+    reading: ヤクハイ
+    category: hai
+    meaning: 3 枚そろえると、それだけで 1 翻の役になる字牌。三元牌（白・發・中）と、場風、自風。
+    alt: 「翻牌」（ファンパイ）とも言う。
+    ruby: true
+    see: [場風, 自風, 三元牌, 連風牌]
+
+  - term: 場風
+    reading: バカゼ
+    category: hai
+    meaning: いまの場の風。東場なら東、南場なら南。全員にとって役牌になる。
+    origin:
+      text: 日本の呼び名。古いルールには場風がなく、あとから加わったとされる。
+      certainty: 有力
+    ruby: true
+    see: [自風, 役牌, 東場]
+
+  - term: 自風
+    reading: ジカゼ
+    category: hai
+    meaning: 自分の席の風。親（東家）なら東、その右隣（南家）なら南。その人にとってだけ役牌になる。
+    ruby: true
+    see: [場風, 役牌, 東家]
+
+  - term: 連風牌
+    reading: レンフォンパイ
+    category: hai
+    meaning: 場風でもあり、自風でもある牌。東場の親にとっての東など。3 枚そろえると、1 組で 2 翻。
+    alt: 「ダブ東」（ダブトン）・「ダブ南」（ダブナン）と言う。「ダブ」はダブルの略。
+    ruby: true
+    see: [場風, 自風]
+
+  - term: 客風
+    reading: オタカゼ
+    category: hai
+    meaning: 場風でも自風でもない風牌。3 枚そろえても、役にならない。
+    alt: 「オタ風」と書くことが多い。「客風牌」（コーフォンパイ）とも言う。
+    kanji: 客＝よそ者。
+    origin:
+      text: 「オタ」は「お多福」の略、という説明がある。ほかに確かめられる資料は、見つかっていない。
+      certainty: 有力
+    ruby: true
+    see: [場風, 自風]
+
+  - term: ドラ
+    reading: ドラ
+    category: hai
+    meaning: 持ってあがると、1 枚につき 1 翻増える牌。ドラ表示牌の「次の牌」がドラになる。ドラは役ではないので、ドラだけではあがれない。
+    origin:
+      text: >-
+        日本で生まれた決まり。終戦直後の関西で始まった、というのが定説。
+        名前は英語の dragon（ドラゴン）から、とされるが、語源は未詳とする辞書もあり、はっきりしない。
+      certainty: 諸説あり
+    see: [ドラ表示牌, 裏ドラ, 槓ドラ, 赤ドラ]
+
+  - term: ドラ表示牌
+    reading: ドラヒョウジハイ
+    category: hai
+    meaning: 王牌の中で、1 枚だけ表向きにしてある牌。その「次の牌」がドラ。数牌は 9 の次が 1。風牌は東→南→西→北→東。三元牌は白→發→中→白。
+    example: "9p"
+    example_note: 表示牌が 9筒 なら、ドラは 1筒。
+    see: [ドラ, 王牌]
+
+  - term: 裏ドラ
+    reading: ウラドラ
+    category: hai
+    meaning: ドラ表示牌の真下の牌が示すドラ。リーチしてあがった人だけが、あがったあとにめくって数える。
+    origin:
+      text: 日本生まれ。どうやってできたのかは、はっきりしない。関西では昭和 30 年代、関東では昭和 40 年代から使われたとされる。
+      certainty: 諸説あり
+    see: [ドラ, 槓ドラ]
+
+  - term: 槓ドラ
+    reading: カンドラ
+    category: hai
+    meaning: 誰かがカンをするたびに、1 枚ずつ増えるドラ。ドラ表示牌の隣を新しくめくる。全員に有効。
+    alt: 「新ドラ」とも言う。
+    see: [ドラ, カン, 裏ドラ]
+
+  - term: 赤ドラ
+    reading: アカドラ
+    category: hai
+    meaning: 赤く塗られた 5 の牌。持ってあがると、1 枚につき 1 翻増える。使うかどうか、何枚入れるかは、ルールによって異なる（このアプリは、5萬・5筒・5索 に 1 枚ずつ）。
+    alt: 「赤牌」「赤 5」とも言う。
+    origin:
+      text: 1970 年の大阪万博のころに関西で生まれた、と言われてきた。2004 年の雑誌の取材で、大阪の牌の会社が 1964 年の東京オリンピックをきっかけに赤い 5筒 を作った、と分かった。
+      certainty: 有力
+    example: "0m0p0s"
+    see: [ドラ]
+
+  # ============================================================ 鳴き
+  - term: 鳴き
+    reading: ナキ
+    category: naki
+    meaning: ほかの人の捨て牌をもらって、面子を作ること。チー・ポン・カンの 3 種類。鳴いた面子は、卓に晒す。
+    alt: 「鳴く」「食う」「晒す」「副露」とも言う。
+    origin:
+      text: 日本の言い方。チー・ポンなどと声を出すことを、「鳴く」と言った。
+      certainty: 有力
+    see: [チー, ポン, カン, 門前, 喰い下がり]
+
+  - term: チー
+    reading: チー
+    category: naki
+    meaning: 左隣の人（上家）が捨てた牌をもらって、順子を作る。上家からしかできない。
+    alt: 漢字では「吃」。
+    kanji: 吃＝食べる →「ほかの人の牌を食べる」。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    see: [鳴き, ポン, 上家]
+
+  - term: ポン
+    reading: ポン
+    category: naki
+    meaning: 同じ牌を 2 枚持っているとき、誰かが捨てた 3 枚目をもらって、刻子を作る。誰からでもできる。チーより優先される。
+    alt: 漢字では「碰」。
+    kanji: 碰＝ぶつかる・出会う。
+    origin:
+      text: 中国語から。字の意味は「牌がぶつかる」と説明されることが多いが、「出会う・集まる」の意味だ、という説明もある。
+      certainty: 諸説あり
+    see: [鳴き, チー, 明刻]
+
+  - term: カン
+    reading: カン
+    category: naki
+    meaning: 同じ牌 4 枚を、1 組の面子（槓子）にすること。暗槓・大明槓・加槓の 3 種類がある。カンをしたら、嶺上牌を 1 枚引き、槓ドラが 1 枚増える。
+    alt: 漢字では「槓」。
+    kanji: 槓＝太い棒・てこ。
+    origin:
+      text: 中国語から。なぜ 4 枚組を「槓」と呼ぶのかは、はっきりしない（4 枚並べた形が棒に見えるから、という推測がある）。
+      certainty: 諸説あり
+    see: [槓子, 暗槓, 大明槓, 加槓, 嶺上牌, 槓ドラ]
+
+  - term: 喰い下がり
+    reading: クイサガリ
+    category: naki
+    meaning: 鳴くと、役の翻数が 1 つ下がること。三色同順・一気通貫・混全帯么九（2 翻 → 1 翻）、混一色・純全帯么九（3 翻 → 2 翻）、清一色（6 翻 → 5 翻）。
+    origin:
+      text: 日本生まれ。中国の麻雀には無い。
+      certainty: 有力
+    ruby: true
+    see: [鳴き, 門前]
+
+  - term: 喰いタン
+    reading: クイタン
+    category: naki
+    meaning: 鳴いて作った断么九。認めるルール（喰いタンあり）と、認めないルール（喰いタンなし）がある。このアプリの初期設定は「あり」。
+    origin:
+      text: 断么九は、もともと門前に限る役ではなかった。「喰いタンなし」は、あとからできたルールとされる。
+      certainty: 有力
+    ruby: true
+    see: [後付け, 鳴き]
+
+  - term: 後付け
+    reading: アトヅケ
+    category: naki
+    meaning: >-
+      役が決まらないうちに鳴いて、あとから役を付けてあがること。たとえば、先にチーをして、あとから役牌をポンする。
+      片あがり（片方の牌でしか役が付かない聴牌）も、これに含めることが多い。
+      認めるルール（後付けあり）が一般的だが、認めないルール（完全先付け）もある。
+    alt: 「バック」とも言う（役牌の後付けを「役牌バック」と言う）。
+    see: [喰いタン, 片あがり, 役なし]
+
+  - term: 喰い替え
+    reading: クイカエ
+    category: naki
+    meaning: 鳴いた直後に、鳴いた牌と同じ牌や、同じ順子の反対側の牌を捨てること。たとえば 234 を持っていて 1 をチーし、4 を捨てる。禁止しているルールが一般的。
+    see: [チー, ポン]
+
+  # ============================================================ 卓・場・進行
+  - term: 配牌
+    reading: ハイパイ
+    category: ba
+    meaning: 局の最初に配られる牌。子は 13 枚、親は 14 枚（最初のツモを含む）。
+    ruby: true
+    see: [山, 親]
+
+  - term: 山
+    reading: ヤマ
+    category: ba
+    meaning: 裏向きに積んである牌。ここから 1 枚ずつツモる。
+    alt: 「牌山」「壁牌」（ピーパイ）とも言う。
+    see: [王牌, 配牌]
+
+  - term: 王牌
+    reading: ワンパイ
+    category: ba
+    meaning: 山の最後の 14 枚。ここの牌はツモらずに残す。ドラ表示牌と、嶺上牌がこの中にある。
+    origin:
+      text: なぜ 14 枚を残すのかも、名前の由来も、はっきりしない。「王様の手牌として残す」という説や、流局を指す言葉が変化した、という説がある。
+      certainty: 諸説あり
+    ruby: true
+    see: [嶺上牌, ドラ表示牌, 海底牌]
+
+  - term: 嶺上牌
+    reading: リンシャンパイ
+    category: ba
+    meaning: カンをしたときに、補充として引く牌。王牌の端の 4 枚。
+    kanji: 嶺上＝山の頂／牌。
+    origin:
+      text: 補充の牌を王牌の上に載せ直したので、山の頂のように見えたことから、とされる。
+      certainty: 有力
+    ruby: true
+    see: [王牌, カン]
+
+  - term: 海底牌
+    reading: ハイテイパイ
+    category: ba
+    meaning: その局で、最後にツモれる牌。王牌のすぐ手前の 1 枚。最後に捨てられる牌は、河底牌（ホウテイパイ）。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    ruby: true
+    see: [王牌, 流局]
+
+  - term: 河
+    reading: ホー
+    category: ba
+    meaning: 捨て牌を並べる場所。自分の前に、左から右へ 6 枚ずつ並べる。並んでいる捨て牌そのものも言う。
+    alt: 「かわ」とも読む。
+    origin:
+      text: 壁のように積んだ山に囲まれた内側を「河」と言う、という説明がある。河という考え方は、麻雀が日本に根づく中でできた、という説明もある。
+      certainty: 諸説あり
+    ruby: true
+    see: [打牌, 現物]
+
+  - term: ツモ切り
+    reading: ツモギリ
+    category: ba
+    meaning: 引いた牌を、手牌に入れずに、そのまま捨てること。
+    see: [手出し, 自摸]
+
+  - term: 手出し
+    reading: テダシ
+    category: ba
+    meaning: 引いた牌ではなく、手の中にあった牌を捨てること。手が進んだ合図になるので、守るときに相手の手出しを見る。
+    see: [ツモ切り]
+
+  - term: 理牌
+    reading: リーパイ
+    category: ba
+    meaning: 手牌を、見やすい順に並べ替えること。
+    kanji: 理＝整える／牌。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    see: [配牌]
+
+  - term: 洗牌
+    reading: シーパイ
+    category: ba
+    meaning: 局の前に、牌を伏せてかき混ぜること。
+    kanji: 洗＝洗う → かき混ぜる。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    see: [山]
+
+  - term: 親
+    reading: オヤ
+    category: ba
+    meaning: その局の東家。あがったときの点が子の 1.5 倍になる。子がツモあがりしたときの支払いも多い。あがるか、流局のときに聴牌していれば、親を続ける（連荘）。
+    alt: 「荘家」とも書く（読みは資料によって違う）。
+    see: [子, 東家, 連荘, 起家]
+
+  - term: 子
+    reading: コ
+    category: ba
+    meaning: 親以外の 3 人（南家・西家・北家）。
+    alt: 「散家」（サンチャ）とも書く。
+    see: [親]
+
+  - term: 起家
+    reading: チーチャ
+    category: ba
+    meaning: 最初の局（東 1 局）で親になる人。
+    kanji: 起＝始める／家＝打つ人。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    see: [親]
+
+  - term: 東家
+    reading: トンチャ
+    category: ba
+    meaning: 親の席。そこから反時計回りに、南家（ナンチャ）・西家（シャーチャ）・北家（ペーチャ）と並ぶ。ツモる順番も、この順。
+    ruby: true
+    see: [親, 自風, 上家]
+
+  - term: 上家
+    reading: カミチャ
+    category: ba
+    meaning: 自分の左隣の人。自分のすぐ前の番の人。チーできるのは、上家の捨て牌だけ。
+    kanji: 上（かみ。日本語）＋家（チャ。中国語の音）。
+    see: [下家, 対面, チー]
+
+  - term: 下家
+    reading: シモチャ
+    category: ba
+    meaning: 自分の右隣の人。自分のすぐ次の番の人。
+    see: [上家, 対面]
+
+  - term: 対面
+    reading: トイメン
+    category: ba
+    meaning: 自分の向かい側の人。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    see: [上家, 下家]
+
+  - term: 東場
+    reading: トンバ
+    category: ba
+    meaning: 場風が東の 4 局（東 1 局〜東 4 局）。全員が 1 回ずつ親をすると、次の南場（ナンバ）に移る。
+    ruby: true
+    see: [場風, 局, 半荘]
+
+  - term: 局
+    reading: キョク
+    category: ba
+    meaning: 配牌から、誰かがあがるか流局するまでの 1 区切り。「東 2 局」のように、場と親の順番で呼ぶ。
+    see: [東場, 本場, 半荘]
+
+  - term: 半荘
+    reading: ハンチャン
+    category: ba
+    meaning: 東場と南場を打つ 1 試合。連荘がなければ 8 局。東場だけで終わる試合は、東風戦（トンプウセン）と言う。
+    see: [東場, 局, オーラス]
+
+  - term: オーラス
+    reading: オーラス
+    category: ba
+    meaning: 試合の最後の局。半荘なら南 4 局、東風戦なら東 4 局。
+    alt: 「オールラスト」を縮めた言い方、と言われる。
+    see: [半荘]
+
+  - term: 連荘
+    reading: レンチャン
+    category: ba
+    meaning: 同じ人が、続けて親をすること。親があがったときと、流局のときに親が聴牌していたときに起きる（流局のときの決まりは、ルールによって異なる）。
+    kanji: 連＝続く／荘＝親（荘家）。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    see: [親, 本場]
+
+  - term: 本場
+    reading: ホンバ
+    category: ba
+    meaning: 連荘や流局が続いた回数。1 回目なら「1 本場」。1 本場につき、あがりの点に 300 点が加わる（ロンなら放銃した人が 300 点、ツモなら 3 人が 100 点ずつ）。親が、100 点棒を卓に置いて示す。
+    alt: 置く点棒を「積み棒」と言う。
+    ruby: true
+    see: [連荘, 流局, 供託]
+
+  - term: 供託
+    reading: キョウタク
+    category: ba
+    meaning: 卓の上に預けてある点棒。リーチを宣言するときに出す 1000 点棒が、これになる。その局であがった人がもらう。流局したら、次の局に持ち越す。
+    ruby: true
+    see: [本場]
+
+  - term: 巡目
+    reading: ジュンメ
+    category: ba
+    meaning: その局で、何回目のツモか。「6 巡目」は、自分の 6 回目のツモのこと。
+    ruby: true
+
+  # ============================================================ 点数
+  - term: 翻
+    reading: ハン
+    category: ten
+    meaning: 役やドラの大きさを数える単位。1 翻増えるごとに、点はおよそ 2 倍になる。
+    alt: 「飜」とも書く。
+    kanji: 翻＝ひるがえす・倍にする。
+    origin:
+      text: 中国語から。
+      certainty: 確実
+    ruby: true
+    see: [符, 基本点]
+
+  - term: 符
+    reading: フ
+    category: ten
+    meaning: あがりの形（面子の種類・待ち・あがり方）に付く点。合計を 10 符単位に切り上げて、点数計算に使う。
+    origin:
+      text: 中国語から。古い本では「副」の字を使った。
+      certainty: 有力
+    ruby: true
+    see: [翻, 副底, 基本点]
+
+  - term: 副底
+    reading: フーテイ
+    category: ten
+    meaning: あがると必ず付く、土台の 20 符。ここに、面子や待ちの符を足していく。
+    kanji: 副（符）＝点／底＝土台。
+    origin:
+      text: 中国語から。日本では、1929 年にルールを統一した会議で 20 符に決まったとされる。
+      certainty: 有力
+    ruby: true
+    see: [符]
+
+  - term: 基本点
+    reading: キホンテン
+    category: ten
+    meaning: 点数計算の出発点になる数。基本点 ＝ 符 × 2 の（翻 ＋ 2）乗。子のロンは基本点の 4 倍、親のロンは 6 倍を、100 点単位に切り上げる。基本点の上限は 2000（満貫）。
+    see: [翻, 符, 満貫]
+
+  - term: 満貫
+    reading: マンガン
+    category: ten
+    meaning: 点数の上限の 1 段目。子は 8000 点、親は 12000 点。5 翻のとき、または 4 翻 40 符以上・3 翻 70 符以上のとき。
+    kanji: 満貫＝貫（銭を通したひも）が満ちる → 上限。
+    origin:
+      text: 中国語から。もとは、点数の打ち止め（上限）という意味。
+      certainty: 確実
+    ruby: true
+    see: [跳満, 倍満, 切り上げ満貫]
+
+  - term: 跳満
+    reading: ハネマン
+    category: ten
+    meaning: 6 翻・7 翻。満貫の 1.5 倍で、子は 12000 点、親は 18000 点。
+    origin:
+      text: 日本語。戦後に点数が大きくなる中でできた段階。なぜ「跳ねる」と言うのかは、はっきりしない。
+      certainty: 諸説あり
+    ruby: true
+    see: [満貫, 倍満]
+
+  - term: 倍満
+    reading: バイマン
+    category: ten
+    meaning: 8 翻から 10 翻。満貫の 2 倍で、子は 16000 点、親は 24000 点。
+    ruby: true
+    see: [跳満, 三倍満]
+
+  - term: 三倍満
+    reading: サンバイマン
+    category: ten
+    meaning: 11 翻・12 翻。満貫の 3 倍で、子は 24000 点、親は 36000 点。
+    ruby: true
+    see: [倍満, 役満, 数え役満]
+
+  - term: 役満
+    reading: ヤクマン
+    category: ten
+    meaning: 決まった特別な形だけで付く、最高の点。満貫の 4 倍で、子は 32000 点、親は 48000 点。役満のときは、ふつうの役とドラを数えない。
+    kanji: 「役満貫」の略。1 つの役だけで、満貫（上限）になる手。
+    origin:
+      text: 昔の麻雀の「満貫」が、いまの役満に当たる。
+      certainty: 確実
+    ruby: true
+    see: [三倍満, 数え役満]
+
+  - term: 数え役満
+    reading: カゾエヤクマン
+    category: ten
+    meaning: 役満の形でなくても、役とドラの合計が 13 翻以上なら、役満として扱う決まり。採用せず、三倍満までとするルールもある（ルールによって異なる）。
+    origin:
+      text: 日本生まれ。昭和 40 年代に現れたとされる。
+      certainty: 有力
+    ruby: true
+    see: [役満, 三倍満]
+
+  - term: 切り上げ満貫
+    reading: キリアゲマンガン
+    category: ten
+    meaning: 30 符 4 翻と 60 符 3 翻（子のロンで 7700 点、親のロンで 11600 点）を、満貫に切り上げる決まり。採用するかどうかは、ルールによって異なる（このアプリの初期設定は「なし」）。
+    see: [満貫]
+
+  - term: 高点法
+    reading: コウテンホウ
+    category: ten
+    meaning: 手牌の読み方（面子の分け方）が 2 通り以上あるとき、点がいちばん高くなる読み方で数える、という原則。
+    origin:
+      text: 日本でできた原則。昭和の初めに打ち出されたとされる。
+      certainty: 有力
+    example: "111222333m678p99s"
+    example_note: 6筒 でロンしたとする。111・222・333 と読めば三暗刻（2 翻 50 符で 3200 点）。123・123・123 と読めば平和と一盃口（2 翻 30 符で 2000 点）。点の高い、三暗刻の読み方で数える。
+    ruby: true
+
+  - term: 罰符
+    reading: バップ
+    category: ten
+    meaning: 罰として払う点。流局のとき、聴牌していない人が、聴牌している人に払う「ノーテン罰符」は、場に 3000 点（聴牌が 1 人なら、3 人が 1000 点ずつ払う）。反則の罰も言う。
+    ruby: true
+    see: [不聴, 流局, チョンボ]
+
+  - term: 点棒
+    reading: テンボウ
+    category: ten
+    meaning: 点数を表す棒。10000 点・5000 点・1000 点・100 点の 4 種類が基本で、500 点棒があるセットもある。1000 点棒はリーチのとき、100 点棒は本場を示すときにも使う。
+    see: [供託, 本場]
+
+  - term: 親かぶり
+    reading: オヤカブリ
+    category: ten
+    meaning: 子がツモあがりしたとき、親が、ほかの子の 2 倍を払うこと。
+    see: [親]
+
+  - term: 飛び
+    reading: トビ
+    category: ten
+    meaning: 持ち点が 0 点より少なくなること。そこで試合を終わりにするルールが多いが、続けるルールもある。0 点ちょうどの扱いも、ルールによって異なる。
+    alt: 「箱」「ハコテン」「箱下」とも言う。
+    see: [点棒]
+
+  - term: ウマ
+    reading: ウマ
+    category: ten
+    meaning: 試合が終わったあと、順位に応じて足し引きする点。たとえば「10-20」なら、1 位に ＋20、2 位に ＋10、3 位に −10、4 位に −20（1000 点を 1 として数える）。大きさは、ルールによって異なる。
+    alt: 「順位点」とも言う。
+    see: [オカ]
+
+  - term: オカ
+    reading: オカ
+    category: ten
+    meaning: 最初の持ち点と、精算の基準にする点（返し）の差を集めて、1 位に渡す点。25000 点持ち・30000 点返しなら、1 人 5000 点 × 4 人＝ 20000 点が 1 位に入る。
+    see: [ウマ]
+
+  # ============================================================ 守り
+  - term: 現物
+    reading: ゲンブツ
+    category: mamori
+    meaning: 相手が、自分で捨てている牌。その相手には、ロンされない（相手がフリテンになるため）。リーチした人の、リーチ後にほかの人が捨てて通った牌も、同じように安全。
+    see: [安全牌, 振聴, 筋]
+
+  - term: 安全牌
+    reading: アンゼンパイ
+    category: mamori
+    meaning: 捨てても、ロンされる心配がない（とても少ない）牌。
+    alt: 「安牌」（アンパイ）と略す。
+    see: [現物, ベタオリ]
+
+  - term: 筋
+    reading: スジ
+    category: mamori
+    meaning: >-
+      1-4-7、2-5-8、3-6-9 の、3 つ離れた数字どうしの関係。両面待ちは、必ずこの関係の 2 種類を待つ。
+      だから、相手が 4 を捨てていれば、1 と 7 は両面待ちには当たらない（当たるなら、相手はフリテン）。
+      ただし、嵌張・辺張・単騎・双碰には当たるので、絶対に安全ではない。
+    alt: ふつうは、カタカナで「スジ」と書く。
+    example: "23m"
+    example_note: この形は 1萬 と 4萬 を待つ。4萬 を捨てている人が、この形で 1萬 を待つことはない。
+    see: [現物, 壁, 両面]
+
+  - term: 壁
+    reading: カベ
+    category: mamori
+    meaning: ある牌が、4 枚とも見えている状態。その牌を使う順子は、もう作れない。たとえば 8 が 4 枚見えていれば、9 は両面待ち（78 の形）には当たらない。
+    see: [筋, 現物]
+
+  - term: ベタオリ
+    reading: ベタオリ
+    category: mamori
+    meaning: あがりをあきらめて、安全な牌だけを捨て続けること。相手のリーチに、放銃しないための打ち方。
+    alt: 「オリる」とも言う。
+    see: [安全牌, 現物, 押し引き]
+
+  - term: 押し引き
+    reading: オシヒキ
+    category: mamori
+    meaning: 危ない牌を捨ててでも攻める（押す）か、あがりをあきらめて守る（引く）かの判断。自分の手の価値と、放銃したときの失点を比べて決める。
+    see: [ベタオリ]
+
+  # ============================================================ 卓での作法と反則
+  - term: 発声
+    reading: ハッセイ
+    category: sahou
+    meaning: チー・ポン・カン・リーチ・ロン・ツモは、全員に聞こえる声で言う。声が先、動作はあと。黙って牌を取ったり、手牌を倒したりしない。
+    see: [チー, ポン, カン]
+
+  - term: 先ヅモ
+    reading: サキヅモ
+    category: sahou
+    meaning: 前の人が捨て終わる前に、山に手を伸ばして牌を取ること。してはいけない（ポンやロンの機会を、ほかの人から奪ってしまう）。
+    see: [発声]
+
+  - term: 6 枚切り
+    reading: ロクマイギリ
+    category: sahou
+    meaning: 捨て牌を、1 列に 6 枚ずつ並べること。7 枚目からは、手前の次の列に並べる。何巡目かが、ひと目で分かる。
+    see: [河]
+
+  - term: チョンボ
+    reading: チョンボ
+    category: sahou
+    meaning: 局を続けられなくするような、重い反則。あがっていないのに「ロン」「ツモ」と言って手牌を倒す、聴牌していないのにリーチをかけて流局する（ノーテンリーチ）、など。罰は、満貫ぶんの点を払うのが一般的だが、ルールによって異なる。
+    alt: 漢字では「錯和」「冲和」と書く。
+    kanji: 錯＝間違い／和＝あがり →「間違ったあがり」。
+    origin:
+      text: 中国語の「錯和」（ツォーホー）または「冲和」が変化した言葉、とされる。もとは「間違ったあがり」のことで、日本では反則全般を指すようになった。
+      certainty: 有力
+    see: [アガリ放棄, 罰符]
+
+  - term: アガリ放棄
+    reading: アガリホウキ
+    category: sahou
+    meaning: 軽い反則の罰。その局は、あがれなくなる（ふつうは、リーチや鳴きもできない）。多牌・少牌、間違った鳴き、先ヅモ、発声だけの誤ロン、などで適用されることが多い。
+    see: [チョンボ, 多牌, 少牌]
+
+  - term: 多牌
+    reading: ターハイ
+    category: sahou
+    meaning: 手牌が、決まりより 1 枚多いこと。ツモったあとに捨て忘れたときなどに起きる。ふつうは、アガリ放棄になる。
+    see: [少牌, アガリ放棄]
+
+  - term: 少牌
+    reading: ショーハイ
+    category: sahou
+    meaning: 手牌が、決まりより 1 枚少ないこと。ツモり忘れや、鳴いたあとの捨てすぎで起きる。ふつうは、アガリ放棄になる。
+    see: [多牌, アガリ放棄]
+
+  - term: 誤ロン
+    reading: ゴロン
+    category: sahou
+    meaning: あがっていないのに「ロン」と言ってしまうこと（ツモの場合は「誤ツモ」）。役なしやフリテンに気づかずに言うことが多い。声だけならアガリ放棄、手牌を倒したらチョンボ、とするのが一般的。
+    see: [チョンボ, 役なし, 振聴]
+
+  - term: 見せ牌
+    reading: ミセハイ
+    category: sahou
+    meaning: 自分の手牌や山の牌を、うっかり見せてしまうこと。罰はないことが多いが、見せた牌ではロンしない、とする場もある。
+    see: [腰]
+
+  - term: 腰
+    reading: コシ
+    category: sahou
+    meaning: 鳴こうとする・あがろうとする素振りを見せて、やめること。手の内が伝わってしまうので、しない。
+    alt: 「腰を使う」と言う。
+    see: [見せ牌, 三味線]
+
+  - term: 三味線
+    reading: シャミセン
+    category: sahou
+    meaning: 自分の手牌について、嘘や紛らわしいことを言うこと。迷ったふりをするのも含む。してはいけない。
+    see: [腰]
+
+  - term: 強打
+    reading: キョウダ
+    category: sahou
+    meaning: 牌を、卓に強く叩きつけること。牌や卓が傷み、まわりも不快になるので、しない。
+    see: [発声]
+
+# 由来を調べるのに使った資料（役図鑑の「由来」も、同じ資料による）
+sources:
+  - title: 浅見了「麻雀祭都」（麻雀の歴史と用語の研究サイト。いまは写しのサイトで読める）
+    url: https://mjradio.web.fc2.com/majansite-mirror/index.html
+  - title: 千田俊太郎「麻雀ジャーゴン試論」（用語の読みについての論考）
+    url: https://mjradio.web.fc2.com/majansite-mirror/tre44.html
+  - title: コトバンク（デジタル大辞泉、精選版 日本国語大辞典、日本大百科全書）
+    url: https://kotobank.jp/word/%E9%BA%BB%E9%9B%80
+  - title: Wikipedia 日本語版の、役と用語の各記事（例：「立直」）
+    url: https://ja.wikipedia.org/wiki/立直
+  - title: J. P. Babcock『Babcock's Rules for Mah-Jongg』第 2 版（1923 年。当時の上海のルールを英語で記録した本）
+    url: https://archive.org/details/babcock_202209
+  - title: R. F. Foster『Foster on Mah Jong』（1924 年）
+    url: https://archive.org/details/bwb_Y0-ACE-714
+  - title: Wiktionary 英語版（中国語・日本語の項目）
+    url: https://en.wiktionary.org/wiki/%E8%81%BD%E7%89%8C

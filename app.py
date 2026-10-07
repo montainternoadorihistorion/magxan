@@ -19,7 +19,10 @@ def _code_state() -> dict:
 # 見張り役のモジュール自身が古いと役に立たないので、これだけは毎回読み直す。
 sys.modules.pop("ui.fresh", None)
 _state = _code_state()
-if importlib.import_module("ui.fresh").drop_stale_modules(Path(__file__).resolve().parent, ("engine", "ui"), _state):
+_changed = importlib.import_module("ui.fresh").drop_stale_modules(
+    Path(__file__).resolve().parent, ("engine", "ui"), _state, data_folders=("data",)
+)
+if _changed:
     _state["generation"] = _state.get("generation", 0) + 1
 # いま動いているコードの世代。ページは、これが変わったら、セッションに残っている古い型のオブジェクトを作り直す
 st.session_state["mj_generation"] = _state.get("generation", 0)

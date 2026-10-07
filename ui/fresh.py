@@ -10,6 +10,9 @@ Streamlit Community Cloud への反映（GitHub に push → サーバーがフ�
 
 そこで、表示のたびに自作モジュールのファイルの更新時刻を見て、前回から変わっていたら
 読み込み済みの自作モジュールをすべて捨てる。捨てたモジュールは、このあとの import で読み直される。
+
+役図鑑や用語辞典の内容（data/ の YAML）も、モジュールが読み込んで覚えている。だから、data/ のファイルが
+変わったときも、同じように自作モジュールを捨てる（読み直すと、新しい内容が読み込まれる）。
 """
 from __future__ import annotations
 
@@ -19,16 +22,16 @@ import time
 from collections.abc import Iterable, MutableMapping
 from pathlib import Path
 
-SUFFIXES = (".py", ".js", ".css", ".html")
+SUFFIXES = (".py", ".js", ".css", ".html", ".yaml")
 _STAMP = "stamp"
 _UNKNOWN = object()
 
 
-def source_stamp(root: Path, packages: Iterable[str]) -> tuple:
-    """自作モジュールのファイルの一覧と更新時刻（これが変わったら、コードが更新されたとみなす）"""
+def source_stamp(root: Path, folders: Iterable[str]) -> tuple:
+    """フォルダの中のファイルの一覧と更新時刻（これが変わったら、コードや内容が更新されたとみなす）"""
     entries = []
-    for package in packages:
-        for path in sorted((root / package).rglob("*")):
+    for folder in folders:
+        for path in sorted((root / folder).rglob("*")):
             if path.suffix in SUFFIXES and "__pycache__" not in path.parts and path.is_file():
                 stat = path.stat()
                 entries.append((path.relative_to(root).as_posix(), stat.st_mtime_ns, stat.st_size))
@@ -54,6 +57,7 @@ def drop_stale_modules(
     holder: MutableMapping,
     modules: MutableMapping | None = None,
     started_at: object = _UNKNOWN,
+    data_folders: Iterable[str] = (),
 ) -> list[str]:
     """コードが更新されていたら、読み込み済みの自作モジュールを捨てる。捨てた名前を返す。
 
@@ -61,13 +65,15 @@ def drop_stale_modules(
       * 前回の表示のときと、ファイルの一覧か更新時刻が違う
       * 前回の記録が無く（この見張りを入れて最初の表示）、サーバーの起動よりあとに書き換わったファイルがある
 
-    holder      前回の状態を覚えておく入れ物（サーバーが動いているあいだ残るもの）
-    modules     読み込み済みモジュールの表（既定は sys.modules）
-    started_at  サーバーが起動した時刻（既定は自分で調べる。テストで差し替えられるように引数にしてある）
+    holder        前回の状態を覚えておく入れ物（サーバーが動いているあいだ残るもの）
+    modules       読み込み済みモジュールの表（既定は sys.modules）
+    started_at    サーバーが起動した時刻（既定は自分で調べる。テストで差し替えられるように引数にしてある）
+    data_folders  モジュールではないが、モジュールが読み込んで覚えているファイルの置き場所（data など）。
+                  ここのファイルが変わったときも、自作モジュールを捨てる
     """
     packages = tuple(packages)
     modules = sys.modules if modules is None else modules
-    stamp = source_stamp(root, packages)
+    stamp = source_stamp(root, (*packages, *data_folders))
     previous = holder.get(_STAMP)
     holder[_STAMP] = stamp
     if previous == stamp:
