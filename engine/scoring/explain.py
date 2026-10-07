@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from engine.rules import DEFAULT_RULES, Rules
@@ -21,7 +21,7 @@ from engine.scoring.dora import DoraResult, count_dora
 from engine.scoring.fu import FuResult, calculate_fu
 from engine.scoring.judge import JudgeError, Judgement, judge
 from engine.scoring.points import PointsResult, calculate_points
-from engine.scoring.yaku_eval import Evaluation, YakuResult, evaluate, near_misses
+from engine.scoring.yaku_eval import Evaluation, YakuResult, evaluate, near_misses, why_not
 from engine.tiles import EAST, NORTH, SOUTH, WEST, is_yaochu_kind, kind_of
 from engine.yaku_table import DOUBLE_YAKUMAN_KEYS, YAKU, YAKUMAN_HAN
 
@@ -89,6 +89,30 @@ class Explanation:
     @property
     def has_alternatives(self) -> bool:
         return len(self.candidates) > 1
+
+    def yaku_check(self, key: str) -> YakuResult | None:
+        """ある役の成立条件を、1 つずつ確かめた結果（役図鑑・ドリルで「なぜ付く／付かないか」を見せる）。
+
+        採用した読み方（先頭の候補）で確かめる。和了の形になっていなければ None。
+        数えている役なら ok が True。役満があるために数えない通常の役も、条件を満たしていれば ok は True で、
+        note に「役満があるので数えない」と入る。別の読み方でなら成立する役は、note にそのことが入る。
+        """
+        if not self.candidates:
+            return None
+        first = self.candidates[0]
+        for item in first.evaluation.yaku:
+            if item.key == key:
+                return item
+        for item in first.evaluation.ignored:
+            if item.key == key:
+                return replace(item, note="役満があるので、この役は数えない")
+        result = why_not(key, first.interp, self.ctx, self.rules, first.fu)
+        if result.ok:          # 条件は満たしているが、上位の役として数えている（一盃口 → 二盃口 など）
+            return result
+        for other in self.candidates[1:]:
+            if any(item.key == key for item in (*other.evaluation.yaku, *other.evaluation.ignored)):
+                return replace(result, note="別の読み方をすれば成立するが、点の高い読み方で数えるので、この役は数えない")
+        return result
 
     @property
     def spoken_yaku(self) -> tuple[str, ...]:

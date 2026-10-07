@@ -1,0 +1,81 @@
+# 役の出やすさ（統計）。役図鑑の「出やすさの目安」に使う。
+#
+# 出典の表から、役ごとの「和了数」をそのまま写したもの。割合は、ここの回数 ÷ 和了数（wins）で計算する。
+# 目安の区切り：10% 以上＝よく出る、1% 以上＝ときどき、1% 未満＝まれ（engine/content.py の FREQUENCY_LEVELS）。
+
+source:
+  title: 天鳳鳳凰卓統計(2023年)
+  site: koba::blog
+  url: https://blog.kobalab.net/entry/2024/11/04/215201
+  published: "2024-11-04"
+  data: 2023 年の天鳳・鳳凰卓（東南戦・赤ドラあり）の全対局
+  games: 168778
+  hands: 1791086      # 局数
+  wins: 1511570       # 和了数（ダブロンは 2 と数える）
+
+# ページの鍵 → 回数
+counts:
+  riichi: 627241
+  ippatsu: 120275
+  menzen_tsumo: 377504
+  tanyao: 332470
+  pinfu: 306891
+  iipeikou: 59460
+  yakuhai:
+    count: 593823
+    note: 役牌ぜんぶ（白・發・中・場風・自風）の合計。東場の親の東のように、1 回のあがりで 2 つぶん数えるものを含む。
+  rinshan: 3657
+  chankan: 265
+  haitei: 6963
+  houtei: 6457
+  double_riichi: 2956
+  chiitoitsu: 43426
+  toitoi: 22370
+  sanankou: 9329
+  sanshoku: 56173
+  sanshoku_doukou: 402
+  ittsu: 21947
+  chanta: 12515
+  sankantsu: 15
+  shousangen: 1175
+  honroutou: 402
+  ryanpeikou: 519
+  honitsu: 68803
+  junchan: 4274
+  chinitsu: 7990
+  tenhou: 6
+  chiihou: 15
+  kokushi: 289
+  suuankou: 556
+  daisangen: 243
+  tsuuiisou: 20
+  shousuushii:
+    count: 96
+    note: 出典の表は、小四喜と大四喜を分けずに「四喜和」として数えている（合わせて 96 回）。
+  daisuushii:
+    count: 96
+    note: 出典の表は、小四喜と大四喜を分けずに「四喜和」として数えている（合わせて 96 回）。
+  ryuuiisou: 10
+  chinroutou: 14
+  chuuren: 10
+  suukantsu: 1
+  nagashi_mangan:
+    count: 305
+    per: 局
+    note: あがりではなく流局の一種として数えられている。割合は、あがりではなく局数に対するもの。
+
+notes:
+  - 天鳳の鳳凰卓は、いちばん上のクラスの卓。打つ人の顔ぶれによって、割合は変わる（下の「卓による違い」）。
+  - 1 回のあがりに役が 2 つ以上付くことが多いので、割合を足しても 100% にはならない。
+  - 「よく出る」は、あがりの 10 回に 1 回以上。「ときどき」は 100 回に 1 回以上。「まれ」は、それより少ない。
+
+# 補足に使った資料。月ごとに内容が入れ替わるページなので、見た日を書いておく。
+references:
+  - title: 役統計
+    site: 天鳳（公式サイト）
+    url: https://tenhou.net/sc/prof.html
+    seen: "2026-10-08"
+    text: >-
+      誰でも打てる一般卓と、いちばん上の鳳凰卓を比べると、一般卓の方が、鳴いて作る役が多く、門前の役が少ない。
+      あがりに占める割合は、対々和が 2.8%（鳳凰卓は 1.6%）、混一色が 6.1%（同 5.0%）、
+      門前清自摸和が 18.8%（同 24.7%）。どちらも東南戦・喰いタンあり・赤ドラありの卓。

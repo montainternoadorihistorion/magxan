@@ -384,64 +384,148 @@ def chiitoitsu(h: _Hand) -> YakuResult:
 # ---------------------------------------------------------------- 役満
 
 
-def _yakuman_regular(h: _Hand) -> list[YakuResult]:
-    found: list[YakuResult] = []
-    ctx = h.ctx
+def suuankou(h: _Hand) -> YakuResult:
+    """四暗刻（単騎待ちなら四暗刻単騎）"""
     concealed = _concealed_sets(h)
-
     if len(concealed) == 4:
         if h.interp.wait is WaitType.TANKI:
-            found.append(
-                h.result(
-                    "suuankou_tanki",
-                    [
-                        Check("暗刻（暗槓を含む）が 4 つある", True, _texts(concealed)),
-                        Check("雀頭の単騎待ちで和了した", True, wait_text(h.interp, ctx.win_kind)),
-                    ],
-                )
+            return h.result(
+                "suuankou_tanki",
+                [
+                    Check("暗刻（暗槓を含む）が 4 つある", True, _texts(concealed)),
+                    Check("雀頭の単騎待ちで和了した", True, wait_text(h.interp, h.ctx.win_kind)),
+                ],
             )
-        else:
-            found.append(h.result("suuankou", [Check("暗刻（暗槓を含む）が 4 つある（双碰待ちはツモ和了に限る）", True, _texts(concealed))]))
+        return h.result("suuankou", [Check("暗刻（暗槓を含む）が 4 つある（双碰待ちはツモ和了に限る）", True, _texts(concealed))])
+    detail = f"暗刻は {len(concealed)} つ" + (f"（{_texts(concealed)}）" if concealed else "")
+    ron_made = [b for b in h.sets if b.ron_completed]
+    if ron_made:
+        detail += f"。{ron_made[0].text()} はロンで完成したので明刻として数える"
+    elif h.shuntsu:
+        detail += f"。順子がある（{_texts(h.shuntsu)}）"
+    return h.result("suuankou", [Check("暗刻（暗槓を含む）が 4 つある（双碰待ちはツモ和了に限る）", False, detail)])
 
+
+def suuankou_tanki(h: _Hand) -> YakuResult:
+    """四暗刻単騎（成立していないときの内訳を出すための入口）"""
+    result = suuankou(h)
+    if result.key == "suuankou_tanki":
+        return result
+    concealed = _concealed_sets(h)
+    return h.result(
+        "suuankou_tanki",
+        [
+            Check("暗刻（暗槓を含む）が 4 つある", len(concealed) == 4, result.checks[0].detail if len(concealed) != 4 else _texts(concealed)),
+            Check("雀頭の単騎待ちで和了した", h.interp.wait is WaitType.TANKI, wait_text(h.interp, h.ctx.win_kind)),
+        ],
+    )
+
+
+def daisangen(h: _Hand) -> YakuResult:
     dragon_sets = [b for b in h.sets if b.first in DRAGONS]
     if len(dragon_sets) == 3:
-        found.append(h.result("daisangen", [Check("白・發・中のすべてが刻子か槓子", True, _texts(dragon_sets))]))
+        return h.result("daisangen", [Check("白・發・中のすべてが刻子か槓子", True, _texts(dragon_sets))])
+    detail = f"三元牌の刻子は {len(dragon_sets)} つ" + (f"（{_texts(dragon_sets)}）" if dragon_sets else "")
+    if h.pair is not None and h.pair.first in DRAGONS:
+        detail += f"。{name_of_kind(h.pair.first)}は雀頭（2 枚）"
+    return h.result("daisangen", [Check("白・發・中のすべてが刻子か槓子", False, detail)])
 
-    wind_sets = [b for b in h.sets if b.first in WINDS]
-    if len(wind_sets) == 4:
-        found.append(h.result("daisuushii", [Check("東・南・西・北のすべてが刻子か槓子", True, _texts(wind_sets))]))
-    elif len(wind_sets) == 3 and h.pair is not None and h.pair.first in WINDS:
-        found.append(
-            h.result("shousuushii", [Check("風牌の 3 種類が刻子、残り 1 種類が雀頭", True, f"刻子 {_texts(wind_sets)}、雀頭 {h.pair.text()}")])
-        )
 
-    if not h.shuntsu and all(is_terminal_kind(k) for k in h.kinds):
-        found.append(h.result("chinroutou", [Check("手牌がすべて老頭牌（数牌の 1・9）", True, _texts(h.blocks))]))
+def _wind_sets(h: _Hand) -> list[Block]:
+    return [b for b in h.sets if b.first in WINDS]
 
-    if len(h.kans) == 4:
-        found.append(h.result("suukantsu", [Check("槓子が 4 つある", True, _texts([b for b in h.mentsu if b.type is BlockType.KANTSU]))]))
 
-    if not ctx.melds and len(h.suits) == 1 and not h.honor_kinds:
-        base = {"m": 0, "p": 9, "s": 18}[h.suits[0]]
-        numbers = h.counts[base:base + 9]
-        extra = [n - need for n, need in zip(numbers, (3, 1, 1, 1, 1, 1, 1, 1, 3), strict=True)]
-        if all(e >= 0 for e in extra) and sum(extra) == 1:
-            shape = Check("門前で、同じ色の 1112345678999 ＋ 同じ色の 1 枚", True, f"{SUIT_NAMES[h.suits[0]]}の九蓮宝燈形")
-            if extra[ctx.win_kind - base] == 1:
-                found.append(h.result("junsei_chuuren", [shape, Check("1112345678999 の 13 枚で、9 種類どれでもあがれる待ちだった", True, "9 面待ち")]))
-            else:
-                found.append(h.result("chuuren", [shape]))
-    return found
+def daisuushii(h: _Hand) -> YakuResult:
+    wind_sets = _wind_sets(h)
+    ok = len(wind_sets) == 4
+    detail = _texts(wind_sets) if ok else f"風牌の刻子は {len(wind_sets)} つ" + (f"（{_texts(wind_sets)}）" if wind_sets else "")
+    return h.result("daisuushii", [Check("東・南・西・北のすべてが刻子か槓子", ok, detail)])
+
+
+def shousuushii(h: _Hand) -> YakuResult:
+    wind_sets = _wind_sets(h)
+    pair_is_wind = h.pair is not None and h.pair.first in WINDS
+    ok = len(wind_sets) == 3 and pair_is_wind
+    pair_text = h.pair.text() if h.pair is not None else "なし"
+    if ok:
+        detail = f"刻子 {_texts(wind_sets)}、雀頭 {pair_text}"
+    elif len(wind_sets) == 4:
+        detail = "4 種類とも刻子（大四喜になる）"
+    else:
+        detail = f"風牌の刻子は {len(wind_sets)} つ、雀頭は {pair_text}"
+    return h.result("shousuushii", [Check("風牌の 3 種類が刻子、残り 1 種類が雀頭", ok, detail)])
+
+
+def chinroutou(h: _Hand) -> YakuResult:
+    others = sorted({k for k in h.kinds if not is_terminal_kind(k)})
+    ok = not h.shuntsu and not others
+    if ok:
+        detail = _texts(h.blocks)
+    elif any(is_honor_kind(k) for k in others) and all(is_yaochu_kind(k) for k in h.kinds):
+        detail = f"字牌がある（{join(kind_text(k) for k in others)}）。字牌まじりは混老頭"
+    else:
+        detail = f"1・9 でない牌がある（{join(kind_text(k) for k in others)}）"
+    return h.result("chinroutou", [Check("手牌がすべて老頭牌（数牌の 1・9）", ok, detail)])
+
+
+def suukantsu(h: _Hand) -> YakuResult:
+    kans = [b for b in h.mentsu if b.type is BlockType.KANTSU]
+    ok = len(h.kans) == 4
+    detail = _texts(kans) if ok else f"槓子は {len(h.kans)} つ"
+    return h.result("suukantsu", [Check("槓子が 4 つある", ok, detail)])
+
+
+def chuuren(h: _Hand) -> YakuResult:
+    """九蓮宝燈（9 面待ちなら純正九蓮宝燈）"""
+    ctx = h.ctx
+    text = "門前で、同じ色の 1112345678999 ＋ 同じ色の 1 枚"
+    if ctx.melds:
+        return h.result("chuuren", [Check(text, False, "副露（暗槓を含む）がある")])
+    if len(h.suits) != 1 or h.honor_kinds:
+        return h.result("chuuren", [Check(text, False, "1 色の数牌だけになっていない")])
+    base = {"m": 0, "p": 9, "s": 18}[h.suits[0]]
+    numbers = h.counts[base:base + 9]
+    extra = [n - need for n, need in zip(numbers, (3, 1, 1, 1, 1, 1, 1, 1, 3), strict=True)]
+    if not (all(e >= 0 for e in extra) and sum(extra) == 1):
+        short = [str(i + 1) for i, e in enumerate(extra) if e < 0]
+        return h.result("chuuren", [Check(text, False, f"1112345678999 の形に足りない牌がある（{'・'.join(short)}）")])
+    shape = Check(text, True, f"{SUIT_NAMES[h.suits[0]]}の九蓮宝燈形")
+    if extra[ctx.win_kind - base] == 1:
+        return h.result("junsei_chuuren", [shape, Check("1112345678999 の 13 枚で、9 種類どれでもあがれる待ちだった", True, "9 面待ち")])
+    return h.result("chuuren", [shape])
+
+
+def junsei_chuuren(h: _Hand) -> YakuResult:
+    """純正九蓮宝燈（成立していないときの内訳を出すための入口）"""
+    result = chuuren(h)
+    if result.key == "junsei_chuuren":
+        return result
+    if not result.ok:                       # 九蓮宝燈の形そのものができていない
+        return h.result("junsei_chuuren", list(result.checks))
+    wait = Check("1112345678999 の 13 枚で、9 種類どれでもあがれる待ちだった", False, "和了牌を除いた 13 枚が 1112345678999 の形ではなかった")
+    return h.result("junsei_chuuren", [*result.checks, wait])
+
+
+def _yakuman_regular(h: _Hand) -> list[YakuResult]:
+    results = [suuankou(h), daisangen(h), daisuushii(h), shousuushii(h), chinroutou(h), suukantsu(h), chuuren(h)]
+    return [r for r in results if r.ok]
+
+
+def tsuuiisou(h: _Hand) -> YakuResult:
+    others = sorted({k for k in h.kinds if not is_honor_kind(k)})
+    detail = _texts(h.blocks) if not others else f"数牌がある（{join(kind_text(k) for k in others)}）"
+    return h.result("tsuuiisou", [Check("手牌がすべて字牌", not others, detail)])
+
+
+def ryuuiisou(h: _Hand) -> YakuResult:
+    others = sorted({k for k in h.kinds if k not in GREEN_KINDS})
+    detail = _texts(h.blocks) if not others else f"緑一色に使えない牌がある（{join(kind_text(k) for k in others)}）"
+    return h.result("ryuuiisou", [Check("手牌が 2・3・4・6・8 索と發だけ", not others, detail)])
 
 
 def _yakuman_any_form(h: _Hand) -> list[YakuResult]:
     """通常形でも七対子形でも成立する役満"""
-    found: list[YakuResult] = []
-    if all(is_honor_kind(k) for k in h.kinds):
-        found.append(h.result("tsuuiisou", [Check("手牌がすべて字牌", True, _texts(h.blocks))]))
-    if all(k in GREEN_KINDS for k in h.kinds):
-        found.append(h.result("ryuuiisou", [Check("手牌が 2・3・4・6・8 索と發だけ", True, _texts(h.blocks))]))
-    return found
+    return [r for r in (tsuuiisou(h), ryuuiisou(h)) if r.ok]
 
 
 # ---------------------------------------------------------------- まとめ
@@ -518,6 +602,114 @@ def evaluate(interp: Interpretation, ctx: WinContext, rules: Rules, fu: FuResult
         ignored = tuple(y for y in found if not y.is_yakuman)
         return Evaluation(tuple(yakuman), ignored, sum(y.han for y in yakuman), times)
     return Evaluation(tuple(found), (), sum(y.han for y in found), 0)
+
+
+# ---------------------------------------------------------------- 成立していない役の内訳（役図鑑・ドリル用）
+
+
+def _flag(text: str, ok: bool, missing: str) -> Check:
+    return Check(text, ok, "" if ok else missing)
+
+
+def _situation_checks(key: str, h: _Hand) -> list[Check] | None:
+    """状況で決まる役の成立条件（成立していないときに、どれが足りないかを見せるため）"""
+    ctx = h.ctx
+    if key == "riichi":
+        return [_menzen_check(h), _flag("聴牌して、リーチを宣言した", ctx.riichi, "リーチを宣言していない")]
+    if key == "double_riichi":
+        return [
+            _menzen_check(h),
+            _flag("最初の自分の番で（誰も鳴かないうちに）リーチを宣言した", ctx.double_riichi, "最初の番でのリーチではない"),
+        ]
+    if key == "ippatsu":
+        return [
+            _flag("リーチを宣言している", ctx.riichi, "リーチを宣言していない"),
+            _flag("リーチのあと 1 巡以内に、誰も鳴かないうちに和了した", ctx.ippatsu, "1 巡を過ぎた、または途中で鳴きが入った"),
+        ]
+    if key == "menzen_tsumo":
+        return [_menzen_check(h), _flag("ツモで和了した", ctx.is_tsumo, "ロンで和了した")]
+    if key == "rinshan":
+        return [_flag("カンをして引いた嶺上牌でツモ和了した", ctx.rinshan, "嶺上牌での和了ではない")]
+    if key == "chankan":
+        return [_flag("他家が加槓しようとした牌でロン和了した", ctx.chankan, "加槓の牌での和了ではない")]
+    if key == "haitei":
+        return [_flag("山の最後の牌でツモ和了した", ctx.haitei, "山の最後の牌でのツモ和了ではない")]
+    if key == "houtei":
+        return [_flag("最後に捨てられた牌でロン和了した", ctx.houtei, "最後の捨て牌でのロン和了ではない")]
+    if key == "tenhou":
+        return [_flag("親が配牌の 14 枚で和了していた", ctx.tenhou, "親の配牌での和了ではない")]
+    if key == "chiihou":
+        return [_flag("子が、誰も鳴かないうちの最初のツモで和了した", ctx.chiihou, "子の最初のツモでの和了ではない")]
+    return None
+
+
+_FORM_NAMES = {Form.CHIITOI: "七対子の形", Form.KOKUSHI: "国士無双の形"}
+_KOKUSHI_SHAPE = "13 種類の么九牌（1・9・字牌）が 1 枚ずつ＋そのどれか 1 枚"
+
+
+def why_not(key: str, interp: Interpretation, ctx: WinContext, rules: Rules, fu: FuResult) -> YakuResult:
+    """ある役について、成立条件を 1 つずつ確かめた結果を返す（成立していない役の「足りない条件」を見せるため）。
+
+    すでに成立している役を渡しても、同じ条件の内訳が返る。数える役の一覧（evaluate）とは別に、
+    役図鑑のひっかけ例やドリルの解説で「なぜ付かないか」を出すのに使う。
+    """
+    h = _Hand(interp, ctx, rules, fu)
+    form = interp.form
+
+    checks = _situation_checks(key, h)
+    if checks is not None:
+        note = "最初の番でのリーチなので、ダブル立直として数える" if key == "riichi" and ctx.double_riichi else ""
+        return h.result(key, checks, note=note)
+
+    if key in ("kokushi", "kokushi_13"):
+        if form is Form.KOKUSHI:
+            result = _kokushi_yaku(h)[0]
+            if result.key == key:
+                return result
+            if key == "kokushi":                # 十三面待ちなら、上位の役として成立している
+                return h.result("kokushi", [result.checks[0]], note="十三面待ちなので、国士無双十三面待ちとして数える")
+            return h.result(key, [*result.checks, Check("13 種類が 1 枚ずつそろった形で、13 種類どれでもあがれる待ちだった", False, "1 種類を待つ形だった")])
+        return h.result(key, [Check(_KOKUSHI_SHAPE, False, "13 種類の么九牌がそろっていない")])
+
+    if key == "chiitoitsu":
+        if form is Form.CHIITOI:
+            return chiitoitsu(h)
+        return h.result(key, [_menzen_check(h), Check("対子が 7 組（すべて別の牌。同じ牌 4 枚は 2 組に数えない）", False, "7 組の対子の形ではない")])
+
+    # 手牌の牌の種類だけで決まる役（どの形の手でも調べられる）
+    by_tiles = {"tanyao": tanyao, "honitsu": honitsu, "chinitsu": chinitsu, "tsuuiisou": tsuuiisou, "ryuuiisou": ryuuiisou}
+    if key in by_tiles:
+        return by_tiles[key](h)
+    if key == "honroutou":
+        result = honroutou(h)
+        if result.ok and form is Form.KOKUSHI:      # 么九牌だけでも、国士無双の形は混老頭ではない
+            shape = Check("刻子 4 つと雀頭、または七対子の形である", False, "国士無双の形（役満）")
+            return h.result(key, [*result.checks, shape])
+        return result
+
+    if form is not Form.REGULAR:
+        return h.result(key, [Check("4 面子 1 雀頭の形である", False, _FORM_NAMES.get(form, "別の形"))])
+
+    regular = {
+        "pinfu": pinfu, "iipeikou": iipeikou, "ryanpeikou": ryanpeikou, "sanshoku": sanshoku, "ittsu": ittsu,
+        "chanta": chanta, "junchan": junchan, "toitoi": toitoi, "sanankou": sanankou, "sanshoku_doukou": sanshoku_doukou,
+        "sankantsu": sankantsu, "shousangen": shousangen, "suuankou": suuankou, "suuankou_tanki": suuankou_tanki,
+        "daisangen": daisangen, "daisuushii": daisuushii, "shousuushii": shousuushii, "chinroutou": chinroutou,
+        "suukantsu": suukantsu, "chuuren": chuuren, "junsei_chuuren": junsei_chuuren,
+    }
+    if key in regular:
+        result = regular[key](h)
+        if key == "suuankou" and result.key == "suuankou_tanki":      # 単騎待ちなら、上位の四暗刻単騎として成立している
+            return h.result("suuankou", [result.checks[0]], note="単騎待ちなので、四暗刻単騎として数える")
+        if key == "chuuren" and result.key == "junsei_chuuren":
+            return h.result("chuuren", [result.checks[0]], note="9 面待ちなので、純正九蓮宝燈として数える")
+        if key == "iipeikou" and result.ok and ryanpeikou(h).ok:
+            return h.result("iipeikou", list(result.checks), note="同じ順子の組が 2 つあるので、二盃口として数える")
+        return result
+    yakuhai = {r.key: r for r in yakuhai_all(h)}
+    if key in yakuhai:
+        return yakuhai[key]
+    raise KeyError(f"知らない役です: {key!r}")
 
 
 MAX_NEAR_MISSES = 3
