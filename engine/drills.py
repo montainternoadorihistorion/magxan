@@ -7,7 +7,7 @@
 
 問題の種類
     決まった数の問題がある種類（finite）   読み・翻数・成立/不成立・点数早見。すべての問題を、間隔反復で追う
-    その場で作る種類                       役の判定・あがれる？・待ち・符・点数計算・何切る。番号から作る。
+    その場で作る種類                       役の判定・あがれる？・待ち・符・点数計算・何切る・危険牌。番号から作る。
                                            同じ番号なら、いつでも同じ問題。間違えた問題だけを覚えておいて、あとでもう一度出す
 
 正解は、どれも点数計算・向聴数・牌効率のエンジンが決める（ここで答えを書かない）。
@@ -25,6 +25,20 @@ from engine.analysis.shanten import shanten_text
 from engine.analysis.waits import wait_kinds
 from engine.coach import Analysis, Position, Verdict, analyze, judge_discard
 from engine.content import TRAP_RESULTS, YakuPage, glossary, yaku_pages
+from engine.cpu import decide
+from engine.defense import LEVEL_NAMES, TileDanger, danger_table, summary, threats
+from engine.game import (
+    HUMAN,
+    NUM_PLAYERS,
+    SEAT_NAMES,
+    CpuLevel,
+    Discard,
+    GameConfig,
+    Phase,
+    apply_hand,
+    start_game,
+    waiting_for,
+)
 from engine.luck import LuckSettings
 from engine.melds import Meld, MeldType
 from engine.rng import Rng
@@ -78,6 +92,7 @@ _KINDS = (
     DrillKind("table", "点数早見", "符と翻から、点数をすぐ言えるようにする", True, "count"),
     DrillKind("score", "点数計算", "あがった手の点数を、役から順に数える", False, "count"),
     DrillKind("discard", "何切る", "いちばん速く聴牌に近づく打牌を選ぶ（牌効率）", False, "play"),
+    DrillKind("danger", "危険牌", "リーチに対して、いちばん安全な牌を選ぶ（現物・スジ・壁・字牌）", False, "play"),
 )
 #: ドリルの種類（画面に並べる順）
 KINDS: dict[str, DrillKind] = {kind.key: kind for kind in _KINDS}
@@ -92,6 +107,23 @@ class Choice:
     label: str          # 画面に出す文字
     why: str = ""       # 答えたあとに出す、ひとことの説明（この選択肢が何にあたるか）
     tile: int | None = None     # 牌の種類（待ちのドリルで、牌の絵を出すため）
+
+
+@dataclass(frozen=True)
+class DangerSetup:
+    """危険牌のドリルの局面（自分から見えているもの）"""
+
+    seat_winds: tuple[int, int, int, int]               # 席ごとの自風（自分・下家・対面・上家）
+    rivers: tuple[tuple[Discard, ...], ...]             # 席ごとの河
+    riichi: tuple[int, ...]                             # リーチしている席
+    table: tuple[TileDanger, ...]                       # 手牌の種類ごとの危険度（安全な順）
+
+    @property
+    def best_level(self) -> int:
+        return min(row.level for row in self.table)
+
+    def row(self, kind: int) -> TileDanger:
+        return next(r for r in self.table if r.kind == kind)
 
 
 @dataclass(frozen=True)
@@ -112,6 +144,7 @@ class Question:
     position: Position | None = None        # 何切るの局面
     page: str = ""                          # 関係する役図鑑のページ
     term: str = ""                          # 関係する用語（辞典の見出し語）
+    danger: DangerSetup | None = None       # 危険牌の局面（position と一緒に使う。手牌から 1 枚選ぶ）
 
     def choice(self, key: str) -> Choice:
         return next(c for c in self.choices if c.key == key)
@@ -136,6 +169,14 @@ def grade(question: Question, picked: Iterable[str]) -> Graded:
     missed = tuple(c for c in question.choices if c.key in question.correct and c.key not in chosen)
     extra = tuple(c for c in question.choices if c.key in chosen and c.key not in question.correct)
     return Graded(not missed and not extra, chosen, missed, extra)
+
+
+def grade_danger(question: Question, tile: int) -> tuple[bool, TileDanger]:
+    """危険牌：切った牌を採点する。いちばん安全な牌（と同じ危険度の牌）なら正解。→（正解か, 切った牌の危険度）"""
+    if question.danger is None or question.position is None or tile not in question.position.tiles:
+        raise ValueError("危険牌の問題ではないか、手牌にない牌です")
+    row = question.danger.row(kind_of(tile))
+    return row.level == question.danger.best_level, row
 
 
 def grade_discard(question: Question, tile: int) -> tuple[bool, Verdict, Analysis]:
@@ -944,6 +985,63 @@ def _discard_question(item: str) -> Question:
     )
 
 
+# ---------------------------------------------------------------- 危険牌
+
+
+def _danger_question(item: str) -> Question:
+    """CPU（弱い）4 人に打たせて、自分以外の誰かのリーチが成立し、自分が切る番になった局面を使う"""
+    number = _number(item)
+    for attempt in range(120):
+        config = GameConfig(seed=(number * 137 + attempt) % 10**9, cpu_level=CpuLevel.WEAK)
+        hand = start_game(config).current
+        found = None
+        while hand.result is None:
+            seat = waiting_for(hand)
+            assert seat is not None
+            me = hand.players[HUMAN]
+            if seat == HUMAN and hand.phase is Phase.DRAW and not me.in_riichi and hand.discard_count >= 8:
+                attackers = threats(hand, HUMAN)
+                if attackers:
+                    found = attackers
+                    break
+            hand = apply_hand(config, hand, decide(hand, seat, CpuLevel.WEAK))
+        if found is None:
+            continue
+        me = hand.players[HUMAN]
+        table = danger_table(me.tiles, hand.visible_to(HUMAN), found, dora_indicators=hand.dora_indicators)
+        levels = [row.level for row in table]
+        best = [row for row in table if row.level == min(levels)]
+        # 答えがはっきりしていて、危ない牌もある局面だけを使う（どれを切っても同じ・安全な牌だらけの局面は、問題にならない）
+        if min(levels) > 2 or max(levels) < 4 or len(best) > 3 or len(table) < 6:
+            continue
+        break
+    else:
+        raise RuntimeError(f"危険牌の問題を作れませんでした: {item!r}")
+    position = Position(
+        tiles=me.tiles, visible=hand.visible_to(HUMAN), seat_wind=hand.seat_wind(HUMAN), round_wind=hand.round_wind,
+        dora_indicators=hand.dora_indicators, draws_left=hand.draws_left(HUMAN), drawn=me.drawn, rules=hand.rules,
+    )
+    setup = DangerSetup(
+        seat_winds=tuple(hand.seat_wind(s) for s in range(NUM_PLAYERS)),  # type: ignore[arg-type]
+        rivers=tuple(p.river for p in hand.players),
+        riichi=tuple(t.seat for t in found),
+        table=table,
+    )
+    # 2 人以上なら人数で言う（問題文を 1 行に収めるため。誰がリーチしたかは、河の「リーチ」の札で分かる）
+    who = SEAT_NAMES[found[0].seat] if len(found) == 1 else f"{len(found)} 人"
+    best_names = "・".join(kind_text(row.kind) for row in best)
+    first = best[0]
+    answer = [f"いちばん安全なのは {best_names}（{LEVEL_NAMES[first.level]}：{summary(first.worst)}）。"]
+    if first.level == 0:
+        answer.append("現物は、リーチした人の河にある牌と、リーチのあとに切られて通った牌。その人は、この牌ではロンできない（フリテン）。")
+    answer.append("危険度は、まだ当たりうる待ちの形から決めた目安。表の根拠を確かめてから、次の問題へ。")
+    return Question(
+        "danger", item, f"{who}がリーチ。いちばん安全な牌は？", (), frozenset(str(row.kind) for row in best),
+        note="",            # 考え方の手がかりは、手牌の下に出す（手牌と「この牌を切る」を最初の画面に入れるため）
+        answer=tuple(answer), position=position, danger=setup, term="現物",
+    )
+
+
 # ---------------------------------------------------------------- 役の翻数
 
 
@@ -1005,7 +1103,7 @@ def _han_question(item: str) -> Question:
 
 
 #: ふだんの言葉と同じ読みなので、読みの問題にしない用語
-_PLAIN_TERMS = frozenset({"山", "親", "子", "局", "筋", "壁", "腰", "基本点", "点棒", "強打", "発声", "三味線", "現物", "高目"})
+_PLAIN_TERMS = frozenset({"山", "親", "子", "局", "筋", "壁", "腰", "基本点", "点棒", "強打", "発声", "三味線", "現物", "高目", "延長戦"})
 
 
 def _is_kanji(ch: str) -> bool:
@@ -1077,6 +1175,7 @@ _MAKERS = {
     "win": _win_question,
     "wait": _wait_question,
     "discard": _discard_question,
+    "danger": _danger_question,
     "han": _han_question,
     "reading": _reading_question,
 }

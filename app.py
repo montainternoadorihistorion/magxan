@@ -37,6 +37,7 @@ page = st.navigation(
     {
         "": [st.Page("views/home.py", title="ホーム", icon=":material/home:", default=True)],
         "打つ": [
+            st.Page("views/game.py", title="CPU と対局", icon=":material/groups:", url_path="game"),
             st.Page("views/practice.py", title="一人練習", icon=":material/playing_cards:", url_path="practice"),
             st.Page("views/score_lab.py", title="点数計算ラボ", icon=":material/calculate:", url_path="lab"),
         ],

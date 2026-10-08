@@ -175,7 +175,8 @@ def test_export_round_trip():
     assert parsed.stamps == {"riichi": Stamp(1, NOW, NOW, 1), "sanshoku": Stamp(1, NOW + 9, NOW + 9, 0)}
     assert parsed.drills["table"]["n"] == 3
     assert parsed.skipped == 0
-    assert parsed.parts == ("settings", "history", "stamps", "drills")
+    assert parsed.parts == ("settings", "history", "stamps", "drills", "games")      # CPU との対局の成績は、空でも入れる
+    assert parsed.games == [] and parsed.game_settings is None
 
 
 def test_export_is_readable_text_and_small():
@@ -189,7 +190,12 @@ def test_export_without_optional_parts():
     parsed = parse_export(export_text(settings=None, drills=None, history=[], stamps={}))
     assert parsed.settings is None and parsed.drills is None
     assert parsed.history == [] and parsed.stamps == {}
-    assert parsed.parts == ("history", "stamps")
+    assert parsed.parts == ("history", "stamps", "games")
+    # Phase 3 より前の版のファイル（CPU との対局の部品が無い）も読める
+    old = json.loads(export_text())
+    del old["games"]
+    parsed = parse_export(json.dumps(old))
+    assert parsed.games == [] and "games" not in parsed.parts
 
 
 @pytest.mark.parametrize(
@@ -235,7 +241,7 @@ def test_broken_parts_are_skipped_one_by_one():
     assert parsed.settings is None and parsed.drills is None
     assert set(parsed.stamps) == {"riichi", "sanshoku"}
     assert parsed.exported == 0 and parsed.app_version == ""
-    assert parsed.parts == ("history", "stamps")
+    assert parsed.parts == ("history", "stamps", "games")
 
 
 def test_history_can_also_be_a_plain_list_and_unknown_versions_are_ignored():
@@ -271,3 +277,25 @@ def test_records_with_unknown_yaku_or_targets():
     with pytest.raises(ValueError):
         HandRecord.from_dict({**row, "target": "no_such_target"})
     assert HandRecord.from_dict({**row, "target": ""}).target == ""
+
+
+def test_cpu_game_records_travel_in_the_export():
+    """CPU との対局の成績と設定も、ファイルに入り、読み込める。壊れた記録は 1 件ずつ飛ばし、同じ対局は 1 つにまとめる"""
+    from engine.game_records import GameRecord
+    from engine.progress import merge_games
+
+    def game(time: int, seed: int, rank: int = 2) -> GameRecord:
+        return GameRecord(time=time, seed=seed, length="east", deal=0, draw=0, cpu_deal=0, cpu_draw=0, cpu_level="normal",
+                          hinted=False, rank=rank, score=26_000, hands=5)
+
+    games = [game(NOW, 1), game(NOW + 60, 2, rank=1)]
+    text = export_text(games=games, game_settings={"length": "south", "deal": 25})
+    parsed = parse_export(text)
+    assert parsed.games == games and parsed.game_settings == {"length": "south", "deal": 25}
+    assert "games" in parsed.parts and "game_settings" in parsed.parts
+    data = json.loads(text)
+    data["games"]["history"]["games"].insert(0, {"rank": 9})
+    broken = parse_export(json.dumps(data))
+    assert broken.games == games and broken.skipped == 1
+    merged = merge_games([games[1], game(NOW + 120, 3)], games)
+    assert [g.seed for g in merged] == [1, 2, 3]

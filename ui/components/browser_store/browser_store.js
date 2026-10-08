@@ -30,6 +30,9 @@ const APPEND_LOOKBACK = 20; // append で、同じ内容がすでに入ってい
 // 最後に見たセッションの合言葉（接頭辞ごと）。ページを開いているあいだ覚えておく。
 // 部品が置き直されても（ページの切り替えなど）消えないように、要素ではなくここに持つ。
 const lastSession = new Map();
+// 済ませた書き込みの番号（セッションの合言葉ごと）。部品が置き直されて要素が新しくなっても、
+// 同じ書き込みをくり返さないように、ここに持つ（くり返しても結果は変わらないが、無駄な書き込みになる）
+const appliedBySession = new Map();
 
 function applyOp(storage, ns, op) {
   const key = ns + op.name;
@@ -88,7 +91,7 @@ export default function (component) {
     memo.again = lastSession.has(ns) && lastSession.get(ns) !== data.session;
     lastSession.set(ns, data.session);
     memo.session = data.session;
-    memo.applied = 0;
+    memo.applied = appliedBySession.get(data.session) || 0;
     memo.acked = 0;
     memo.failed = false;
     memo.tries = 0;
@@ -102,6 +105,7 @@ export default function (component) {
       if (op.id <= memo.applied) continue;
       applyOp(storage, ns, op);
       memo.applied = op.id;
+      appliedBySession.set(data.session, op.id);
     }
   } catch (e) {
     // プライベートブラウズ、保存の禁止設定、容量の上限などで書けなかった

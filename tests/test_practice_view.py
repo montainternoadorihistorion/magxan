@@ -296,7 +296,7 @@ def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()
             html += note_html("狙う役を 1 つ選んでください。", r)
         html += note_html("対々和・嶺上開花など、鳴きやカン、相手の牌が要る役は、一人練習では狙えません（役図鑑の各ページに、理由を書いてあります）。", r)
         html += subhead_html("コーチ", "", r)
-        html += note_html("コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役や打点との兼ね合いは、対局のコーチで扱う予定です。", r)
+        html += note_html("コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役の候補・リーチとダマの比べ方・守備は、「CPU と対局」のコーチで見られます。", r)
         return html
 
     folded(settings, "設定（ツキ補正・役指定・コーチ）")

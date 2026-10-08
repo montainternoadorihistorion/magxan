@@ -5,13 +5,27 @@ import pytest
 from html_helpers import check_html, check_tile_images, ruby_parts, ruby_terms, text_of
 
 from engine.coach import analyze
-from engine.drills import DONE, KINDS, NEW, REVIEW, DrillProgress, grade, grade_discard, items_of, progress_of, question
+from engine.drills import (
+    DONE,
+    KINDS,
+    NEW,
+    REVIEW,
+    DrillProgress,
+    grade,
+    grade_danger,
+    grade_discard,
+    items_of,
+    progress_of,
+    question,
+)
 from engine.scoring.explain import Status, explain
 from engine.srs import DAY, INTERVALS, MAX_BOX, Card, Deck
 from ui.drill_session import EARLY
 from ui.drill_view import (
     answer_lines_html,
     choices_review_html,
+    danger_legend_html,
+    danger_setup_html,
     done_html,
     header_html,
     kind_card_html,
@@ -22,6 +36,7 @@ from ui.drill_view import (
     srs_note_html,
     verdict_banner_html,
 )
+from ui.game_view import betaori_html, danger_table_html
 from ui.practice_view import candidates_html, shanten_html
 from ui.ruby import Rubifier, missing_ruby
 from ui.win_view import DETAIL_NORMAL, chips_html, detail_sections, hand_html, situation_chips, tiles_fit_html
@@ -58,7 +73,10 @@ def page_pieces(kind: str, item: str, *, answered: bool, correct: bool = True) -
     q = question(kind, item)
     hidden = kind == "reading" and not answered
     ruby = Rubifier(enabled=False) if hidden else rb()
-    pieces = [(header_html(kind, NEW, 3, 2, ruby) + prompt_html(q, ruby, asked=hidden), 0)]
+    head = header_html(kind, NEW, 3, 2, ruby) + prompt_html(q, ruby, asked=hidden)
+    if q.danger is not None and q.position is not None:
+        head += danger_setup_html(q, ruby)
+    pieces = [(head, 0)]
     explanation = None
     if q.ctx is not None:
         explanation = explain(q.ctx, q.rules)
@@ -70,7 +88,22 @@ def page_pieces(kind: str, item: str, *, answered: bool, correct: bool = True) -
         pieces.append((f'<div class="mj-hand">{tiles_fit_html(q.hand, aka=True)}</div>', 0))
     analysis = None
     # 答えたあとは、正解・不正解の帯 →（ボタン）→ 解説 の順（views/drill.py と同じ順に作る）
-    if q.position is not None:
+    if q.danger is not None and q.position is not None:
+        best = [r.kind for r in q.danger.table if r.level == q.danger.best_level]
+        if not answered:
+            pieces.append((danger_legend_html(q, ruby), 0))
+        else:
+            tile = next(t for t in q.position.tiles if (t // 4 in best) == correct)
+            right, row = grade_danger(q, tile)
+            assert right == correct
+            label = "いちばん安全な牌" if right else f"もっと安全な牌があった（切った牌は{row.name}）"
+            legend = f'<div class="mj-sub">{ruby.html("◎ いちばん安全な牌　青い枠：切った牌")}</div>'
+            pieces.append((legend + verdict_banner_html(right, ruby, text=label), 0))
+            review = answer_lines_html(q, ruby) + danger_legend_html(q, ruby)
+            review += danger_table_html(q.danger.table, q.position.tiles, ruby, detail=True, pick_kinds=best, chosen_kind=tile // 4)
+            review += f'<div class="mj-subhead">{ruby.html("ベタオリの手順")}</div>' + betaori_html(ruby)
+            pieces.append((review, 0))
+    elif q.position is not None:
         analysis = analyze(q.position)
         pieces.append((position_status_html(q.position, ruby), 0))
         if not answered:

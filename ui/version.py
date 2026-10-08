@@ -1,5 +1,5 @@
 """アプリの版。実機チェックの結果に載せて、どの版で試したかを分かるようにする"""
 
 APP_NAME = "ツキ付き麻雀道場"
-APP_VERSION = "0.4.0"
-APP_PHASE = "Phase 2（役図鑑・用語辞典・ドリル・役指定練習）"
+APP_VERSION = "0.5.0"
+APP_PHASE = "Phase 3（CPU との対局・守備）"

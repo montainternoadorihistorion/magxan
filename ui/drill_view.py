@@ -9,6 +9,7 @@ from html import escape
 
 from engine.coach import Position
 from engine.drills import KINDS, NEW, REVIEW, DrillProgress, Graded, Question
+from engine.game import SEAT_NAMES
 from engine.scoring.dora import dora_kind_of
 from engine.scoring.texts import kind_text
 from engine.srs import MAX_BOX, Card
@@ -83,6 +84,51 @@ def position_status_html(position: Position, rb: Rubifier) -> str:
             f'{kind_img(dora, cls="mj-s")} {escape(kind_text(dora))}</span>'
         )
     return f'<div class="mj-chips">{html}</div>'
+
+
+def danger_setup_html(question: Question, rb: Rubifier) -> str:
+    """危険牌の局面：残りのツモとドラ（1 行）と、4 人の河（下家・対面・上家・自分の順）。
+
+    手牌と「この牌を切る」が最初の画面に入るように、河は小さめの牌で出し、説明（danger_legend_html）は手牌の下に回す。
+    """
+    setup = question.danger
+    position = question.position
+    assert setup is not None and position is not None
+    aka = position.rules.aka_dora
+    riichi_orders = {seat: next(d.order for d in setup.rivers[seat] if d.riichi) for seat in setup.riichi if any(d.riichi for d in setup.rivers[seat])}
+    first_riichi = min(riichi_orders.values(), default=10**9)
+    blocks = []
+    for step in (1, 2, 3, 0):
+        river = setup.rivers[step]
+        label = f"{SEAT_NAMES[step]}（{WIND_NAMES[setup.seat_winds[step]]}家）"
+        mark = '<span class="mj-seat-riichi">リーチ</span>' if step in setup.riichi else ""
+        cells = []
+        for discard in river:
+            classes = []
+            if discard.riichi:
+                classes.append("mj-sideways")
+            if discard.order > first_riichi:
+                classes.append("mj-new")
+            cells.append(f"<span>{tile_img(discard.tile, aka=aka, cls=' '.join(classes))}</span>")
+        inner = "".join(cells) if cells else '<div class="mj-cap">まだ切っていない</div>'
+        body = f'<div class="mj-river mj-river-xs">{inner}</div>'
+        blocks.append(f'<div class="mj-riverbox"><div class="mj-cap">{rb.html(label)} {mark}</div>{body}</div>')
+    return f'<div class="mj-table4">{"".join(blocks)}</div>'
+
+
+def danger_legend_html(question: Question, rb: Rubifier) -> str:
+    """危険牌の局面の河の見方と、残りのツモ・ドラ（手牌の下に出す）"""
+    setup = question.danger
+    position = question.position
+    assert setup is not None and position is not None
+    legend = "横向きの牌：リーチ宣言牌。印の付いた牌：リーチのあとに切られて、通った牌（リーチした人の現物）"
+    if len(setup.riichi) > 1:
+        legend = "横向きの牌：リーチ宣言牌。印の付いた牌：最初のリーチのあとに切られて、通った牌（あとからリーチした人には、その人のリーチのあとに切られた牌だけが現物）"
+    legend = "考え方：現物・スジ・壁・字牌の見え方で考える。" + legend
+    dora = "".join(
+        f' ドラ {kind_img(dora_kind_of(kind_of(t)), cls="mj-s")} {escape(kind_text(dora_kind_of(kind_of(t))))}' for t in position.dora_indicators
+    )
+    return f'<div class="mj-sub">{rb.html(legend)}</div><div class="mj-sub mj-inline">{rb.html(f"残りツモ {position.draws_left} 回")}{dora}</div>'
 
 
 def verdict_banner_html(correct: bool, rb: Rubifier, *, text: str = "") -> str:

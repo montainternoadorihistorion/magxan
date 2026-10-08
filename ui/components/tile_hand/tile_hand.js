@@ -6,6 +6,7 @@
 //   drawnId      ツモ牌の牌ID（無ければ null）
 //   drawnLabel   ツモ牌の下に出す文字（既定「ツモ」）
 //   enabled      false なら表示だけ（牌は押せない。確定のボタンと案内文の段は隠す）
+//   discard      false なら、牌を選んで切ることはできない（ロンするかどうかを決めるときなど）。案内文と操作のボタンだけ
 //   prompt       何も選んでいないときの案内文
 //   confirmLabel 確定ボタンの文字
 //   riichiIds    リーチを宣言して切れる牌ID の一覧。空ならリーチのボタンを出さない
@@ -13,7 +14,8 @@
 //   twoRows      true なら、案内文を上の段、ボタンを下の段に、いつも分けて置く（リーチのボタンが出たり消えたり
 //                しても、確定ボタンの位置が動かないようにする）
 //   scrollTop    true なら、画面のいちばん上までスクロールを戻す（新しい局を始めたとき）。同じ rev では 1 回だけ
-//   actionLabel  空でなければ、確定ボタンの横に、牌を切らずにする操作のボタンを出す（例「ツモ（あがる）」）。1 回押せば送る
+//   actions      [{ key, label, style }] 確定ボタンの横に出す、牌を切らずにする操作のボタン（例「ツモ（あがる）」「ロン」）。
+//                1 回押せば送る。style は win（緑）・plain（枠だけ）・alert（橙）
 //   chosenId     表示だけのとき、選ばれた牌として枠を付ける牌ID（ドリルで答えた牌。無ければ null）
 //   chosenLabel  選ばれた牌の、読み上げ用の説明
 //
@@ -21,7 +23,7 @@
 //   { id, rev, riichi, prevMs, vw, vh, dpr, imgNg }
 //   riichi は、リーチを宣言して切るとき true
 //   prevMs は「ひとつ前の確定」から画面が更新されるまでにかかった時間（ミリ秒）。体感の応答時間の計測に使う
-//   操作のボタン（actionLabel）を押したときは { action: true, rev, prevMs, vw, vh, dpr, imgNg }
+//   操作のボタン（actions）を押したときは { action: ボタンの key, rev, prevMs, vw, vh, dpr, imgNg }
 //
 // リーチの操作: 「リーチ」を押すと、切れる牌（聴牌を保てる牌）だけが明るく残る。牌を選んで確定するとリーチ。
 // もう一度「リーチ」を押すと取り消し。
@@ -52,7 +54,7 @@ export default function (component) {
   const status = root.querySelector(".mj-status");
   const confirm = root.querySelector(".mj-confirm");
   const riichi = root.querySelector(".mj-riichi");
-  const action = root.querySelector(".mj-action");
+  const actionBox = root.querySelector(".mj-actions");
   const note = root.querySelector(".mj-note");
 
   const state =
@@ -78,6 +80,8 @@ export default function (component) {
   const tiles = Array.isArray(data.tiles) ? data.tiles : [];
   const byId = new Map(tiles.map((t) => [t.id, t]));
   const riichiIds = new Set(Array.isArray(data.riichiIds) ? data.riichiIds : []);
+  const actions = Array.isArray(data.actions) ? data.actions : [];
+  const canDiscard = data.enabled && data.discard !== false;
   if (!riichiIds.size) state.riichi = false;
 
   function clearPending() {
@@ -88,7 +92,7 @@ export default function (component) {
   }
 
   function selectable(id) {
-    return !state.riichi || riichiIds.has(id);
+    return canDiscard && (!state.riichi || riichiIds.has(id));
   }
 
   function refresh() {
@@ -104,17 +108,20 @@ export default function (component) {
       status.textContent = "選択中：" + picked.label;
     } else if (!data.enabled) {
       status.textContent = "";
+    } else if (!canDiscard) {
+      status.textContent = data.prompt || "";
     } else if (state.riichi) {
       status.textContent = "リーチ：明るい牌から選ぶ";
     } else {
       status.textContent = data.prompt || "";
     }
     confirm.textContent = state.riichi ? "リーチして切る" : data.confirmLabel || "この牌を切る";
-    confirm.disabled = !data.enabled || !picked || Boolean(state.pending);
-    action.hidden = !data.enabled || !data.actionLabel;
-    action.textContent = data.actionLabel || "";
-    action.disabled = Boolean(state.pending);
-    riichi.hidden = !data.enabled || riichiIds.size === 0;
+    confirm.hidden = !canDiscard;
+    confirm.disabled = !canDiscard || !picked || Boolean(state.pending);
+    actionBox.querySelectorAll("button").forEach((el) => {
+      el.disabled = Boolean(state.pending);
+    });
+    riichi.hidden = !canDiscard || riichiIds.size === 0;
     riichi.disabled = Boolean(state.pending);
     riichi.setAttribute("aria-pressed", String(state.riichi));
     riichi.textContent = state.riichi ? "やめる" : data.riichiLabel || "リーチ";
@@ -122,7 +129,7 @@ export default function (component) {
     // リーチや操作のボタンがあるあいだは、案内文を上の段、ボタンを下の段に固定する
     // （牌を選ぶと案内文の長さが変わる。同じ段に置くと、そのたびにボタンの位置が動いてしまう）。
     // twoRows が指定されていれば、いつも 2 段にする（巡目によって確定ボタンの高さが変わらないように）
-    root.classList.toggle("mj-two-rows", Boolean(data.twoRows) || !riichi.hidden || !action.hidden);
+    root.classList.toggle("mj-two-rows", Boolean(data.twoRows) || !riichi.hidden || actions.length > 0);
   }
 
   // 計測値（体感の応答時間・画面の大きさ・読めなかった画像の数）
@@ -150,19 +157,32 @@ export default function (component) {
   }
 
   function send() {
-    if (!data.enabled || state.pending || state.picked === null) return;
+    if (!canDiscard || state.pending || state.picked === null) return;
     const id = state.picked;
     const withRiichi = state.riichi && riichiIds.has(id);
     begin();
     setTriggerValue("pick", Object.assign({ id, rev: data.rev, riichi: withRiichi }, measures()));
   }
 
-  // 牌を切らずにする操作（ツモあがりなど）。選んでいた牌は解いてから送る
-  function sendAction() {
-    if (!data.enabled || state.pending || !data.actionLabel) return;
+  // 牌を切らずにする操作（ツモあがり・ロンなど）。選んでいた牌は解いてから送る
+  function sendAction(key) {
+    if (!data.enabled || state.pending) return;
     state.picked = null;
+    state.riichi = false;
     begin();
-    setTriggerValue("pick", Object.assign({ action: true, rev: data.rev }, measures()));
+    setTriggerValue("pick", Object.assign({ action: key, rev: data.rev }, measures()));
+  }
+
+  // 操作のボタンを並べ直す
+  actionBox.replaceChildren();
+  for (const a of actions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "mj-action mj-action-" + (a.style || "win");
+    btn.textContent = a.label || "";
+    btn.dataset.key = String(a.key);
+    btn.onclick = () => sendAction(String(a.key));
+    actionBox.appendChild(btn);
   }
 
   // 牌を並べ直す
@@ -206,7 +226,7 @@ export default function (component) {
     }
 
     btn.onclick = () => {
-      if (!data.enabled || state.pending || !selectable(t.id)) return;
+      if (!canDiscard || state.pending || !selectable(t.id)) return;
       if (state.picked === t.id) {
         send(); // 選んだ牌をもう一度タップしたら確定
         return;
@@ -219,15 +239,15 @@ export default function (component) {
   }
 
   confirm.onclick = send;
-  action.onclick = sendAction;
   riichi.onclick = () => {
-    if (!data.enabled || state.pending || !riichiIds.size) return;
+    if (!canDiscard || state.pending || !riichiIds.size) return;
     state.riichi = !state.riichi;
     if (state.picked !== null && !selectable(state.picked)) state.picked = null;
     note.textContent = "";
     refresh();
   };
   root.classList.toggle("mj-off", !data.enabled);
+  root.classList.toggle("mj-locked", data.enabled && !canDiscard);
   refresh();
 
   // 画面から外れるときはタイマーを止める

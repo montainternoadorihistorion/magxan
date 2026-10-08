@@ -11,8 +11,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from mahjong.shanten import Shanten
+
 from engine.analysis.shanten import shanten_of
 from engine.tiles import NUM_KINDS, counts34
+
+#: 字牌の始まりの種類（27 ＝ 東）
+_HONOR_START = 27
 
 
 @dataclass(frozen=True)
@@ -67,14 +72,66 @@ def remaining_counts(hand: Iterable[int], visible: Iterable[int] = ()) -> list[i
     return [max(0, 4 - n) for n in seen]
 
 
+def _near_kinds(counts: Sequence[int]) -> set[int]:
+    """手牌の牌と面子・搭子・対子を作れる種類（同じ色で 2 つ以内の数牌、持っている字牌）"""
+    near = set()
+    for kind, count in enumerate(counts):
+        if not count:
+            continue
+        if kind >= _HONOR_START:
+            near.add(kind)
+            continue
+        start = kind // 9 * 9
+        near.update(k for k in range(kind - 2, kind + 3) if start <= k < start + 9)
+    return near
+
+
 def acceptance(counts: Sequence[int], remaining: Sequence[int]) -> Acceptance:
-    """13 枚（副露があれば 13 − 3n 枚）の手に対する受け入れ"""
+    """13 枚（副露があれば 13 − 3n 枚）の手に対する受け入れ。
+
+    向聴数の計算（判定ライブラリ）は 1 回 数十〜数百マイクロ秒かかるので、34 種類すべてで呼ばずに済ませる：
+    手牌のどの牌とも面子・搭子・対子を作れない種類（孤立した牌）を足しても、4 面子 1 雀頭の形の向聴数は変わらない。
+    そういう種類は、七対子と国士無双の形（式で求まる）だけを調べる。
+    ただし、同じ牌を 4 枚持っている手は、ライブラリが特別な数え方をするので、すべての種類で計算する。
+    結果が「34 種類すべてで計算したとき」と同じになることは、ランダムな手でテストしている。
+    """
+    work = list(counts)
+    base = shanten_of(work)
+    quads = any(n >= 4 for n in work)
+    near = set(range(NUM_KINDS)) if quads else _near_kinds(work)
+    size = sum(work) + 1
+    regular = None
+    found = []
+    for kind in range(NUM_KINDS):
+        if work[kind] >= 4:
+            continue                      # 5 枚目は存在しない
+        work[kind] += 1
+        if kind in near:
+            value = shanten_of(work)
+        else:
+            if regular is None:
+                regular = Shanten.calculate_shanten_for_regular_hand(counts)
+            value = regular
+            if size >= 13:                # 七対子と国士無双は、門前の 13〜14 枚のときだけ
+                value = min(
+                    value,
+                    Shanten.calculate_shanten_for_chiitoitsu_hand(work),
+                    Shanten.calculate_shanten_for_kokushi_hand(work),
+                )
+        if value < base:
+            found.append((kind, remaining[kind]))
+        work[kind] -= 1
+    return Acceptance(base, tuple(found))
+
+
+def acceptance_slow(counts: Sequence[int], remaining: Sequence[int]) -> Acceptance:
+    """acceptance と同じ結果を、34 種類すべてで向聴数を計算して求める（テストで、速い方と比べるため）"""
     work = list(counts)
     base = shanten_of(work)
     found = []
     for kind in range(NUM_KINDS):
         if work[kind] >= 4:
-            continue                      # 5 枚目は存在しない
+            continue
         work[kind] += 1
         if shanten_of(work) < base:
             found.append((kind, remaining[kind]))

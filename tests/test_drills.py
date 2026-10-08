@@ -44,7 +44,7 @@ from engine.yaku_table import YAKU
 NOW = 1_800_000_000
 GENERATED = [key for key, kind in KINDS.items() if not kind.finite]
 FINITE = [key for key, kind in KINDS.items() if kind.finite]
-SEEDS = {"score": 120, "fu": 120, "yaku": 120, "win": 200, "wait": 120, "discard": 30}
+SEEDS = {"score": 120, "fu": 120, "yaku": 120, "win": 200, "wait": 120, "discard": 30, "danger": 30}
 
 
 def all_questions(kind: str) -> list[Question]:
@@ -57,13 +57,13 @@ def all_questions(kind: str) -> list[Question]:
 
 
 def test_kinds_are_listed_in_learning_order():
-    assert list(KINDS) == ["reading", "han", "valid", "yaku", "win", "wait", "fu", "table", "score", "discard"]
+    assert list(KINDS) == ["reading", "han", "valid", "yaku", "win", "wait", "fu", "table", "score", "discard", "danger"]
     assert sorted(FINITE) == ["han", "reading", "table", "valid"]
     for kind in KINDS.values():
         assert kind.name and kind.short and kind.group in drills.GROUPS
-    # 仕様の 7-3 にある種類（危険牌の判断だけは、相手のいる対局ができてから）
+    # 仕様の 7-3 にある種類（危険牌の判断は、CPU との対局と一緒に入れた）
     names = {kind.name for kind in KINDS.values()}
-    assert {"役の判定", "成立・不成立", "役の翻数", "符の計算", "点数計算", "何切る", "用語の読み", "点数早見"} <= names
+    assert {"役の判定", "成立・不成立", "役の翻数", "符の計算", "点数計算", "何切る", "危険牌", "用語の読み", "点数早見"} <= names
 
 
 @pytest.mark.parametrize("kind", list(KINDS))
@@ -74,8 +74,9 @@ def test_every_question_is_well_formed(kind):
         where = f"{kind}:{q.item}"
         assert q.kind == kind and q.prompt and q.answer, where
         assert all(isinstance(line, str) and line.strip() for line in q.answer), where
-        if kind == "discard":
+        if kind in ("discard", "danger"):
             assert not q.choices and q.position is not None and q.correct, where
+            assert (q.danger is not None) == (kind == "danger"), where
             continue
         keys = [c.key for c in q.choices]
         labels = [c.label for c in q.choices]
@@ -663,3 +664,30 @@ def test_progress_of_finite_and_generated_kinds():
     assert (empty.total, empty.seen, empty.due, empty.waiting, empty.next_due, empty.accuracy) == (None, 0, 0, 0, None, None)
     missed = progress_of("score", Deck().review("5", False, NOW, keep=False), NOW)
     assert (missed.due, missed.waiting, missed.next_due) == (0, 1, NOW + 600)
+
+
+# ---------------------------------------------------------------- 危険牌
+
+
+@pytest.mark.parametrize("item", ["1", "777", "123456"])
+def test_danger_questions_have_a_clear_safest_tile(item):
+    q = question("danger", item)
+    setup = q.danger
+    assert setup is not None and q.position is not None and len(q.position.tiles) == 14
+    assert setup.riichi and all(seat != 0 for seat in setup.riichi)
+    levels = [row.level for row in setup.table]
+    assert levels == sorted(levels) and min(levels) <= 2 and max(levels) >= 4
+    best = {str(row.kind) for row in setup.table if row.level == setup.best_level}
+    assert q.correct == best and 1 <= len(best) <= 3
+    assert "リーチ" in q.prompt and q.answer and q.term == "現物"
+    for tile in q.position.tiles:
+        correct, row = drills.grade_danger(q, tile)
+        assert correct == (str(tile // 4) in best) and row.kind == tile // 4
+    assert question("danger", item) is q                        # 同じ番号なら同じ問題
+    with pytest.raises(ValueError):
+        drills.grade_danger(question("discard", "777"), q.position.tiles[0])
+
+
+def test_danger_drill_is_listed_with_the_play_drills():
+    assert drills.KINDS["danger"].group == "play" and not drills.KINDS["danger"].finite
+    assert drills.is_item("danger", "42") and not drills.is_item("danger", "x")

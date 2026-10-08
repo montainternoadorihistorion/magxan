@@ -131,6 +131,9 @@ def _component_texts(proto) -> list[tuple[str, bool]]:
     elif proto.component_name == "mjdojo_tile_hand":
         add("prompt")
         add("confirmLabel")
+        for action in data.get("actions") or []:      # 牌を切らずにする操作のボタン（ツモ・ロン・九種九牌など）
+            if isinstance(action, dict) and isinstance(action.get("label"), str):
+                texts.append((action["label"], False))
     elif proto.component_name == "mjdojo_copy_button":
         add("label")
     return texts

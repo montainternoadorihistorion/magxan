@@ -12,7 +12,7 @@ import streamlit as st
 
 from engine.coach import analyze
 from engine.content import glossary, yaku_page_map
-from engine.drills import DONE, GROUPS, KINDS, LEARNED_BOX, early_item, grade, grade_discard, progress_of
+from engine.drills import DONE, GROUPS, KINDS, LEARNED_BOX, early_item, grade, grade_danger, grade_discard, progress_of
 from engine.scoring.explain import Status, explain
 from engine.srs import INTERVALS
 from ui.components.browser_store import BrowserStore
@@ -23,6 +23,8 @@ from ui.drill_session import DrillSession
 from ui.drill_view import (
     answer_lines_html,
     choices_review_html,
+    danger_legend_html,
+    danger_setup_html,
     done_html,
     header_html,
     kind_card_html,
@@ -32,6 +34,7 @@ from ui.drill_view import (
     srs_note_html,
     verdict_banner_html,
 )
+from ui.game_view import betaori_html, danger_table_html
 from ui.learn_view import score_table_html, subhead
 from ui.practice_view import MARK_EQUAL, MARK_PICK, candidates_html, shanten_html
 from ui.progress_store import read_decks
@@ -108,9 +111,9 @@ def _menu(rb: Rubifier) -> None:
             "はじめての問題に正解したら、3 日後から始める（もう知っている問題を、何度も出さないため）。",
             "読み・翻数・成立/不成立・点数早見は、問題の数が決まっている。全部の問題を、覚えるまで追いかける。",
             f"「定着」は、正解を重ねて、次に出すまでの間隔が {learned}以上になった問題の数（問題の数が決まっている種類だけ）。",
-            "役の判定・あがれる？・待ち・符・点数計算・何切るは、その場で問題を作る。間違えた問題だけを覚えておいて、あとでもう一度出す。",
-            "正解は、すべて点数計算・向聴数・牌効率の計算で決めている。ルールは、このアプリの初期設定（雀魂の段位戦と同じ）。",
-            "危険牌を見分けるドリルは、今後の版で、相手のいる対局と一緒に入れる予定。",
+            "役の判定・あがれる？・待ち・符・点数計算・何切る・危険牌は、その場で問題を作る。間違えた問題だけを覚えておいて、あとでもう一度出す。",
+            "正解は、すべて点数計算・向聴数・牌効率・守備（危険度）の計算で決めている。ルールは、このアプリの初期設定（雀魂の段位戦と同じ）。",
+            "危険牌の局面は、CPU 4 人に打たせて、誰かのリーチが成立したところで作る。危険度は、まだ当たりうる待ちの形から決めた目安（確率ではない）。",
         ]
         st.html('<ul class="mj-rules">' + "".join(f"<li>{inner.html(line)}</li>" for line in lines) + "</ul>")
     st.page_link("views/records.py", label="記録と保存（ドリルの記録も、ファイルに保存できる）", icon=":material/save:")
@@ -174,7 +177,10 @@ def _quiz(kind: str, rb: Rubifier) -> bool:
     hidden = kind == "reading" and not answered
     qrb = Rubifier(enabled=False) if hidden else rb
 
-    st.html(header_html(kind, session.reason, session.count, session.right, qrb) + prompt_html(q, qrb, asked=hidden))
+    head = header_html(kind, session.reason, session.count, session.right, qrb) + prompt_html(q, qrb, asked=hidden)
+    if q.danger is not None and q.position is not None:
+        head += danger_setup_html(q, qrb)        # 河は問題文と同じ塊に入れる（部品のあいだの余白を減らし、手牌を最初の画面に入れる）
+    st.html(head)
     explanation = None
     if q.ctx is not None:
         explanation = explain(q.ctx, q.rules)
@@ -187,7 +193,32 @@ def _quiz(kind: str, rb: Rubifier) -> bool:
 
     analysis = None
     review = ""             # 答えたあと、ボタンの下に出す解説（画面に出る順に作る。用語のルビを、最初に出てくるところに振るため）
-    if q.position is not None:
+    if q.danger is not None and q.position is not None:
+        position = q.position
+        best = [r.kind for r in q.danger.table if r.level == q.danger.best_level]
+        marks = {t: MARK_PICK for t in position.tiles if t // 4 in best} if answered else {}
+        tile_hand(
+            list(position.tiles), key="dr_hand",
+            rev=rev * 2 + (1 if answered else 0),
+            on_pick=_on_discard, drawn_id=position.drawn, aka=position.rules.aka_dora,
+            enabled=not answered, marks=marks, confirm_label="この牌を切る", prompt="いちばん安全な牌を選ぶ",
+            chosen_id=state["tile"] if answered else None, chosen_label="切った牌",
+        )
+        if not answered:
+            st.html(danger_legend_html(q, qrb))
+        else:
+            correct, row = grade_danger(q, state["tile"])
+            label = "いちばん安全な牌" if correct else f"もっと安全な牌があった（切った牌は{row.name}）"
+            legend = f"{MARK_PICK[0]} いちばん安全な牌　青い枠：切った牌"
+            st.html(f'<div class="mj-sub">{qrb.html(legend)}</div>' + verdict_banner_html(correct, qrb, text=label))
+            _actions(rev)
+            review = answer_lines_html(q, qrb) + danger_legend_html(q, qrb)
+            review += danger_table_html(
+                q.danger.table, position.tiles, qrb, detail=True, pick_kinds=best, chosen_kind=state["tile"] // 4,
+                aka=position.rules.aka_dora,
+            )
+            review += f'<div class="mj-subhead">{qrb.html("ベタオリの手順")}</div>' + betaori_html(qrb)
+    elif q.position is not None:
         position = q.position
         analysis = analyze(position)
         marks = {}

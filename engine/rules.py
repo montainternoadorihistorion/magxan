@@ -1,17 +1,29 @@
 """ルールの設定。
 
 既定値は雀魂の段位戦（4 人打ち）に合わせてある。流派で分かれるものだけを設定にする。
-いまは点数計算に関わる項目だけを持つ。対局の進行に関わる項目（途中流局、飛び、連荘など）は、
-対局を実装するフェーズで足す。
+点数計算に関わる項目と、対局の進行に関わる項目（流し満貫・途中流局・複数ロン・飛び）がある。
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any
 
+_FLAGS = (
+    "aka_dora",
+    "kuitan",
+    "kiriage_mangan",
+    "double_yakuman",
+    "kazoe_yakuman",
+    "nagashi_mangan",
+    "abortive_draws",
+    "multiple_ron",
+    "tobi",
+)
+
 
 @dataclass(frozen=True)
 class Rules:
+    # ---- 点数計算に関わること
     #: 赤ドラ（各色の 5 に 1 枚ずつ、計 3 枚）
     aka_dora: bool = True
     #: 喰いタン（鳴いた断么九を認める）
@@ -25,8 +37,18 @@ class Rules:
     #: 数え役満（13 翻以上を役満にする）。False なら三倍満まで
     kazoe_yakuman: bool = True
 
+    # ---- 対局の進行に関わること（engine/game.py）
+    #: 流し満貫（流局のとき、捨て牌がすべて么九牌で鳴かれていなければ、満貫ぶんをもらう）
+    nagashi_mangan: bool = True
+    #: 途中流局（九種九牌・四風連打・四家立直）。四槓散了はカンができてから（Phase 4）
+    abortive_draws: bool = True
+    #: 複数ロン（2 人以上が同じ牌でロンしたら、全員のあがり）。False なら、捨てた人から見て順番が先の 1 人だけ（頭ハネ）
+    multiple_ron: bool = True
+    #: 飛び（誰かの持ち点が 0 点より少なくなったら、そこで試合を終わる。0 点ちょうどは続ける）
+    tobi: bool = True
+
     def __post_init__(self) -> None:
-        for name in ("aka_dora", "kuitan", "kiriage_mangan", "double_yakuman", "kazoe_yakuman"):
+        for name in _FLAGS:
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"ルールの値は True か False です: {name}={getattr(self, name)!r}")
         fu = self.double_wind_pair_fu

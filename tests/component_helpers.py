@@ -46,11 +46,20 @@ def pick_tile(at: AppTest, tile: int, *, riichi: bool = False) -> AppTest:
     return send(at, "mjdojo_tile_hand", "pick", {"id": tile, "rev": rev, "riichi": riichi})
 
 
-def press_action(at: AppTest) -> AppTest:
-    """手牌の部品で、牌を切らずにする操作のボタン（ツモあがりなど）を押した"""
+def press_action(at: AppTest, key: str | None = None) -> AppTest:
+    """手牌の部品で、牌を切らずにする操作のボタン（ツモあがり・ロンなど）を押した。key を省くと、最初のボタン"""
     data = component_data(at, "mjdojo_tile_hand")
-    assert data["actionLabel"], "操作のボタンが出ていない"
-    return send(at, "mjdojo_tile_hand", "pick", {"action": True, "rev": data["rev"]})
+    keys = [a["key"] for a in data["actions"]]
+    assert keys, "操作のボタンが出ていない"
+    if key is None:
+        key = keys[0]
+    assert key in keys, f"{key} のボタンが出ていない（{keys}）"
+    return send(at, "mjdojo_tile_hand", "pick", {"action": key, "rev": data["rev"]})
+
+
+def action_keys(at: AppTest) -> list[str]:
+    """手牌の部品に出ている、操作のボタンの名前"""
+    return [a["key"] for a in component_data(at, "mjdojo_tile_hand")["actions"]]
 
 
 def choose(at: AppTest, keys, *, key: str | None = None) -> AppTest:

@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from engine.content import page_of_yaku, yaku_pages
+from engine.game_records import HISTORY_VERSION as GAME_HISTORY_VERSION
+from engine.game_records import MAX_RECORDS as MAX_GAME_RECORDS
+from engine.game_records import GameRecord
 from engine.records import HISTORY_VERSION, MAX_RECORDS, HandRecord
 from engine.srs import is_text
 
@@ -168,6 +171,14 @@ def merge_history(mine: Sequence[HandRecord], theirs: Sequence[HandRecord]) -> l
     return sorted(seen.values(), key=lambda r: r.time)[-MAX_RECORDS:]
 
 
+def merge_games(mine: Sequence[GameRecord], theirs: Sequence[GameRecord]) -> list[GameRecord]:
+    """CPU との対局の成績を合わせる。同じ対局（終わった時刻と番号が同じ）は 1 つにして、古い順に並べる"""
+    seen: dict[tuple[int, int], GameRecord] = {}
+    for record in (*mine, *theirs):
+        seen.setdefault((record.time, record.seed), record)
+    return sorted(seen.values(), key=lambda r: r.time)[-MAX_GAME_RECORDS:]
+
+
 # ---------------------------------------------------------------- ファイルへの書き出し・読み込み
 
 
@@ -181,8 +192,10 @@ class Export:
     history: list[HandRecord]
     stamps: dict[str, Stamp]
     drills: dict[str, Any] | None                   # ドリルの記録（確かめる前の形。engine.srs で確かめる）
-    skipped: int = 0                                # 読み飛ばした成績の件数（壊れていた記録）
+    skipped: int = 0                                # 読み飛ばした成績の件数（壊れていた記録。CPU との対局の成績も含む）
     parts: tuple[str, ...] = field(default=())      # ファイルに入っていた部品の名前
+    games: list[GameRecord] = field(default_factory=list)      # CPU との対局の成績（Phase 3 より前のファイルには無い）
+    game_settings: dict[str, Any] | None = None     # CPU との対局の設定（確かめる前の形）
 
 
 def build_export(
@@ -193,6 +206,8 @@ def build_export(
     drills: Mapping[str, Any] | None,
     time: int,
     app_version: str,
+    games: Sequence[GameRecord] = (),
+    game_settings: Mapping[str, Any] | None = None,
 ) -> str:
     """進み具合を、1 つの JSON の文字列にまとめる（人が読める形に、字下げして書く）"""
     data = {
@@ -207,6 +222,11 @@ def build_export(
         },
         "stamps": stamps_to_data(stamps),
         "drills": dict(drills) if drills is not None else None,
+        # CPU との対局（Phase 3 で足した。前の版のアプリは、知らない部品として読み飛ばす）
+        "games": {
+            "settings": dict(game_settings) if game_settings is not None else None,
+            "history": {"v": GAME_HISTORY_VERSION, "games": [record.to_dict() for record in games]},
+        },
     }
     text = json.dumps(data, ensure_ascii=False, indent=1)
     if not is_text(text):
@@ -248,6 +268,17 @@ def parse_export(text: str) -> Export:
             history.append(HandRecord.from_dict(row))
         except ValueError:
             skipped += 1
+    block = data.get("games") if isinstance(data.get("games"), dict) else {}
+    game_settings = block.get("settings") if isinstance(block.get("settings"), dict) else None
+    game_rows = block.get("history")
+    if isinstance(game_rows, dict):
+        game_rows = game_rows.get("games") if game_rows.get("v") == GAME_HISTORY_VERSION else None
+    games: list[GameRecord] = []
+    for row in game_rows if isinstance(game_rows, list) else []:
+        try:
+            games.append(GameRecord.from_dict(row))
+        except ValueError:
+            skipped += 1
     exported = data.get("exported")
     if not isinstance(exported, int) or isinstance(exported, bool) or not 0 <= exported <= _MAX_TIME:
         exported = 0
@@ -259,6 +290,8 @@ def parse_export(text: str) -> Export:
             ("history", isinstance(rows, list)),
             ("stamps", isinstance(data.get("stamps"), dict)),
             ("drills", isinstance(data.get("drills"), dict)),
+            ("games", isinstance(game_rows, list)),
+            ("game_settings", game_settings is not None),
         )
         if present
     )
@@ -271,4 +304,6 @@ def parse_export(text: str) -> Export:
         drills=data.get("drills") if isinstance(data.get("drills"), dict) else None,
         skipped=skipped,
         parts=parts,
+        games=games[-MAX_GAME_RECORDS:],
+        game_settings=game_settings,
     )

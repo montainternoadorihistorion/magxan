@@ -8,6 +8,7 @@ import pytest
 from engine import drills
 from engine.drills import DONE, KINDS, NEW, REVIEW, items_of, question
 from engine.srs import DAY, Card, Deck, dump_deck, load_deck
+from engine.tiles import kind_of
 from ui.drill_session import EARLY, MODE_KIND, MODE_REVIEW, DrillSession
 from ui.progress_store import DRILL_PREFIX
 
@@ -279,6 +280,9 @@ def test_every_kind_can_be_started_and_answered():
         assert question(kind, session.item) is q
         if kind == "discard":
             assert session.answer_discard(q.position.tiles[0])
+        elif kind == "danger":
+            safest = next(t for t in q.position.tiles if q.danger.row(kind_of(t)).level == q.danger.best_level)
+            assert session.answer_discard(safest) and session.result["correct"]
         else:
             assert session.answer(right_keys(session)) and session.result["correct"]
         assert deck_of(store, kind).answered == 1

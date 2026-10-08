@@ -16,7 +16,14 @@ from engine.analysis.blocks import (
     regular_layout,
 )
 from engine.analysis.shanten import shanten_info, shanten_meaning, shanten_of, shanten_text
-from engine.analysis.ukeire import acceptance, chance_within, discard_options, draw_chance, remaining_counts
+from engine.analysis.ukeire import (
+    acceptance,
+    acceptance_slow,
+    chance_within,
+    discard_options,
+    draw_chance,
+    remaining_counts,
+)
 from engine.analysis.waits import is_win_shape, wait_kinds, waits_of
 from engine.rules import Rules
 from engine.scoring.decompose import Form
@@ -116,6 +123,29 @@ def test_acceptance_never_counts_a_fifth_tile():
     hand = parse_tiles("1111m23m456p789s4z")
     result = acceptance(counts34(hand), remaining_counts(hand))
     assert 0 not in dict(result.tiles)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_pruned_acceptance_matches_the_full_scan(seed):
+    """枝刈りした受け入れの計算（acceptance）が、34 種類すべてを試す計算（acceptance_slow）と同じになる。
+    CPU・ツキ補正（＝対局の作り直し）・コーチが使う関数なので、偏った手（一色・字牌多め・4 枚持ち）も混ぜて確かめる"""
+    rnd = random.Random(seed)
+    for _ in range(1000):
+        size = rnd.choice([13, 13, 13, 10, 7, 4, 1])
+        pool = list(range(136))
+        mode = rnd.random()
+        if mode < 0.25:
+            suit = rnd.randrange(3)
+            pool = [t for t in pool if t // 36 == suit or t >= 108]
+        elif mode < 0.4:
+            pool = [t for t in pool if t >= 108 or rnd.random() < 0.3]
+        tiles = rnd.sample(pool, size)
+        if mode > 0.85 and size >= 4:                  # 4 枚持ちを作る
+            kind = kind_of(tiles[0])
+            tiles = [t for t in tiles if kind_of(t) != kind][: size - 4] + [kind * 4 + i for i in range(4)]
+        counts = counts34(tiles)
+        remaining = [max(0, 4 - c - rnd.choice([0, 0, 1])) for c in counts]       # 見えている牌があることも
+        assert acceptance(counts, remaining) == acceptance_slow(counts, remaining), tiles
 
 
 def test_one_shanten_acceptance():

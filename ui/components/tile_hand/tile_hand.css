@@ -180,7 +180,11 @@
   color: #fff;
 }
 
-/* 牌を切らずにする操作（ツモあがり）。切るボタン（赤）と見分けられるように、あがりを表す緑にする */
+/* 牌を切らずにする操作（ツモあがり・ロンなど）。切るボタン（赤）と見分けられるように、あがりを表す緑にする */
+.mj-actions {
+  display: contents;
+}
+
 .mj-action {
   padding: 0 16px;
   border: 0;
@@ -188,7 +192,17 @@
   color: #fff;
 }
 
-.mj-action[hidden] {
+.mj-action.mj-action-plain {
+  border: 2px solid rgba(128, 128, 128, 0.6);
+  background: transparent;
+  color: var(--st-text-color, #31333f);
+}
+
+.mj-action.mj-action-alert {
+  background: #b25e00;
+}
+
+.mj-confirm[hidden] {
   display: none;
 }
 
@@ -222,9 +236,10 @@
   opacity: 0.75;
 }
 
-/* 確定を送ってから結果が返るまで、押し直しを防ぐ */
+/* 確定を送ってから結果が返るまで、押し直しを防ぐ。牌を切れないとき（ロンするかどうかを決めるとき）も、牌は押せない */
 .mj-hand-root.mj-pending .mj-tile,
-.mj-hand-root.mj-off .mj-tile {
+.mj-hand-root.mj-off .mj-tile,
+.mj-hand-root.mj-locked .mj-tile {
   pointer-events: none;
 }
 

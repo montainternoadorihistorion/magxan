@@ -27,7 +27,7 @@ STORE_STATE = "mjdojo_store::state"
 #: 種類ごとに、確かめる問題を 1 つ
 SAMPLES = {
     "reading": "t:和了", "han": "h:sanshoku", "valid": "tanyao:e0", "yaku": "12345", "win": "12345", "wait": "12345",
-    "fu": "777", "table": "cr:30:3", "score": "777", "discard": "777",
+    "fu": "777", "table": "cr:30:3", "score": "777", "discard": "777", "danger": "777",
 }
 DETAILED = {"fu", "yaku", "valid", "score", "win"}
 
@@ -62,7 +62,11 @@ def answer(at: AppTest, *, correct: bool) -> AppTest:
     kind, item = state["dr_kind"], state["dr_item"]
     q = question(kind, item)
     now = int(time.time())
-    if q.position is not None:
+    if q.danger is not None:
+        best = {row.kind for row in q.danger.table if row.level == q.danger.best_level}
+        tile = next(t for t in q.position.tiles if (t // 4 in best) == correct)
+        state["dr_graded"] = {"tile": tile, "correct": correct}
+    elif q.position is not None:
         best = {c.tile // 4 for c in analyze(q.position).best}
         tile = next(t for t in q.position.tiles if (t // 4 in best) == correct)
         state["dr_graded"] = {"tile": tile, "correct": correct}

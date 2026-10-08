@@ -21,7 +21,7 @@ from engine.scoring.explain import explain
 from engine.target_coach import target_result, wants_riichi
 from ui.components.browser_store import BrowserStore
 from ui.components.choices import Option, choice_buttons
-from ui.components.tile_hand import Pick, tile_hand
+from ui.components.tile_hand import HandButton, Pick, tile_hand
 from ui.practice_session import MAX_SEED, PracticeSession, parse_seed, preset_name
 from ui.practice_view import (
     HINT_AFTER,
@@ -179,8 +179,9 @@ def _on_pick(pick: Pick) -> None:
     session.pick(pick.tile_id, riichi=pick.riichi)
 
 
-def _on_tsumo() -> None:
-    session.tsumo()
+def _on_action(key: str) -> None:
+    if key == "tsumo":
+        session.tsumo()
 
 
 def _next_hand() -> None:
@@ -310,8 +311,8 @@ if not state.finished:
         two_rows=True,                       # リーチのボタンが出る巡目でも、確定ボタンの位置を変えない
         scroll_top=session.take_scroll(),    # 新しい局は、画面のいちばん上から
         # あがれるときは、確定のボタンの横に「ツモ（あがる）」を出す（手牌のすぐ下なので、小さい画面でも隠れない）
-        action_label="ツモ（あがる）" if state.can_tsumo else "",
-        on_action=_on_tsumo,
+        actions=[HandButton("tsumo", "ツモ（あがる）")] if state.can_tsumo else [],
+        on_action=_on_action,
     )
     if aim_on:
         speed_note = target_speed_note_html(advice, analysis, rb)

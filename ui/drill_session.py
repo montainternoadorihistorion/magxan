@@ -20,7 +20,18 @@ import time
 from collections.abc import Callable, Iterable, MutableMapping
 from typing import Any
 
-from engine.drills import DONE, KINDS, REVIEW, Question, early_item, grade, grade_discard, next_item, question
+from engine.drills import (
+    DONE,
+    KINDS,
+    REVIEW,
+    Question,
+    early_item,
+    grade,
+    grade_danger,
+    grade_discard,
+    next_item,
+    question,
+)
 from engine.srs import Card, Deck
 from ui.progress_store import Store, read_deck, write_deck
 
@@ -112,7 +123,8 @@ class DrillSession:
                 return None
             try:
                 return question(kind, item)
-            except ValueError:      # いまは無い問題（内容を入れ替えたあとに、古い記録が残っていた）
+            except (ValueError, RuntimeError):
+                # いまは無い問題（内容を入れ替えたあとに、古い記録が残っていた）か、局面を作れなかった問題。飛ばして次へ
                 self._recent_add(kind, item)
                 self.next()
         return None
@@ -219,11 +231,14 @@ class DrillSession:
         return True
 
     def answer_discard(self, tile: int) -> bool:
-        """何切るに答える（切る牌の牌ID）。できない操作なら何もせず False"""
+        """何切る・危険牌に答える（切る牌の牌ID）。できない操作なら何もせず False"""
         q = None if self.answered else self.question
         if q is None or q.position is None or tile not in q.position.tiles:
             return False
-        correct, _, _ = grade_discard(q, tile)
+        if q.danger is not None:
+            correct, _ = grade_danger(q, tile)
+        else:
+            correct, _, _ = grade_discard(q, tile)
         self._s["dr_graded"] = {"tile": tile, "correct": correct}
         self._record(correct)
         return True

@@ -7,11 +7,13 @@ import json
 import re
 from pathlib import Path
 
+from html_helpers import page_parts
 from streamlit.testing.v1 import AppTest
 
 from engine import solo
 from engine.tiles import format_tiles
 from ui.components.browser_store import initial_state
+from ui.ruby import missing_ruby
 
 ROOT = Path(__file__).resolve().parent.parent
 STORE_STATE = "mjdojo_store::state"
@@ -49,6 +51,15 @@ def test_home_page_renders():
     at = new_app().run()
     assert not at.exception
     assert at.title[0].value == "ツキ付き麻雀道場"
+
+
+def test_home_page_links_every_page_and_gives_ruby():
+    at = new_app().run()
+    links = [link.proto.page for link in at.get("page_link")]       # ページの URL の名前（app.py の url_path）
+    assert links[0] == "game"                                         # 「打つ」の最初は、CPU との対局
+    assert set(links) >= {"game", "practice", "lab", "yaku", "terms", "drill", "table", "rules", "records"}
+    missing = missing_ruby(page_parts(at))
+    assert missing == [], missing
 
 
 def test_check_page_waits_for_browser_storage_then_starts_without_it():

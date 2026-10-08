@@ -1,6 +1,6 @@
 """記録と保存。
 
-進み具合（一人練習の成績・スタンプ・ドリルの記録）のまとめと、ファイルへの書き出し・読み込み。
+進み具合（一人練習と CPU との対局の成績・スタンプ・ドリルの記録）のまとめと、ファイルへの書き出し・読み込み。
 記録の置き場所はブラウザの中なので、端末やブラウザを変えると引き継がれない。ブラウザが消してしまうこともある。
 ファイルに保存しておけば、別の端末に移したり、消えたときに戻したりできる。
 """
@@ -12,12 +12,16 @@ import time
 import streamlit as st
 
 from engine.drills import KINDS, progress_of
+from engine.game_records import graduation
+from engine.game_records import summarize as summarize_games
 from engine.progress import completion, parse_export
 from engine.records import summarize, target_stats
 from ui.components.browser_store import BrowserStore
 from ui.components.copy_button import copy_button
 from ui.components.scroll_top import scroll_top
 from ui.drill_view import progress_text
+from ui.game_session import clean_settings as clean_game_settings
+from ui.game_view import stats_html as game_stats_html
 from ui.learn_view import completion_text, subhead
 from ui.practice_session import clean_settings
 from ui.practice_view import stats_html, target_stats_html
@@ -26,6 +30,7 @@ from ui.progress_store import (
     clear_all,
     export_text,
     read_decks,
+    read_games,
     read_history,
     read_stamps,
     store_signature,
@@ -45,7 +50,7 @@ MAX_FILE_MB = 5
 
 def _forget_pages() -> None:
     """ほかのページがセッションに持っている控えを捨てる（次に開いたとき、ブラウザの記録から読み直させる）"""
-    for key in [k for k in ss if isinstance(k, str) and k.startswith(("pr_", "dr_"))]:
+    for key in [k for k in ss if isinstance(k, str) and k.startswith(("pr_", "dr_", "gm_"))]:
         del ss[key]
 
 
@@ -90,17 +95,17 @@ def _import(round_: int, shown: str) -> None:
     except ValueError as error:
         _tell("error", str(error))
         return
-    after = apply_import(store, data, merge=merge, clean_settings=clean_settings)
+    after = apply_import(store, data, merge=merge, clean_settings=clean_settings, clean_game_settings=clean_game_settings)
     _forget_pages()
     how = "いまの記録と合わせた" if merge else "ファイルの中身で置き換えた"
-    _tell("success", f"読み込みました（{how}）。成績 {after.hands} 局・スタンプ {after.stamps} 役・ドリル {after.answers} 回。")
+    _tell("success", f"読み込みました（{how}）。{after.text()}。")
     ss["rc_upload"] = ss.get("rc_upload", 0) + 1         # ファイルの欄と貼り付けの欄を、空に戻す
 
 
 def _clear() -> None:
     clear_all(store)
     _forget_pages()
-    _tell("success", "成績・スタンプ・ドリルの記録を消しました。")
+    _tell("success", "成績（一人練習・CPU との対局）・スタンプ・ドリルの記録を消しました。")
 
 
 st.title("記録と保存")
@@ -139,6 +144,9 @@ st.page_link("views/yaku_book.py", label="役図鑑で、スタンプを見る",
 aimed = target_stats(history)
 st.html(subhead("一人練習の成績", rb) + stats_html(summarize(history), rb, aimed=sum(stat.tries for stat in aimed.values())) + target_stats_html(aimed, rb))
 
+games = read_games(store)
+st.html(subhead("CPU との対局の成績", rb) + game_stats_html(summarize_games(games), graduation(games), rb))
+
 rows = ['<tr class="mj-dim"><td>ドリル</td><td>進み具合</td></tr>']
 for kind, info in KINDS.items():
     rows.append(f"<tr><td style=\"white-space:nowrap\">{rb.html(info.name)}</td><td>{rb.html(progress_text(kind, progress_of(kind, decks[kind], now)))}</td></tr>")
@@ -162,7 +170,7 @@ try:
 except UnicodeEncodeError:        # 念のため：書き出せない文字が残っていても、下の「読み込む」「消す」は使えるようにする
     st.error("記録の中に、ファイルに書き出せない文字がありました。下の「ファイルから読み込む」で置き換えるか、「すべて消す」で消してください。")
 st.html(
-    f'<div class="mj-sub">{rb.html(f"入るもの：成績 {size.hands} 局・スタンプ {size.stamps} 役・ドリル {size.answers} 回ぶんの記録と、一人練習の設定。打っている途中の局は入らない。")}</div>'
+    f'<div class="mj-sub">{rb.html(f"入るもの：{size.text()}ぶんの記録と、一人練習・CPU との対局の設定。打っている途中の局・対局は入らない。")}</div>'
     # 押しても画面は変わらない（ブラウザがファイルを保存するだけ）。どこに入るかを、ここで言っておく
     f'<div class="mj-sub">{rb.html("iPhone では、確認が出たら「ダウンロード」を押す。ファイルは「ファイル」アプリの「ダウンロード」に入る。")}</div>'
 )
@@ -202,15 +210,15 @@ if incoming is not None:
     else:
         inside = summary_of_export(data)
         when = datetime_text(data.exported) if data.exported else "不明"
-        lines = [f"保存した日時：{when}（アプリの版 {data.app_version or '不明'}）", f"入っているもの：成績 {inside.hands} 局・スタンプ {inside.stamps} 役・ドリル {inside.answers} 回"]
+        lines = [f"保存した日時：{when}（アプリの版 {data.app_version or '不明'}）", f"入っているもの：{inside.text()}"]
         if data.skipped:
             lines.append(f"読めなかった成績が {data.skipped} 件あった（その記録は飛ばす）。")
         st.html('<div class="mj-card">' + "<br>".join(rb.html(line) for line in lines) + "</div>")
         how = st.radio("読み込み方", [MERGE, REPLACE], key=f"rc_w_how_{round_}")
         if how == MERGE:
-            st.caption("同じ局は 1 つにまとめます。スタンプとドリルの回数は、多いほうを採ります（足しません）。設定は、いまのままです。")
+            st.caption("同じ局・同じ対局は 1 つにまとめます。スタンプとドリルの回数は、多いほうを採ります（足しません）。設定は、いまのままです。")
         else:
-            st.caption(f"いまの記録（成績 {size.hands} 局・スタンプ {size.stamps} 役・ドリル {size.answers} 回）は消えて、ファイルの中身になります。設定も置き換えます。")
+            st.caption(f"いまの記録（{size.text()}）は消えて、ファイルの中身になります。設定も置き換えます。")
         st.button("読み込む", type="primary", on_click=_import, args=(round_, _digest(incoming)), key=f"rc_b_import_{round_}")
 
 # ---------------------------------------------------------------- 消す

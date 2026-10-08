@@ -45,7 +45,7 @@ TALL = 5000                  # 縦に長いページを 1 枚に収めるため�
 HEADER = 60                  # 画面の上の帯（メニューのボタン）の高さ
 MAIN = '[data-testid="stMain"]'
 LINK = f'{MAIN} a[data-testid="stPageLink-NavLink"]'
-PAGE_NAMES = ["ホーム", "一人練習", "点数計算ラボ", "役図鑑", "用語辞典", "ドリル", "卓で打つとき", "ルールの違い", "記録と保存", "実機チェック"]
+PAGE_NAMES = ["ホーム", "CPU と対局", "一人練習", "点数計算ラボ", "役図鑑", "用語辞典", "ドリル", "卓で打つとき", "ルールの違い", "記録と保存", "実機チェック"]
 #: 画面の文字が、渡した文字列（操作する前の内容）から変わったら真になる式
 MAIN_CHANGED = "t => document.querySelector('[data-testid=stMain]').innerText !== t"
 #: 要素の中の文字を、ルビ（読みがな）を除いて取り出す式。空白は 1 つにまとめる
@@ -516,8 +516,8 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
                 if kind == "reading":
                     expect(page.locator(f"{MAIN} ruby").count() == 0, "読みのドリルで、答える前に読み（ルビ）が見えている")
                 check_ruby(page, f"ドリル（{info.name}・答える前）")
-                if kind == "discard":
-                    expect(page.locator(".mj-hand-root .mj-tile").count() == 14, "何切るの手牌が 14 枚でない")
+                if kind in ("discard", "danger"):            # 手牌から 1 枚選ぶ問題（何切る・危険牌）
+                    expect(page.locator(".mj-hand-root .mj-tile").count() == 14, f"{info.name}の手牌が 14 枚でない")
                     page.locator(".mj-hand-root .mj-tile").first.tap()
                     page.wait_for_timeout(200)
                     page.locator(".mj-hand-root .mj-confirm").tap()
@@ -642,7 +642,7 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             context = new_context(script=storage_script(sample_records()))
             page = open_page(context, "/records")
             text = main_text(page)
-            expect("入るもの：成績 2 局・スタンプ 2 役・ドリル 8 回ぶんの記録" in text, "記録のまとめが違う")
+            expect("入るもの：一人練習 2 局・CPU との対局 0 回・スタンプ 2 役・ドリル 8 回ぶんの記録" in text, "記録のまとめが違う")
             shot(page, "19_records")
             check_ruby(page, "記録と保存")
             with page.expect_download() as download_info:
@@ -665,7 +665,7 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             settle(page, 800)
             page.locator('input[type="file"]').set_input_files(str(saved_file))
             page.get_by_role("button", name="読み込む").wait_for(timeout=20000)
-            expect("入っているもの：成績 2 局・スタンプ 2 役・ドリル 8 回" in main_text(page), "読み込む前の、ファイルの中身の説明が違う")
+            expect("入っているもの：一人練習 2 局・CPU との対局 0 回・スタンプ 2 役・ドリル 8 回" in main_text(page), "読み込む前の、ファイルの中身の説明が違う")
             shot(page, "20_records_import")
             page.get_by_role("button", name="読み込む").tap()
             page.wait_for_function("() => document.querySelector('[data-testid=stMain]').innerText.includes('読み込みました')", timeout=20000)
@@ -673,7 +673,7 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             result["import"] = {"scroll_after": round(scroll_top(page)), "history": len(json.loads(stored(page, "practice.history") or "[]"))}
             expect(scroll_top(page) == 0, "読み込んだあと、結果の案内（ページの上）が見える位置に戻らない")
             expect(result["import"]["history"] == 2 and set(json.loads(stored(page, "progress.stamps"))) == {"riichi", "sanshoku"}, f"読み込んだ記録が、保存されていない: {result['import']}")
-            expect("入るもの：成績 2 局・スタンプ 2 役・ドリル 8 回ぶんの記録" in main_text(page), "読み込んだあとのまとめが違う")
+            expect("入るもの：一人練習 2 局・CPU との対局 0 回・スタンプ 2 役・ドリル 8 回ぶんの記録" in main_text(page), "読み込んだあとのまとめが違う")
             shot(page, "21_records_imported")
             # 読み込んだ記録が、ほかのページに出る
             page.goto(base + "/yaku")

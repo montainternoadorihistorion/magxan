@@ -27,7 +27,7 @@ _BASE_STYLE = """
 }
 
 /* ---- ルビ（読みがな） */
-ruby { ruby-align: center; }
+ruby { ruby-align: center; white-space: nowrap; }      /* 用語の途中で行を変えない（読みが 2 行に割れないように） */
 ruby rt { font-size: max(0.6em, 9px); opacity: 0.9; user-select: none; }     /* 小さい文字のルビも、9px より小さくしない */
 /* 手牌のすぐ上の案内は、高さを固定してある（72px）。ルビを大きくすると 2 行に収まらず、巡によって手牌が動くので、元の大きさのまま */
 .mj-headline ruby rt { font-size: 0.55em; }
@@ -161,6 +161,8 @@ img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
   .mj-headline { min-height: 96px; }      /* 幅の狭い画面では 3 行になることが多い */
   .mj-headline-short { min-height: 0; }
 }
+/* CPU との対局の案内：上の行（何をするか）と下の行（なぜか）の 2 行。下の行は折り返さず、はみ出したら「…」 */
+.mj-headline-sub { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mj-headline.good, .mj-review.good { border-left-color: #2e9d57; }
 .mj-headline.soso, .mj-review.soso { border-left-color: #e8a400; }
 .mj-headline.bad, .mj-review.bad { border-left-color: #d9534f; }
@@ -303,6 +305,84 @@ div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] p { font-weigh
 .mj-guide-num { display: inline-block; min-width: 1.7em; padding: 0 5px; border-radius: 999px; background: rgba(74, 144, 217, 0.3); font-size: 13px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
 .mj-stats td { padding-left: 2px; padding-right: 2px; font-size: 13px; }
 .mj-stats tr.mj-skill td { background: rgba(46, 157, 87, 0.12); }
+
+/* ---- CPU との対局（views/game.py） */
+/* 上の札は 2 段ぶんの高さに固定する（局や山の残りで札の幅が変わっても、手牌の位置が動かないように） */
+.mj-game-status { min-height: 68px; }
+.mj-seats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 2px 0 8px; }
+.mj-seat {
+  position: relative;
+  min-height: 54px;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.mj-seat-me { background: rgba(74, 144, 217, 0.1); }
+/* 手番の印。枠の太さを変えると、マスの高さが変わって手牌が動くので、内側の影で太く見せる */
+.mj-seat-turn { border-color: #e8a400; box-shadow: inset 0 0 0 1px #e8a400; }
+.mj-seat-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 2; }
+.mj-seat-score { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mj-seat-dealer { margin-left: 3px; padding: 0 4px; border-radius: 999px; background: #d9534f; color: #fff; font-size: 10px; }
+.mj-seat-riichi { display: inline-block; padding: 0 5px; border-radius: 999px; background: #e8a400; color: #1b1b1b; font-size: 10px; font-weight: 700; line-height: 1.6; }
+/* リーチの印は、枠の上の辺に重ねる（名前・親の印・点数と重ならないように） */
+.mj-seat .mj-seat-riichi { position: absolute; right: 3px; top: -7px; line-height: 1.4; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6); }
+/* いちばん最近に切った牌（点数の右下）。自分が最後に行動したあとに切られた牌には枠を付ける */
+.mj-seat img.mj-img.mj-seat-tile { position: absolute; right: 4px; bottom: 4px; width: 17px; }
+.mj-seat img.mj-seat-tile.mj-tg { opacity: 0.6; }
+.mj-seat img.mj-seat-tile.mj-new { outline: 2px solid #e8a400; outline-offset: 0; opacity: 1; }
+/* 幅の狭い画面では、点数（100,000 点を超えることもある）と重なるので、最新の捨て牌は出さない（手牌の下の 1 行と河にある） */
+@media (max-width: 350px) {
+  .mj-seat img.mj-img.mj-seat-tile { display: none; }
+  .mj-seat { padding: 3px 4px; }
+  .mj-seat-name { font-size: 10.5px; }
+  .mj-seat-dealer { margin-left: 1px; padding: 0 3px; }
+}
+.mj-moves { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 2px 0 4px; font-size: 13px; line-height: 1.8; }
+.mj-move { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.mj-move-who { opacity: 0.8; }
+.mj-move-word { color: #c98a00; }
+.mj-move-tg { font-size: 10.5px; opacity: 0.65; }
+.mj-move-sep { opacity: 0.45; }
+.mj-moves img.mj-img.mj-s { width: 22px; }
+.mj-table4 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin-top: 4px; }
+.mj-riverbox { min-width: 0; }
+.mj-river.mj-river-s { grid-template-columns: repeat(6, 23px); gap: 3px 2px; }
+.mj-river.mj-river-s > span { width: 23px; height: 31px; }
+.mj-river.mj-river-s img.mj-img { width: 23px; }
+/* 危険牌のドリルの河：手牌と「この牌を切る」が最初の画面に入り、問題が変わっても位置が動かないように、
+   小さめの牌を 8 枚ずつ並べ、いつも 2 段ぶんの高さを取る（16 枚まで。問題の河は、ほぼ 16 枚以内） */
+.mj-river.mj-river-xs { grid-template-columns: repeat(8, 18px); gap: 2px 2px; margin-top: 2px; min-height: 50px; align-content: start; }
+.mj-river.mj-river-xs > span { width: 18px; height: 24px; }
+.mj-river.mj-river-xs img.mj-img { width: 18px; }
+.mj-river.mj-river-xs .mj-cap { grid-column: 1 / -1; }
+.mj-river img.mj-tg { opacity: 0.6; }
+.mj-river img.mj-new { outline: 2px solid #e8a400; outline-offset: 0; opacity: 1; }
+.mj-alertnote { margin: 4px 0; padding: 6px 10px; border-left: 4px solid #b25e00; border-radius: 4px; background: rgba(178, 94, 0, 0.1); font-size: 13.5px; line-height: 1.8; }
+.mj-step { border-bottom: 1px solid rgba(128, 128, 128, 0.25); padding: 6px 0; }
+.mj-step-head { font-size: 13.5px; line-height: 1.7; }
+.mj-danger td { vertical-align: middle; }
+.mj-danger-tile { white-space: nowrap; width: 3.2em; }
+.mj-danger-tile img.mj-img.mj-s { width: 26px; }
+.mj-danger-why { margin: 2px 0 0; padding-left: 1.2em; font-size: 12.5px; line-height: 1.7; }
+.mj-level-chip { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.7; }
+.mj-level-chip.lv0 { background: rgba(46, 157, 87, 0.35); }
+.mj-level-chip.lv1 { background: rgba(46, 157, 87, 0.2); }
+.mj-level-chip.lv2 { background: rgba(74, 144, 217, 0.25); }
+.mj-level-chip.lv3 { background: rgba(232, 164, 0, 0.3); }
+.mj-level-chip.lv4 { background: rgba(217, 83, 79, 0.3); }
+.mj-level-chip.lv5 { background: rgba(217, 83, 79, 0.55); }
+.mj-riichi-table td { vertical-align: middle; font-size: 13px; }
+.mj-hint { border-bottom: 1px solid rgba(128, 128, 128, 0.25); padding: 6px 0; }
+.mj-hint-head { font-size: 14px; font-weight: 700; }
+.mj-result-card.good { border-color: #2e9d57; background: rgba(46, 157, 87, 0.08); }
+.mj-result-card.bad { border-color: #d9534f; background: rgba(217, 83, 79, 0.08); }
+.mj-settle td { font-size: 13px; }
+.mj-settle td:first-child { white-space: nowrap; }
+.mj-reveal { border-bottom: 1px solid rgba(128, 128, 128, 0.25); padding: 6px 0 8px; }
+.mj-reveal .mj-hand { margin-top: 2px; }
 </style>
 """
 

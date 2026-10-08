@@ -834,7 +834,7 @@ def shapeless_tip(state: PracticeState) -> str:
 def coach_note_text(target: str | None) -> str:
     """設定の「コーチ」の説明：おすすめを、何で決めているか（狙う役によって変わる）"""
     if target is None:
-        return "コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役や打点との兼ね合いは、対局のコーチで扱う予定です。"
+        return "コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役の候補・リーチとダマの比べ方・守備は、「CPU と対局」のコーチで見られます。"
     name = target_name(target)
     if target in DEAL_TENPAI_TARGETS:
         return (

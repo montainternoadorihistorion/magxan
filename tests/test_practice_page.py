@@ -694,14 +694,14 @@ def test_tsumo_button_lives_in_the_hand_bar():
     state = find(LuckSettings(75, 75), lambda s: s.can_tsumo)
     at = open_practice({HAND_NAME: hand_json(state)})
     hand = component_data(at, "mjdojo_tile_hand")
-    assert hand["actionLabel"] == "ツモ（あがる）" and hand["riichiIds"] == []
+    assert hand["actions"] == [{"key": "tsumo", "label": "ツモ（あがる）", "style": "win"}] and hand["riichiIds"] == []
     assert "ツモ（あがる）" not in [b.label for b in at.button]          # 別のボタンとしては、もう置かない
     assert "「ツモ（あがる）」を押すと、あがれます。" in page_text(at)
     press_action(at)
     assert at.session_state["pr_state"].finished and at.session_state["pr_state"].result.outcome is Outcome.TSUMO
 
     playing = open_practice({HAND_NAME: hand_json(find(LuckSettings(75, 75), lambda s: not s.can_tsumo and s.turn >= 2))})
-    assert component_data(playing, "mjdojo_tile_hand")["actionLabel"] == ""         # あがれない巡目には出さない
+    assert component_data(playing, "mjdojo_tile_hand")["actions"] == []         # あがれない巡目には出さない
 
 
 def test_picking_a_tile_in_the_hand_component_plays_the_turn():
