@@ -15,7 +15,7 @@ from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS
 from engine.coach import analyze
 from engine.content import yaku_page_map
 from engine.luck import PRESETS
-from engine.practice import DEAL_TENPAI_TARGETS, Outcome
+from engine.practice import Outcome
 from engine.records import summarize, target_stats
 from engine.scoring.explain import explain
 from engine.target_coach import target_result, wants_riichi
@@ -63,6 +63,7 @@ from ui.practice_view import (
     target_guide_html,
     target_headline_html,
     target_name,
+    target_note_text,
     target_result_html,
     target_speed_note_html,
     target_stats_html,
@@ -251,13 +252,16 @@ aiming = target is not None and target not in SHAPELESS_KEYS       # 手の形�
 # 折りたたみの中身は rb.fork() に通す（閉じていると読まれないので、そこで振ったルビを「もう出てきた」と数えない）
 rb = Rubifier()
 
-st.html(status_html(state, rb))
+analysis = advice = None
+if not state.finished:
+    analysis = analyze(practice.position_of(state)) if hint == HINT_BEFORE else None
+    advice = practice.target_advice_of(state) if analysis is not None and aiming else None
+# 狙う役が、この局ではもう付かない・作れないことは、上の札に書く（見出しに足すと 3 行になって、手牌が下がる）
+st.html(status_html(state, rb, target_note=target_note_text(state, advice)))
 
 if not state.finished:
     # ---- 打っている途中
     last = session.last_decision
-    analysis = analyze(practice.position_of(state)) if hint == HINT_BEFORE else None
-    advice = practice.target_advice_of(state) if analysis is not None and aiming else None
     # リーチが要る役（立直・一発・ダブル立直）を狙う局で、聴牌にとれる：「リーチして切る」を勧める（リーチのボタンにも ◎）
     riichi_on = analysis is not None and wants_riichi(analysis, target, first=not state.discards)
 
@@ -272,11 +276,7 @@ if not state.finished:
         elif riichi_on:
             st.html(riichi_headline_html(analysis, target, rb))
         else:
-            lead = ""
-            if target in DEAL_TENPAI_TARGETS and state.discards and state.riichi_index is None:
-                # ダブル立直は、最初の打牌でリーチしたときだけ付く（2 打目からは、ふつうの局と同じ）
-                lead = f'<span class="mj-chip mj-chip-luck">{rb.html(f"{target_name(target)}は、もう付かない")}</span> '
-            st.html(advice_headline_html(analysis, rb, can_riichi=can_riichi, lead=lead))
+            st.html(advice_headline_html(analysis, rb, can_riichi=can_riichi))
     elif hint == HINT_AFTER:
         if last is not None and last.target is not None:
             st.html(target_verdict_headline_html(last, rb, aka=aka))

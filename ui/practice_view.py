@@ -92,8 +92,11 @@ def luck_text(deal: int, draw: int) -> str:
     return f"ツキ補正：配牌 {deal}・ツモ {draw}"
 
 
-def status_html(state: PracticeState, rb: Rubifier) -> str:
-    """場・自風・巡目・ドラ・ツキ補正の強さ"""
+def status_html(state: PracticeState, rb: Rubifier, *, target_note: str = "") -> str:
+    """場・自風・巡目・ドラ・ツキ補正の強さ・狙う役。
+
+    target_note は、狙う役の札に添えるひとこと（「もう作れない」など）。見出しに足すと 3 行になって手牌が下がるので、ここに書く。
+    """
     aka = state.config.rules.aka_dora
     luck = state.config.luck
     seat = WIND_NAMES[state.seat_wind]
@@ -115,7 +118,8 @@ def status_html(state: PracticeState, rb: Rubifier) -> str:
     off = " mj-chip-plain" if luck.is_off else " mj-chip-luck"
     html += f'<span class="mj-chip{off}"><span>{rb.html(luck_text(luck.deal, luck.draw))}</span></span>'
     if state.config.target:
-        html += f'<span class="mj-chip mj-chip-target"><span>{rb.html(f"役指定：{target_name(state.config.target)}")}</span></span>'
+        note = f"（{target_note}）" if target_note else ""
+        html += f'<span class="mj-chip mj-chip-target"><span>{rb.html(f"役指定：{target_name(state.config.target)}{note}")}</span></span>'
     return f'<div class="mj-chips mj-statusbar mj-status-fixed">{html}</div>'
 
 
@@ -629,7 +633,13 @@ def hand_summary_html(state: PracticeState, decisions: Sequence[Decision], rb: R
         rows.append(f"<li>{rb.html(f'打牌：{name}を狙えた {len(aimed)} 回のうち、役にいちばん近い切り方は {best} 回（{percent(best / len(aimed))}）。')}</li>")
     elif decisions:
         best = sum(1 for d in decisions if d.verdict.is_best)
-        what = "おすすめどおりの打牌（速さ・聴牌したらリーチ）" if state.config.target in RIICHI_TARGETS else "いちばん速い打牌"
+        key = state.config.target
+        if key in DEAL_TENPAI_TARGETS:          # ダブル立直は、最初の打牌だけリーチを勧める
+            what = "おすすめどおりの打牌（速さ・最初の打牌でリーチ）"
+        elif key in RIICHI_TARGETS:
+            what = "おすすめどおりの打牌（速さ・聴牌したらリーチ）"
+        else:
+            what = "いちばん速い打牌"
         rows.append(f"<li>{rb.html(f'打牌：自分で選んだ {len(decisions)} 回のうち、{what}は {best} 回（{percent(best / len(decisions))}）。')}</li>")
     note = "" if counted else f'<div class="mj-sub">{rb.html("この局は、やり直し・番号を指定した局なので、成績には入れていない（スタンプは押す）。")}</div>'
     return f'<div class="mj-card"><div class="mj-chips">{chips}</div><ul class="mj-rules">{"".join(rows)}</ul>{note}</div>'
@@ -826,6 +836,11 @@ def coach_note_text(target: str | None) -> str:
     if target is None:
         return "コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役や打点との兼ね合いは、対局のコーチで扱う予定です。"
     name = target_name(target)
+    if target in DEAL_TENPAI_TARGETS:
+        return (
+            f"コーチのおすすめは、速さ（向聴数と受け入れ枚数）で決めます。{name}を狙う局では、最初の打牌で聴牌にとれたら"
+            "「リーチして切る」を勧めます（2 打目からは、ふつうの局と同じ）。"
+        )
     if target in RIICHI_TARGETS:
         return f"コーチのおすすめは、速さ（向聴数と受け入れ枚数）で決めます。{name}を狙う局では、聴牌にとれたら「リーチして切る」を勧めます。"
     if target in SHAPELESS_KEYS:
@@ -878,13 +893,14 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
         if analysis.last_discard:
             return _headline(f'<b class="mj-stage">あがりの形です。</b>{rb.html(f"{name}は付きませんが、最後のツモなので、あがりましょう。")}', "good")
         # 役の付かないあがりの形（嵌張待ちの平和、高点法でほかの読み方になる、など）：あがるか、狙い続けるかを選べる
-        stage = f'<b class="mj-stage">{rb.html(f"あがりの形ですが、{name}は付きません")}</b>'
+        # 役の名前が 5 文字（混全帯么九など）でも 1 行に収まる長さにする
+        stage = f'<b class="mj-stage">{rb.html(f"あがれますが、{name}は付きません")}</b>'
         if advice.pick is None:             # もう作れない（必要な牌が見えてしまった）
             return _headline(f'{stage}<br><span class="mj-sub">{rb.html(f"{name}は、もう作れません。ツモであがりましょう。")}</span>', "soso")
         return _headline(f'{stage}<br><span class="mj-sub">{rb.html(f"ツモであがるか、{MARK_PICK[0]} を切って狙い続けるか。")}</span>', "soso")
     if not advice.possible or advice.pick is None:
-        lead = f'<span class="mj-chip mj-chip-luck">{rb.html(f"{name}は、もう作れない")}</span> '
-        return advice_headline_html(analysis, rb, can_riichi=can_riichi, lead=lead)
+        # もう作れない：あとは速さのおすすめ（作れないことは、上の札に書く。target_note_text）
+        return advice_headline_html(analysis, rb, can_riichi=can_riichi)
     pick = advice.pick
     what = f"{_small(pick.tile, aka)} <b>{escape(_name(pick.tile, aka))}</b>"
     width = f"{pick.kinds} 種 {pick.total} 枚"
@@ -893,6 +909,21 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
     else:
         body = f'<b class="mj-stage">{rb.html(f"{name}まで あと {pick.missing} 枚")}</b>　おすすめ：{what} {rb.html(f"切り（近づく牌 {width}）")}'
     return _headline(body)
+
+
+def target_note_text(state: PracticeState, advice: TargetAdvice | None) -> str:
+    """狙う役の札に添えるひとこと：この局では、もうその役が付かない・作れないとき（それ以外は空）。
+
+    ダブル立直は、最初の打牌でリーチしなかったら、もう付かない。手の形で決まる役は、必要な牌が見えてしまったら作れない
+    （advice は、打つ前のヒントを出すときだけ調べてある）。
+    """
+    if state.finished or state.config.target is None:
+        return ""
+    if state.config.target in DEAL_TENPAI_TARGETS and state.discards and state.riichi_index is None:
+        return "この局は、もう付かない"
+    if advice is not None and not advice.won and not advice.possible:
+        return "もう作れない"
+    return ""
 
 
 def target_speed_note_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier) -> str:

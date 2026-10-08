@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from engine import practice
@@ -466,6 +468,12 @@ def test_tenpai_without_riichi_is_judged_against_riichi_targets():
         assert judge_riichi_target(declared, key, tile, position, first=True) is declared       # リーチした打牌は、そのまま
     assert "この局では、もう付かない" in judge_riichi_target(quiet, "double_riichi", tile, position, first=True).text
     assert "次の巡でもリーチできる" in "".join(judge_riichi_target(quiet, "riichi", tile, position, first=False).reasons)
+    # 次の巡にツモが残っていない（このあと 1 回だけツモれる）ときは、「次の巡でもリーチできる」とは言わない
+    near_end = replace(position, draws_left=1)
+    late = judge_discard(analyze(near_end), tile)
+    assert late.missed_riichi
+    assert "次の巡でもリーチできる" not in "".join(judge_riichi_target(late, "riichi", tile, near_end, first=False).reasons)
+    assert "1 巡以内に、誰も鳴かないうちに" in judge_riichi_target(quiet, "ippatsu", tile, position, first=False).text
     # ダブル立直は最初の打牌だけを見る。リーチが要らない役・ふつうの局では、評価を変えない
     assert judge_riichi_target(quiet, "double_riichi", tile, position, first=False) is quiet
     for key in ("menzen_tsumo", "pinfu", None):

@@ -736,7 +736,8 @@ def test_double_riichi_hand_asks_for_riichi_and_marks_a_skipped_one():
     decision = at.session_state["pr_decisions"][-1]
     assert decision.verdict.grade.value == "no_riichi"
     text = page_text(at)
-    assert "ダブル立直は、もう付かない" in text and "リーチを宣言しなかった" in text
+    # もう付かないことは、上の札に書く（見出しに足すと 3 行になって、手牌が下がる）
+    assert "役指定：ダブル立直（この局は、もう付かない）" in text and "リーチを宣言しなかった" in text
     assert component_data(at, "mjdojo_tile_hand")["riichiLabel"] == "リーチ"     # 2 打目からは、リーチを勧めない
     assert missing_ruby(page_parts(at)) == []
 

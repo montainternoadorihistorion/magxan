@@ -58,6 +58,7 @@ from ui.practice_view import (
     target_guide_html,
     target_headline_html,
     target_name,
+    target_note_text,
     target_result_html,
     target_speed_note_html,
     target_stats_html,
@@ -184,10 +185,14 @@ def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()
     折りたたみやリンクの名前は、ルビを振れない文字として、範囲 0 に入れる（そこに出てくる用語は、先に読みが出ていないといけない）。
     """
     ruby = rb()
-    pieces: list[tuple[str, int]] = [(status_html(state, ruby), 0)]
-    scope = 0
     target = state.config.target
     aiming = target is not None and target not in SHAPELESS_KEYS
+    analysis = advice = None
+    if not state.finished:
+        analysis = analyze(practice.position_of(state)) if hint == "before" else None
+        advice = practice.target_advice_of(state) if analysis is not None and aiming else None
+    pieces: list[tuple[str, int]] = [(status_html(state, ruby, target_note=target_note_text(state, advice)), 0)]
+    scope = 0
     luck = state.config.luck
 
     def folded(make, label: str) -> None:
@@ -198,8 +203,6 @@ def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()
 
     if not state.finished:
         last = decisions[-1] if decisions else None
-        analysis = analyze(practice.position_of(state)) if hint == "before" else None
-        advice = practice.target_advice_of(state) if analysis is not None and aiming else None
         if analysis is not None:
             can_riichi = bool(state.riichi_discards)
             if advice is not None:
@@ -210,10 +213,7 @@ def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()
             elif wants_riichi(analysis, target, first=not state.discards):
                 pieces.append((riichi_headline_html(analysis, target, ruby), 0))
             else:
-                lead = ""
-                if target in practice.DEAL_TENPAI_TARGETS and state.discards and state.riichi_index is None:
-                    lead = f'<span class="mj-chip mj-chip-luck">{ruby.html(f"{target_name(target)}は、もう付かない")}</span> '
-                pieces.append((advice_headline_html(analysis, ruby, can_riichi=can_riichi, lead=lead), 0))
+                pieces.append((advice_headline_html(analysis, ruby, can_riichi=can_riichi), 0))
         elif hint == "after":
             if last is not None and last.target is not None:
                 pieces.append((target_verdict_headline_html(last, ruby, aka=True), 0))
@@ -855,10 +855,17 @@ def test_target_headline_names_the_distance_and_the_discard():
 
 def test_target_headline_when_the_yaku_can_no_longer_be_made():
     pos = position("19m19p19s123456z55m", visible="7777z")          # 中が 4 枚とも見えている
-    html = target_headline_html(target_advice(pos, "kokushi"), analyze(pos), rb(), can_riichi=False)
+    advice = target_advice(pos, "kokushi")
+    html = target_headline_html(advice, analyze(pos), rb(), can_riichi=False)
     text = text_of(html)
-    assert text.startswith("国士無双は、もう作れない") and "おすすめ" in text and "mj-chip-luck" in html      # あとは、速さのおすすめ
+    # あとは、速さのおすすめ。作れないことは、見出しではなく上の札に書く（見出しが 3 行になると、手牌が下がる）
+    assert text == text_of(advice_headline_html(analyze(pos), rb(), can_riichi=False)) and "おすすめ" in text
     assert missing_ruby(ruby_parts(html)) == []
+    state = start_on(crafted_wall(TENPAI_HAND, "9m"))
+    aimed = replace(state, config=replace(state.config, target="kokushi"))
+    assert target_note_text(aimed, advice) == "もう作れない"
+    assert "役指定：国士無双（もう作れない）" in text_of(status_html(aimed, rb(), target_note="もう作れない"))
+    assert target_note_text(aimed, None) == "" and target_note_text(state, advice) == ""
 
 
 def test_target_headline_on_a_winning_shape():
@@ -874,7 +881,7 @@ def test_target_headline_on_a_winning_shape():
     assert not advice.won and advice.pick is not None                # 狙い続けるなら、どれを切るかも示す
     html = target_headline_html(advice, analyze(missed), rb(), can_riichi=False, win=result)
     # 見出しは 2 行まで（3 行になると、その巡だけ手牌の位置が下がる）。どれを切るかは ◎ で示し、あと何枚かは手牌の下に出す
-    assert text_of(html) == "あがりの形ですが、三色同順は付きませんツモであがるか、◎ を切って狙い続けるか。" and "soso" in html
+    assert text_of(html) == "あがれますが、三色同順は付きませんツモであがるか、◎ を切って狙い続けるか。" and "soso" in html
     note = text_of(target_speed_note_html(advice, analyze(missed), rb()))
     assert note == "三色同順を狙い続けるなら  1索 切り（三色同順の完成まで あと 1 枚）。"
     hopeless = replace(advice, possible=False, candidates=(), pick=None)
@@ -1151,12 +1158,12 @@ def test_skipped_riichi_is_shown_as_a_miss_with_the_riichi_advice():
     headline = verdict_headline_html(decision, rb(), aka=True)
     assert text_of(headline) == f"✗  {name} 切り：リーチしなかったおすすめは リーチして  {name} 切り" and "bad" in headline
     card = text_of(verdict_html(decision, rb(), level=LEVEL_FULL, aka=True))
-    assert "リーチを宣言しなかった。ダブル立直は、最初の打牌でリーチを宣言したときだけ付く。" in card
+    assert "リーチを宣言しなかった。ダブル立直は、最初の自分の番に、誰も鳴かないうちにリーチを宣言したときだけ付く。" in card
     review = text_of(review_list_html([decision], rb(), aka=True))
     assert "✗" in review and "リーチしなかった" in review and "おすすめは リーチして" in review
     finished = practice.apply(state, discard(tile_id))
     summary = text_of(hand_summary_html(finished, [decision], rb(), counted=True))
-    assert "打牌：自分で選んだ 1 回のうち、おすすめどおりの打牌（速さ・聴牌したらリーチ）は 0 回（0%）。" in summary
+    assert "打牌：自分で選んだ 1 回のうち、おすすめどおりの打牌（速さ・最初の打牌でリーチ）は 0 回（0%）。" in summary
     declared = practice.assess(state, riichi(tile_id))
     assert "おすすめは" not in text_of(verdict_headline_html(declared, rb(), aka=True))
 
@@ -1164,6 +1171,7 @@ def test_skipped_riichi_is_shown_as_a_miss_with_the_riichi_advice():
 def test_coach_note_follows_the_target():
     assert coach_note_text(None).startswith("コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。")
     assert "聴牌にとれたら「リーチして切る」を勧めます" in coach_note_text("ippatsu")
+    assert "最初の打牌で聴牌にとれたら「リーチして切る」を勧めます（2 打目からは、ふつうの局と同じ）" in coach_note_text("double_riichi")
     assert "手の形を問わない役なので" in coach_note_text("menzen_tsumo")
     pinfu = coach_note_text("pinfu")
     assert pinfu == "平和を狙う局では、コーチは、平和への近さで切る牌を勧めます。受け入れ表は、速さだけで見たものです。"

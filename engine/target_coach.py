@@ -59,11 +59,11 @@ UPGRADES: dict[str, tuple[str, ...]] = {
 BLOCK_NAMES = {BlockKind.SEQUENCE: "順子", BlockKind.SET: "刻子", BlockKind.PAIR: "雀頭", BlockKind.SINGLE: "1 枚", BlockKind.RYANMEN: "両面"}
 #: リーチを宣言しないと付かない役（手の形を問わない役のうち）。狙う局では、聴牌にとれたら「リーチして切る」を勧める
 RIICHI_TARGETS = frozenset({"riichi", "ippatsu", "double_riichi"})
-#: リーチが要る役ごとの、リーチしなかったときのひとこと
+#: リーチが要る役ごとの、リーチしなかったときのひとこと（役の条件そのものは、役図鑑と同じ言い方にする）
 _NO_RIICHI_TEXTS = {
     "riichi": "{name}は、リーチを宣言しないと付かない。",
-    "ippatsu": "{name}は、リーチを宣言して、そのすぐ次のツモであがったときに付く。まず、リーチが要る。",
-    "double_riichi": "{name}は、最初の打牌でリーチを宣言したときだけ付く。この局では、もう付かない。",
+    "ippatsu": "{name}は、リーチのあと 1 巡以内に、誰も鳴かないうちにあがると付く（一人練習では、リーチのすぐ次のツモ）。まず、リーチが要る。",
+    "double_riichi": "{name}は、最初の自分の番に、誰も鳴かないうちにリーチを宣言したときだけ付く。この局では、もう付かない。",
 }
 
 
@@ -386,7 +386,8 @@ def judge_riichi_target(verdict: Verdict, key: str | None, tile: int, position: 
     name = yaku_page_map()[key].name
     text = f"{_tile_text(tile, position)}切りで聴牌したが、リーチを宣言しなかった。" + _NO_RIICHI_TEXTS[key].format(name=name)
     reasons = ["リーチするときは、先に「リーチ」を押してから、切る牌を選ぶ。"]
-    if key != "double_riichi":
+    # 次の巡でリーチできるのは、そのあとにもう 1 回以上ツモが残っているときだけ（リーチは、ツモが残っていないとできない）
+    if key != "double_riichi" and position.draws_left >= 2:
         reasons.append("聴牌をくずさなければ、次の巡でもリーチできる。")
     if not verdict.is_best:             # 切った牌そのものも、速さで見て一番ではなかった
         reasons.append(verdict.text)
