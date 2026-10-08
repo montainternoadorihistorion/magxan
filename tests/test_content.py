@@ -290,6 +290,23 @@ def test_stats_cover_every_page():
     assert all(ref.url.startswith("https://") and ref.seen and ref.text.endswith("。") for ref in stats.references)
 
 
+def test_combined_counts_are_marked_and_explained(monkeypatch):
+    """出典が 2 つの役をまとめて数えている回数（四喜和）は、そのことが分かる形で持つ"""
+    stats = content.yaku_stats().pages
+    assert {key for key, stat in stats.items() if stat.combined} == {"shousuushii", "daisuushii"}
+    assert stats["shousuushii"].count == stats["daisuushii"].count and stats["daisuushii"].note
+    raw = content._load("yaku_stats.yaml")
+    raw["counts"]["daisuushii"] = {"count": 96, "combined": "四喜和"}          # 説明（note）が無い
+    monkeypatch.setattr(content, "_load", lambda name: raw)
+    content.yaku_stats.cache_clear()
+    try:
+        with pytest.raises(ContentError):
+            content.yaku_stats()
+    finally:
+        monkeypatch.undo()
+        content.yaku_stats.cache_clear()
+
+
 def test_frequency_levels():
     stats = content.yaku_stats().pages
     levels = {key: stat.level for key, stat in stats.items()}

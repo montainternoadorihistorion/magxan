@@ -311,6 +311,19 @@ def test_frequency_shows_the_numbers_and_their_source():
             assert stats.pages[page.key].level in text_of(frequency_html(page, stats, rb()))
 
 
+def test_frequency_of_a_combined_count_does_not_claim_it_for_one_yaku():
+    """出典が小四喜と大四喜をまとめて数えている。その回数を、片方の役だけの回数のようには書かない"""
+    stats = yaku_stats()
+    for key in ("shousuushii", "daisuushii"):
+        stat = stats.pages[key]
+        assert stat.combined and stat.note
+        text = text_of(frequency_html(BY_KEY[key], stats, rb()))
+        assert f"{stat.combined}として、和了 {stat.total:,} 回のうち {stat.count:,} 回" in text, text
+        assert "この役だけの回数は、分からない" in text and stat.note in text
+    alone = text_of(frequency_html(BY_KEY["kokushi"], stats, rb()))
+    assert "として、" not in alone and "分からない" not in alone
+
+
 def test_frequency_never_writes_a_small_rate_as_zero_percent():
     stats = yaku_stats()
     for page in PAGES:

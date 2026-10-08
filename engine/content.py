@@ -397,6 +397,7 @@ class YakuStat:
     total: int                 # 分母（ふつうは和了数。流し満貫だけは局数）
     per: str = "和了"          # 分母の呼び方
     note: str = ""
+    combined: str = ""         # 出典がほかの役とまとめて数えているとき、そのまとまりの名前（回数は、まとまり全体のもの）
 
     @property
     def rate(self) -> float:
@@ -450,9 +451,11 @@ def yaku_stats() -> YakuStats:
         if isinstance(value, int) and not isinstance(value, bool):
             pages[key] = YakuStat(value, source.wins)
             continue
-        entry = _take(value, where, count=(int, ...), per=(str, "和了"), note=(str, ""))
+        entry = _take(value, where, count=(int, ...), per=(str, "和了"), note=(str, ""), combined=(str, ""))
+        if entry["combined"] and not entry["note"].strip():
+            raise ContentError(f"{where}: まとめて数えた回数（combined）には、そのことを説明する note が要る")
         total = source.hands if entry["per"] == "局" else source.wins
-        pages[key] = YakuStat(entry["count"], total, entry["per"], entry["note"].strip())
+        pages[key] = YakuStat(entry["count"], total, entry["per"], entry["note"].strip(), entry["combined"].strip())
     references = []
     for index, item in enumerate(data["references"]):
         raw = _take(

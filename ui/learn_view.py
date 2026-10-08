@@ -280,6 +280,9 @@ def frequency_html(page: YakuPage, stats: YakuStats, rb: Rubifier) -> str:
         rate = f"{stat.per} {stat.total:,} 回のうち {stat.count:,} 回（{_rate(stat.rate)}。約 {stat.one_in:,} 回に 1 回）"
     else:
         rate = f"{stat.per} {stat.total:,} 回のうち 0 回"
+    if stat.combined:
+        # 出典がほかの役とまとめて数えている。この役だけの回数は分からないので、まとまりの回数として出す
+        rate = f"{stat.combined}として、{rate}。この役だけの回数は、分からない"
     html = (
         f'<div class="mj-note"><span class="mj-chip mj-freq-{LEVEL_CLASS[stat.level]}">{escape(stat.level)}</span> {rb.html(rate)}</div>'
         f'<div class="mj-sub">出典：<a href="{escape(source.url, quote=True)}" target="_blank" rel="noopener noreferrer">{escape(source.title)}</a>'

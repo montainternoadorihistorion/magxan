@@ -99,6 +99,26 @@ def test_examples_say_what_the_engine_says():
     assert shanten_of(counts34(parse_tiles(TERMS["高点法"].example))) == -1
 
 
+def test_kata_agari_note_says_what_the_scoring_says():
+    """片あがりの例（鳴いていない 13 枚）：4萬 のロンは断么九であがれる。1萬 のロンは役なし。1萬 のツモは門前清自摸和"""
+    from engine.scoring.explain import Status, explain
+    from engine.scoring.notation import make_context
+
+    hand = TERMS["片あがり"].example
+    south = {"seat_wind": 28, "round_wind": 27}
+
+    def result(win: str, **flags):
+        return explain(make_context(hand, win, **south, **flags))
+
+    high = result("4m")
+    assert high.status is Status.WIN and {y.key for y in high.best.evaluation.yaku} == {"tanyao"}
+    assert result("1m").status is Status.NO_YAKU
+    low_tsumo = result("1m", is_tsumo=True)
+    assert low_tsumo.status is Status.WIN and {y.key for y in low_tsumo.best.evaluation.yaku} == {"menzen_tsumo"}
+    note = TERMS["片あがり"].example_note
+    assert "断么九" in note and "ロンできない" in note and "門前清自摸和" in note
+
+
 def test_readings_table_keeps_everything_it_had():
     for term, reading in OLD_READINGS.items():
         assert READINGS[term] == reading, term
