@@ -341,12 +341,17 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
                 review = page.locator(".mj-review").first.evaluate(TEXT_WITHOUT_RUBY)
                 result["target_review"] = review
                 expect("三色同順" in review and "✓" in review, f"おすすめを切ったのに、評価が違う: {review}")
-            # 何巡打っても、手牌の位置が動かない（案内の長さが変わっても、見出しの高さは同じ）
+            # 何巡打っても、手牌の位置が動かない（案内の長さが変わっても、見出しの高さは同じ）。あがりの形の巡も含めて測る
             hand_tops = []
             for _ in range(8):
-                if page.locator(".mj-hand-root .mj-tile").count() != 14 or page.get_by_role("button", name="ツモ（あがる）").count():
+                if page.locator(".mj-hand-root .mj-tile").count() != 14:
                     break
                 hand_tops.append(round(page.locator(".mj-hand-root .mj-tile").first.evaluate("e => e.getBoundingClientRect().top"), 1))
+                if page.get_by_role("button", name="ツモ（あがる）").count():
+                    tsumo = page.get_by_role("button", name="ツモ（あがる）").evaluate("e => e.getBoundingClientRect().bottom")
+                    result["target_tsumo_bottom"] = round(tsumo)
+                    expect(tsumo <= HEIGHT, f"役指定練習で、「ツモ（あがる）」が最初の画面に収まっていない（下端 {tsumo:.0f}px）")
+                    break
                 marked = page.locator(".mj-hand-root .mj-tile", has=page.locator(".mj-mark"))
                 (marked.first if marked.count() else page.locator(".mj-hand-root .mj-tile").last).tap()
                 page.wait_for_timeout(200)
@@ -480,7 +485,9 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             page.close()
             page = open_page(context, "/rules")
             rules = rule_book()
-            expect(page.locator("details").count() == sum(1 for group in rules.groups if rules.of(group)) + 1, "ルールの違いの折りたたみの数が違う")
+            # 「余裕があれば聞くこと」・まとまりごと・「調べた資料と、注意」
+            expect(page.locator("details").count() == sum(1 for group in rules.groups if rules.of(group)) + 2, "ルールの違いの折りたたみの数が違う")
+            expect("まず聞いておくこと（5 つ）" in main_text(page), "ルールの違いに「まず聞いておくこと」が出ていない")
             expect("★ 卓に着く前に確かめること" in main_text(page), "卓に着く前に確かめること、が出ていない")
             shot(page, "14_rules")
             check_ruby(page, "ルールの違い")
@@ -528,9 +535,9 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
                         confirm.tap()
                     else:                                  # 1 つ選ぶ問題：押した選択肢が、そのまま答えになる
                         options.first.evaluate("e => { e.click(); e.click(); }")      # 続けて 2 回押しても、答えは 1 回だけ
-                page.get_by_role("button", name="次の問題").wait_for(timeout=20000)
+                page.get_by_role("button", name="次の問題").first.wait_for(timeout=20000)
                 settle(page, 500)
-                banner = page.locator(".mj-headline-short").first.evaluate(TEXT_WITHOUT_RUBY)
+                banner = page.locator(".mj-verdict").first.evaluate(TEXT_WITHOUT_RUBY)
                 entry["banner"] = banner
                 expect(banner.startswith(("○ 正解", "✗ ちがう")), f"{info.name}: 正解・不正解が出ていない: {banner}")
                 expect("この回 1 問・正解" in main_text(page), f"{info.name}: この回の数が違う（2 回数えた？）")
@@ -543,12 +550,52 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
                 context.close()
             result["drills"] = drills
 
+            # 答えた直後は、正解・不正解の帯と「次の問題」が、スマホの高さの画面に見えている（画面の下に隠れない）。
+            # 何切るでは、切った牌に印が付き、押せない「この牌を切る」は消える
+            reach: dict[str, dict] = {}
+            for kind in ("discard", "score", "yaku", "reading"):
+                context = new_context(height=HEIGHT)
+                page = open_page(context, f"/drill?k={kind}", wait=".mj-prompt")
+                if kind == "discard":
+                    page.locator(".mj-hand-root .mj-tile").nth(3).tap()
+                    page.wait_for_timeout(200)
+                    page.locator(".mj-hand-root .mj-confirm").tap()
+                else:
+                    options = page.locator(".mj-choices-root .mj-opt")
+                    if kind == "yaku":
+                        options.first.tap()
+                        page.wait_for_timeout(200)
+                        confirm = page.locator(".mj-choices-root .mj-confirm")
+                        confirm.scroll_into_view_if_needed()
+                        confirm.tap()
+                    else:
+                        last = options.nth(options.count() - 1)
+                        last.scroll_into_view_if_needed()          # いちばん下の選択肢まで送ってから答える
+                        last.tap()
+                page.get_by_role("button", name="次の問題").first.wait_for(timeout=20000)
+                settle(page, 700)
+                verdict = page.locator(".mj-verdict").first.evaluate("e => [e.getBoundingClientRect().top, e.getBoundingClientRect().bottom]")
+                following = page.get_by_role("button", name="次の問題").first.evaluate("e => [e.getBoundingClientRect().top, e.getBoundingClientRect().bottom]")
+                entry = {"verdict": [round(v) for v in verdict], "next": [round(v) for v in following]}
+                if kind == "discard":
+                    entry["chosen"] = page.locator(".mj-hand-root .mj-tile.mj-chosen").count()
+                    entry["confirm_visible"] = page.locator(".mj-hand-root .mj-confirm").is_visible()
+                    expect(entry["chosen"] == 1, "何切るで、切った牌に印が付いていない")
+                    expect(not entry["confirm_visible"], "何切るで、答えたあとも「この牌を切る」が残っている")
+                reach[kind] = entry
+                expect(0 <= verdict[0] and verdict[1] <= HEIGHT, f"ドリル（{kind}）：答えた直後に、正解・不正解の帯が画面の外にある: {entry}")
+                expect(0 <= following[0] and following[1] <= HEIGHT, f"ドリル（{kind}）：答えた直後に、「次の問題」が画面の外にある: {entry}")
+                if kind == "discard":
+                    shot(page, "17b_drill_discard_answered")
+                context.close()
+            result["drill_reach"] = reach
+
             # 次の問題へ進むと、画面の上に戻る（スマホの高さの画面で）。やめると、種類の一覧に戻る
             context = new_context(height=HEIGHT)
             page = open_page(context, "/drill?k=score", wait=".mj-prompt")
             page.locator(".mj-choices-root .mj-opt").first.tap()
-            following = page.get_by_role("button", name="次の問題")
-            following.wait_for(timeout=20000)
+            page.get_by_role("button", name="次の問題").first.wait_for(timeout=20000)
+            following = page.get_by_role("button", name="次の問題").last         # 解説のいちばん下のほう
             settle(page, 500)
             following.scroll_into_view_if_needed()
             page.wait_for_timeout(300)
@@ -577,13 +624,13 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             prompt = page.locator(".mj-prompt").evaluate(TEXT_WITHOUT_RUBY)
             expect(prompt == question("table", "cr:30:3").prompt, f"復習の問題が違う: {prompt}")
             page.locator(".mj-choices-root .mj-opt", has_text="3,900 点").tap()
-            page.get_by_role("button", name="次の問題").wait_for(timeout=20000)
+            page.get_by_role("button", name="次の問題").first.wait_for(timeout=20000)
             settle(page, 500)
             expect("○ 正解" in main_text(page), "復習の問題に正解したのに、正解と出ない")
             card = json.loads(stored(page, "drill.table"))["cards"]["cr:30:3"]
             result["review_card"] = card
             expect(card[0] == 1 and abs(card[1] - (int(time.time()) + DAY)) < 120, f"正解したのに、次の間隔に進んでいない: {card}")
-            page.get_by_role("button", name="次の問題").tap()
+            page.get_by_role("button", name="次の問題").first.tap()
             page.get_by_role("button", name=KINDS["reading"].name).wait_for(timeout=20000)
             settle(page, 500)
             expect("復習は、すべて終わりました。" in page.locator(MAIN).inner_text(), "復習が終わったことが出ていない")
@@ -696,7 +743,7 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             page = open_page(context, "/drill?k=wait", wait=".mj-prompt")
             page.locator(".mj-choices-root .mj-opt").first.tap()
             page.locator(".mj-choices-root .mj-confirm").tap()
-            page.get_by_role("button", name="次の問題").wait_for(timeout=20000)
+            page.get_by_role("button", name="次の問題").first.wait_for(timeout=20000)
             settle(page, 500)
             shot(page, "23_dark_drill")
             context.close()

@@ -423,3 +423,82 @@ def test_approach_tiles_at_tenpai_are_the_waits_that_give_the_yaku():
     assert tg.target_distance(kanchan, "pinfu", **WINDS) == 1 and approach_tiles(kanchan, "pinfu", **WINDS)
     # 手の形を問わない役は、点数計算では確かめない（リーチなどの状況で付く役なので）
     assert approach_tiles(counts34(parse_tiles("123m456p789s13s44z")), "riichi", **WINDS) == kinds("2s")
+
+
+# ---------------------------------------------------------------- リーチが要る役（立直・一発・ダブル立直）
+
+
+def test_riichi_targets_want_riichi_when_tenpai_is_possible():
+    from engine.coach import analyze
+    from engine.target_coach import RIICHI_TARGETS, wants_riichi
+
+    tenpai = analyze(_pos("1239m456p789s13s44z", drawn="9m"))          # 9萬 を切ると 13索 の嵌張待ち
+    far = analyze(_pos("147m258p369s12345z", drawn="5z"))             # 聴牌にとれない
+    assert RIICHI_TARGETS == {"riichi", "ippatsu", "double_riichi"}
+    for key in ("riichi", "ippatsu"):
+        assert wants_riichi(tenpai, key, first=False) and wants_riichi(tenpai, key, first=True)
+        assert not wants_riichi(far, key, first=True)
+    assert wants_riichi(tenpai, "double_riichi", first=True) and not wants_riichi(tenpai, "double_riichi", first=False)
+    assert not wants_riichi(tenpai, "menzen_tsumo", first=True) and not wants_riichi(tenpai, None, first=True)
+    assert not wants_riichi(tenpai, "pinfu", first=True)
+    # リーチできない局面（最後のツモ）では勧めない
+    last = analyze(Position(**{**tenpai.position.__dict__, "can_riichi": False, "draws_left": 0}))
+    assert not wants_riichi(last, "riichi", first=False)
+
+
+def test_tenpai_without_riichi_is_judged_against_riichi_targets():
+    from engine.coach import Grade, analyze, judge_discard
+    from engine.target_coach import judge_riichi_target
+
+    position = _pos("1239m456p789s13s44z", drawn="9m")
+    analysis = analyze(position)
+    tile = next(t for t in position.tiles if kind_of(t) == _kind("9m"))
+    quiet = judge_discard(analysis, tile)
+    declared = judge_discard(analysis, tile, riichi=True)
+    assert quiet.is_best and quiet.missed_riichi and not declared.missed_riichi
+
+    for key in ("riichi", "ippatsu", "double_riichi"):
+        judged = judge_riichi_target(quiet, key, tile, position, first=True)
+        assert judged.grade is Grade.NO_RIICHI and not judged.is_best and judged.label == "リーチしなかった", key
+        assert judged.text.startswith("9萬切りで聴牌したが、リーチを宣言しなかった。")
+        assert "リーチするときは、先に「リーチ」を押してから、切る牌を選ぶ。" in judged.reasons
+        assert all("門前なので、リーチを宣言して切ることもできた" not in reason for reason in judged.reasons)
+        assert judge_riichi_target(declared, key, tile, position, first=True) is declared       # リーチした打牌は、そのまま
+    assert "この局では、もう付かない" in judge_riichi_target(quiet, "double_riichi", tile, position, first=True).text
+    assert "次の巡でもリーチできる" in "".join(judge_riichi_target(quiet, "riichi", tile, position, first=False).reasons)
+    # ダブル立直は最初の打牌だけを見る。リーチが要らない役・ふつうの局では、評価を変えない
+    assert judge_riichi_target(quiet, "double_riichi", tile, position, first=False) is quiet
+    for key in ("menzen_tsumo", "pinfu", None):
+        assert judge_riichi_target(quiet, key, tile, position, first=True) is quiet
+
+
+def test_practice_review_marks_a_skipped_riichi_in_a_riichi_target_hand():
+    """ダブル立直を狙う局で、最初の打牌をリーチせずに切ると、振り返りでは ✓ ではなく「リーチしなかった」になる"""
+    from engine.coach import Grade, analyze
+
+    config = PracticeConfig(seed=471178, luck=LuckSettings(75, 75), target="double_riichi")
+    state = practice.start(config)
+    assert state.riichi_discards, "配牌で聴牌していない（局の番号を変える）"
+    tile = analyze(practice.position_of(state)).pick.tile
+    quiet = practice.assess(state, discard(tile))
+    assert quiet is not None and quiet.verdict.grade is Grade.NO_RIICHI
+    declared = practice.assess(state, riichi(tile))
+    assert declared is not None and declared.verdict.grade is Grade.BEST
+    # 2 打目からは、ダブル立直は付かない：ふつうに速さで評価する
+    after = practice.apply(state, discard(tile))
+    while not after.finished and after.can_tsumo:
+        after = practice.apply(after, TSUMO)
+    if not after.finished:
+        later = practice.assess(after, discard(analyze(practice.position_of(after)).pick.tile))
+        assert later is not None and later.verdict.grade is not Grade.NO_RIICHI
+
+
+def test_ippatsu_conditions_without_riichi_only_ask_for_riichi():
+    """リーチしていない手の一発の条件は「リーチを宣言している」だけを ✗ にする（1 巡を過ぎた、とは言わない）"""
+    ctx = make_context("123m456p789s123s4z", "4z", is_tsumo=True)
+    check = explain(ctx).yaku_check("ippatsu")
+    assert [(c.text, c.ok) for c in check.checks] == [("リーチを宣言している", False)]
+    with_riichi = explain(make_context("123m456p789s123s4z", "4z", is_tsumo=True, riichi=True)).yaku_check("ippatsu")
+    assert [c.ok for c in with_riichi.checks] == [True, False] and "1 巡を過ぎた" in with_riichi.checks[1].detail
+    double = explain(make_context("123m456p789s123s4z", "4z", is_tsumo=True)).yaku_check("double_riichi")
+    assert double.checks[-1].detail == "リーチを宣言していない"

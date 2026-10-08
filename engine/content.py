@@ -632,6 +632,7 @@ class RuleItem:
     default: Any = None              # その初期値（設定と食い違っていないかをテストで確かめる）
     note: str = ""
     check: bool = False              # 卓に着く前に確かめたい項目か
+    first: bool = False              # その中でも、初めての卓で、まず聞いておきたい項目か（あがれるか・点数に、すぐ関わる）
 
 
 @dataclass(frozen=True)
@@ -651,6 +652,16 @@ class RuleBook:
     def checklist(self) -> tuple[RuleItem, ...]:
         return tuple(item for item in self.items if item.check)
 
+    @property
+    def first_checks(self) -> tuple[RuleItem, ...]:
+        """初めての卓で、まず聞いておきたい項目"""
+        return tuple(item for item in self.items if item.first)
+
+    @property
+    def more_checks(self) -> tuple[RuleItem, ...]:
+        """確かめたい項目のうち、余裕があれば聞けばよいもの"""
+        return tuple(item for item in self.items if item.check and not item.first)
+
 
 @cache
 def rule_book() -> RuleBook:
@@ -668,7 +679,7 @@ def rule_book() -> RuleBook:
         raw = _take(
             item, where,
             key=(str, ...), group=(str, ...), title=(str, ...), ask=(str, ...), sides=(list, ...), app=(str, ""),
-            setting=(str, None), default=((bool, int), None), note=(str, ""), check=(bool, False),
+            setting=(str, None), default=((bool, int), None), note=(str, ""), check=(bool, False), first=(bool, False),
         )
         if raw["group"] not in groups:
             raise ContentError(f"{where}: group は {list(groups)} のどれかです")
@@ -676,6 +687,8 @@ def rule_book() -> RuleBook:
             raise ContentError(f"{where}: ルール設定に無い項目です（{raw['setting']!r}）")
         if (raw["setting"] is None) != (raw["default"] is None):
             raise ContentError(f"{where}: setting と default は、両方書くか、両方書かないかです")
+        if raw["first"] and not raw["check"]:
+            raise ContentError(f"{where}: first は、check が true の項目にだけ書けます")
         sides = []
         for number, side in enumerate(raw["sides"]):
             pair = _take(side, f"{where} sides[{number}]", answer=(str, ...), who=(str, ...))
@@ -685,7 +698,7 @@ def rule_book() -> RuleBook:
         items.append(
             RuleItem(
                 raw["key"], raw["group"], raw["title"].strip(), raw["ask"].strip(), tuple(sides), raw["app"].strip(),
-                raw["setting"], raw["default"], raw["note"].strip(), raw["check"],
+                raw["setting"], raw["default"], raw["note"].strip(), raw["check"], raw["first"],
             )
         )
     keys = [item.key for item in items]

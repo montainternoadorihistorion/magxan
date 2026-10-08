@@ -43,7 +43,14 @@ from engine.luck import (
 from engine.rng import Rng
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.context import WinContext
-from engine.target_coach import TargetAdvice, TargetVerdict, approach_tiles, judge_target, target_advice
+from engine.target_coach import (
+    TargetAdvice,
+    TargetVerdict,
+    approach_tiles,
+    judge_riichi_target,
+    judge_target,
+    target_advice,
+)
 from engine.tiles import EAST, NORTH, NUM_TILES, SOUTH, WEST, counts34, kind_of, sort_tiles
 from engine.wall import DORA_START, HAND_SIZE, LIVE_START, URA_START, Wall
 
@@ -481,6 +488,8 @@ def assess(state: PracticeState, action: Action) -> Decision | None:
     position = position_of(state)
     analysis = analyze(position)
     verdict = judge_discard(analysis, action.tile, riichi=action.move is Move.RIICHI)
+    # リーチが要る役（立直・一発・ダブル立直）を狙う局では、リーチせずに聴牌をとった打牌を、狙いから見て評価し直す
+    verdict = judge_riichi_target(verdict, state.config.target, action.tile, position, first=not state.discards)
     advice = target_advice_of(state)
     target = judge_target(advice, action.tile, position) if advice is not None else None
     return Decision(state.turn, action, verdict, analysis, target, advice)

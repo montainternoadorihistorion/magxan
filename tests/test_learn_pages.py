@@ -229,9 +229,13 @@ def test_rules_page_lists_the_checklist_and_every_item():
     at = open_page("views/rules.py")
     assert at.title[0].value == "ルールの違い"
     labels = [e.label for e in at.expander]
-    assert labels == [*(f"{title}（{len(book.of(group))}）" for group, title in book.groups.items() if book.of(group)), "調べた資料と、注意"]
+    assert labels == [
+        f"余裕があれば聞くこと（{len(book.more_checks)}）",
+        *(f"{title}（{len(book.of(group))}）" for group, title in book.groups.items() if book.of(group)), "調べた資料と、注意",
+    ]
     text = page_text(at)
     assert "★ 卓に着く前に確かめること" in text and "アリアリですか？" in text
+    assert "まず聞いておくこと（5 つ）" in text and "喰いタンと後付けが、どちらもありか" in text
     assert all(item.title in text and item.ask in text for item in book.items)
     assert all(caveat in text for caveat in book.caveats)
     assert ("点数計算ラボで、ルールを変えて計算してみる", "lab", "") in links(at)

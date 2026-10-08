@@ -28,7 +28,9 @@ _BASE_STYLE = """
 
 /* ---- ルビ（読みがな） */
 ruby { ruby-align: center; }
-ruby rt { font-size: 0.55em; opacity: 0.85; user-select: none; }
+ruby rt { font-size: max(0.6em, 9px); opacity: 0.9; user-select: none; }     /* 小さい文字のルビも、9px より小さくしない */
+/* 手牌のすぐ上の案内は、高さを固定してある（72px）。ルビを大きくすると 2 行に収まらず、巡によって手牌が動くので、元の大きさのまま */
+.mj-headline ruby rt { font-size: 0.55em; }
 
 /* ---- 牌の表示（表示専用。タップできる手牌は ui/components/tile_hand） */
 .mj-img {
@@ -130,6 +132,9 @@ ruby rt { font-size: 0.55em; opacity: 0.85; user-select: none; }
 /* ---- 一人練習 */
 img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
 .mj-statusbar { margin: 0 0 2px; }
+/* 一人練習の上の札：ルビのある札（東場・巡目など）と無い札で高さが違うと、行の高さが変わって、手牌の位置が局ごとに上下する。
+   札の高さをそろえ、中身は下にそろえる（中身は 1 つの span に入れてある：ui/practice_view.py の status_html） */
+.mj-status-fixed .mj-chip { display: inline-flex; align-items: flex-end; min-height: 30px; box-sizing: border-box; vertical-align: bottom; }
 .mj-chip-tiles img.mj-img.mj-s { width: 15px; margin: 1px 0 2px; }
 .mj-chip-luck { background: rgba(232, 164, 0, 0.3); }
 .mj-chip-plain { background: rgba(46, 157, 87, 0.28); }
@@ -234,6 +239,15 @@ img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
 
 /* ---- 役図鑑・用語辞典・ドリル */
 .mj-home-head { font-size: 1.05rem; margin-top: 18px; padding-bottom: 2px; border-bottom: 2px solid rgba(128, 128, 128, 0.35); }
+/* ホームの、各ページへのリンク（views/home.py）：押せることが分かるように、枠のあるボタンの形にして、指で押しやすい高さにする */
+div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] {
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.07);
+}
+div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] p { font-weight: 700; }
 .mj-topgap { height: 2px; }
 .mj-yaku-head { margin-top: 2px; }
 .mj-reading-big { font-size: 14px; }
@@ -279,6 +293,12 @@ img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
 .mj-choice-other { opacity: 0.75; }
 .mj-kind-note { margin: -8px 0 6px 2px; }
 .mj-river-cap { margin-top: 12px; }
+/* 答えた直後に、画面を動かして見せる部分（views/drill.py）。上の帯（メニュー）に隠れず、下の端にくっつかないぶんの余白 */
+.mj-verdict { scroll-margin-top: 72px; }
+.st-key-dr_actions { scroll-margin-bottom: 20px; }
+/* 記録の貼り付け欄（views/records.py）：英語の案内「Press Ctrl+Enter to apply」を隠す（すぐ下に日本語で書く） */
+.st-key-rc_paste_box [data-testid="InputInstructions"] { display: none; }
+.mj-badge-miss { background: #9a6400; }
 .mj-guide-head { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; font-size: 1.05rem; line-height: 1.7; }
 .mj-guide-num { display: inline-block; min-width: 1.7em; padding: 0 5px; border-radius: 999px; background: rgba(74, 144, 217, 0.3); font-size: 13px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
 .mj-stats td { padding-left: 2px; padding-right: 2px; font-size: 13px; }

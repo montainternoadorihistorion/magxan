@@ -69,12 +69,17 @@ class Position:
         return (HAKU, HATSU, CHUN, self.seat_wind, self.round_wind)
 
 
+#: リーチできたのに、宣言せずに聴牌をとったときの補足
+MISSED_RIICHI_REASON = "この打牌で聴牌。門前なので、リーチを宣言して切ることもできた（リーチは 1 翻の役）。"
+
+
 class Grade(StrEnum):
     BEST = "best"            # おすすめと同じ速さ
     NARROWER = "narrower"    # 向聴数は同じだが、受け入れが少ない
     FARTHER = "farther"      # 向聴数が遠ざかる
     DEAD = "dead"            # 有効牌が 1 枚も残っていない形になる
     PASSED = "passed"        # あがれる形だったのに、あがらずに切った
+    NO_RIICHI = "no_riichi"  # リーチが要る役を狙う局で、リーチせずに聴牌をとった（役指定練習だけ。engine.target_coach が付ける）
 
 
 @dataclass(frozen=True)
@@ -85,7 +90,7 @@ class Candidate:
     tile: int                # 切るならこの牌（赤でないほうを優先）
     held: int                # 手牌にある枚数
     dora: int                # tile 1 枚に付いているドラの数（ドラ表示牌ぶん＋赤）
-    grade: Grade             # おすすめと比べた評価（PASSED は使わない）
+    grade: Grade             # おすすめと比べた評価（PASSED・NO_RIICHI は使わない）
     shanten_loss: int        # おすすめより向聴数がいくつ遠いか
     tiles_loss: int          # 向聴数が同じとき、受け入れが何枚少ないか
     is_pick: bool            # おすすめの 1 枚か
@@ -425,7 +430,7 @@ def judge_discard(analysis: Analysis, tile: int, *, riichi: bool = False) -> Ver
         position.can_riichi and chosen.shanten == TENPAI and chosen.total > 0 and not riichi and grade is not Grade.PASSED
     )
     if missed_riichi:
-        reasons.append("この打牌で聴牌。門前なので、リーチを宣言して切ることもできた（リーチは 1 翻の役）。")
+        reasons.append(MISSED_RIICHI_REASON)
 
     return Verdict(
         chosen=chosen,

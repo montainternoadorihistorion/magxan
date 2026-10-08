@@ -58,7 +58,10 @@ if page is None:
     st.html(book_intro_html(done, rb))
     if done is not None:
         st.progress(done.rate, text=completion_text(done))
-    st.html(f'<div class="mj-sub">{rb.html("「門前」は、鳴くと付かない役。「鳴↓」は、鳴くと 1 翻下がる役（喰い下がり）。")}</div>')
+    st.html(
+        f'<div class="mj-sub">{rb.html("「門前」は、鳴くと付かない役。「鳴↓」は、鳴くと 1 翻下がる役（喰い下がり）。")}</div>'
+        f'<div class="mj-sub">{rb.html("名前の前の印：チェックの付いた印は、一人練習で成立させて、スタンプを押した役。白い丸は、まだの役。")}</div>'
+    )
     for group, title in GROUPS.items():
         members = [p for p in pages if p.group == group]
         if not members:
@@ -98,8 +101,11 @@ else:
     aimed = target_stats(read_history(store)).get(page.key) if store.ready else None
     if stamps is not None:
         st.html(stamp_html(page, stamp, aimed, rb))
-    if page.practice and st.button("この役を実戦で練習する", type="primary", width="stretch", key="yb_b_practice"):
-        st.switch_page("views/practice.py", query_params={"target": page.practice})
+    if page.practice:
+        if st.button("この役を実戦で練習する", type="primary", width="stretch", key="yb_b_practice"):
+            st.switch_page("views/practice.py", query_params={"target": page.practice})
+        # 一人練習で打っている途中の局は、押すとやめることになる（ボタンの名前にはルビを振れないので、説明はここに書く）
+        st.html(f'<div class="mj-sub">{rb.html("一人練習のページで、この役を狙う局が始まる（別の局を打っている途中なら、その局はやめて、新しく始める）。")}</div>')
     if page.practice_note:
         st.html(f'<div class="mj-sub">{rb.html(page.practice_note)}</div>')
 

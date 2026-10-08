@@ -15,6 +15,12 @@ def _head(text: str) -> None:
     st.html(f'<div class="mj-subhead mj-home-head">{rb.html(text)}</div>')
 
 
+def _link(page: str, label: str, icon: str) -> None:
+    """各ページへのリンク。押せることが分かるように、枠のあるボタンの形で出す（形は ui/layout.py の st-key-hm_link_…）"""
+    with st.container(key=f"hm_link_{page.rsplit('/', 1)[-1].removesuffix('.py')}"):
+        st.page_link(page, label=label, icon=icon)
+
+
 st.title(APP_NAME)
 st.caption(f"版 {APP_VERSION} ／ {APP_PHASE}")
 
@@ -29,7 +35,7 @@ st.html(
 
 # ---------------------------------------------------------------- 打つ
 _head("打つ")
-st.page_link("views/practice.py", label="一人練習", icon=":material/playing_cards:")
+_link("views/practice.py", "一人練習", ":material/playing_cards:")
 st.html(
     _list(
         [
@@ -40,7 +46,7 @@ st.html(
         rb,
     )
 )
-st.page_link("views/score_lab.py", label="点数計算ラボ", icon=":material/calculate:")
+_link("views/score_lab.py", "点数計算ラボ", ":material/calculate:")
 st.html(
     _list(
         [
@@ -53,7 +59,7 @@ st.html(
 
 # ---------------------------------------------------------------- 学ぶ
 _head("学ぶ")
-st.page_link("views/yaku_book.py", label="役図鑑", icon=":material/menu_book:")
+_link("views/yaku_book.py", "役図鑑", ":material/menu_book:")
 st.html(
     _list(
         [
@@ -63,9 +69,9 @@ st.html(
         rb,
     )
 )
-st.page_link("views/glossary.py", label="用語辞典", icon=":material/dictionary:")
+_link("views/glossary.py", "用語辞典", ":material/dictionary:")
 st.html(_list(["麻雀の言葉の、読み・意味・由来。言葉でさがせる（ひらがな・カタカナ・漢字のどれでも）"], rb))
-st.page_link("views/drill.py", label="ドリル", icon=":material/quiz:")
+_link("views/drill.py", "ドリル", ":material/quiz:")
 st.html(
     _list(
         [
@@ -75,14 +81,14 @@ st.html(
         rb,
     )
 )
-st.page_link("views/table_guide.py", label="卓で打つとき", icon=":material/table_restaurant:")
+_link("views/table_guide.py", "卓で打つとき", ":material/table_restaurant:")
 st.html(_list(["実際の卓での手順：席決め、山と配牌、発声（ポン・チー・カン・リーチ・ロン・ツモ）、点棒のやり取り、作法と反則"], rb))
-st.page_link("views/rules.py", label="ルールの違い", icon=":material/rule:")
+_link("views/rules.py", "ルールの違い", ":material/rule:")
 st.html(_list(["打つ場所によって違うルールの一覧と、**卓に着く前に確かめること**"], rb))
 
 # ---------------------------------------------------------------- 記録
 _head("記録")
-st.page_link("views/records.py", label="記録と保存", icon=":material/save:")
+_link("views/records.py", "記録と保存", ":material/save:")
 st.html(_list(["成績・スタンプ・ドリルの記録を、ファイルに保存したり、読み込んだりできる（記録は、このブラウザの中にある）"], rb))
 
 PLAN = (

@@ -4,6 +4,8 @@
     judge_target(advice, tile)                       実際に切った牌を、おすすめと比べる
     target_result(explanation, "sanshoku")           あがったとき、狙った役が付いたか
     approach_tiles(counts, "sanshoku", …)            13 枚の手で、引くと役に近づく牌（聴牌なら、役が付くあがり牌）
+    wants_riichi(analysis, "ippatsu", first=…)       リーチが要る役を狙う局で、いま「リーチして切る」を勧めるか
+    judge_riichi_target(verdict, "ippatsu", …)       リーチせずに聴牌をとった打牌を、狙いから見て評価し直す
 
 牌効率のコーチ（engine/coach.py）が「速さ」だけを見るのに対して、こちらは「狙った役までの距離」を見る。
 距離の計算は engine/analysis/target.py。見えている牌（河・ドラ表示牌）は「もう手に入らない」として数える。
@@ -21,7 +23,7 @@ from enum import StrEnum
 from functools import lru_cache
 
 from engine.analysis.advice import tile_for_discard
-from engine.analysis.shanten import shanten_of
+from engine.analysis.shanten import TENPAI, shanten_of
 from engine.analysis.target import (
     IMPOSSIBLE,
     SHAPELESS_KEYS,
@@ -33,7 +35,7 @@ from engine.analysis.target import (
     target_tiles,
 )
 from engine.analysis.ukeire import remaining_counts
-from engine.coach import Position, analyze
+from engine.coach import MISSED_RIICHI_REASON, Analysis, Grade, Position, Verdict, analyze
 from engine.content import yaku_page_map
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.context import WinContext
@@ -55,6 +57,14 @@ UPGRADES: dict[str, tuple[str, ...]] = {
     "chinitsu": ("chuuren",),
 }
 BLOCK_NAMES = {BlockKind.SEQUENCE: "順子", BlockKind.SET: "刻子", BlockKind.PAIR: "雀頭", BlockKind.SINGLE: "1 枚", BlockKind.RYANMEN: "両面"}
+#: リーチを宣言しないと付かない役（手の形を問わない役のうち）。狙う局では、聴牌にとれたら「リーチして切る」を勧める
+RIICHI_TARGETS = frozenset({"riichi", "ippatsu", "double_riichi"})
+#: リーチが要る役ごとの、リーチしなかったときのひとこと
+_NO_RIICHI_TEXTS = {
+    "riichi": "{name}は、リーチを宣言しないと付かない。",
+    "ippatsu": "{name}は、リーチを宣言して、そのすぐ次のツモであがったときに付く。まず、リーチが要る。",
+    "double_riichi": "{name}は、最初の打牌でリーチを宣言したときだけ付く。この局では、もう付かない。",
+}
 
 
 @dataclass(frozen=True)
@@ -347,6 +357,41 @@ def judge_target(advice: TargetAdvice, tile: int, position: Position) -> TargetV
             f"{best}切りなら {pick.kinds} 種 {pick.total} 枚で、{fewer} 枚多い。"
         )
     return TargetVerdict(grade, chosen, pick, label, text, tuple(reasons))
+
+
+# ---------------------------------------------------------------- リーチが要る役（立直・一発・ダブル立直）
+
+
+def wants_riichi(analysis: Analysis, key: str | None, *, first: bool) -> bool:
+    """リーチが要る役を狙う局で、いま「リーチして切る」を勧めるか。
+
+    聴牌にとれて（待ち牌が 1 枚以上残っていて）、リーチできるとき。ダブル立直は、最初の打牌（first）のときだけ。
+    """
+    if key not in RIICHI_TARGETS or analysis.can_win or not analysis.position.can_riichi:
+        return False
+    if key == "double_riichi" and not first:
+        return False
+    pick = analysis.pick
+    return pick.shanten == TENPAI and pick.total > 0
+
+
+def judge_riichi_target(verdict: Verdict, key: str | None, tile: int, position: Position, *, first: bool) -> Verdict:
+    """リーチが要る役を狙う局で、リーチできたのに宣言せずに聴牌をとった打牌を、狙いから見て評価し直す。
+
+    そういう打牌は、速さだけなら良くても、狙った役から見ると逃している（Grade.NO_RIICHI）。ほかの打牌は、そのまま返す。
+    ダブル立直は、最初の打牌だけを見る（2 打目からは、もう付かないので、ふつうに速さで評価する）。
+    """
+    if key not in RIICHI_TARGETS or not verdict.missed_riichi or (key == "double_riichi" and not first):
+        return verdict
+    name = yaku_page_map()[key].name
+    text = f"{_tile_text(tile, position)}切りで聴牌したが、リーチを宣言しなかった。" + _NO_RIICHI_TEXTS[key].format(name=name)
+    reasons = ["リーチするときは、先に「リーチ」を押してから、切る牌を選ぶ。"]
+    if key != "double_riichi":
+        reasons.append("聴牌をくずさなければ、次の巡でもリーチできる。")
+    if not verdict.is_best:             # 切った牌そのものも、速さで見て一番ではなかった
+        reasons.append(verdict.text)
+    reasons.extend(reason for reason in verdict.reasons if reason != MISSED_RIICHI_REASON)
+    return replace(verdict, grade=Grade.NO_RIICHI, label="リーチしなかった", text=text, reasons=tuple(reasons))
 
 
 # ---------------------------------------------------------------- あがったとき

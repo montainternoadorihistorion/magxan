@@ -16,9 +16,21 @@ rb = Rubifier()
 st.title("ルールの違い")
 st.html(f'<div class="mj-note">{rb.html(book.intro)}</div>' + rule_names_html(book.names, book.surveyed, rb))
 
-st.html(subhead("★ 卓に着く前に確かめること", rb) + checklist_html(book, rb))
-st.html(f'<div class="mj-sub">{rb.html("聞き方の例：「アリアリですか？」「赤は何枚ですか？」「トビはありますか？」。分からないことは、打つ前に聞けばよい。")}</div>')
+st.html(
+    subhead("★ 卓に着く前に確かめること", rb)
+    + f'<div class="mj-note"><b>{rb.html(f"まず聞いておくこと（{len(book.first_checks)} つ）")}</b></div>'
+    + f'<div class="mj-sub">{rb.html("あがれるかどうかや、点数に、すぐ関わるもの。初めての卓では、これだけでも聞いておくと安心。")}</div>'
+    + checklist_html(book.first_checks, rb)
+    + f'<div class="mj-sub">{rb.html("聞き方の例：「アリアリですか？」（喰いタンと後付けが、どちらもありか、という意味）「赤は何枚ですか？」「トビはありますか？」。分からないことは、打つ前に聞けばよい。")}</div>'
+)
+with st.expander(f"余裕があれば聞くこと（{len(book.more_checks)}）", key="rl_x_more"):
+    st.html(checklist_html(book.more_checks, rb.fork()))
 
+# まとまりの名前（折りたたみの名前）には読みを振れないので、その前に、読みつきで一度出しておく
+st.html(
+    subhead("項目ごとの違い", rb)
+    + f'<div class="mj-sub">{rb.html("点数・あがりと流局・試合の進め方・卓での決まりの、4 つのまとまりに分けた。開くと、6 つのルールでどう分かれるかと、このアプリの扱いが出る。")}</div>'
+)
 for group, title in book.groups.items():
     items = book.of(group)
     if not items:

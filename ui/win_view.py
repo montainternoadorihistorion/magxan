@@ -217,7 +217,7 @@ def summary_html(result: Explanation, rb: Rubifier) -> str:
         assert best is not None and best.points is not None
         points = best.points
         level = rb.wrap(points.level_name, '<span class="mj-level">', "</span>") if points.level is not Level.NONE else ""
-        dora = f" ／ ドラ {best.dora_han}" if best.dora_han else ""
+        dora = (" ／ " + "・".join(result.dora_words)) if result.dora_words else ""
         body = (
             f'<div class="mj-big">{escape(headline(result))} {level}</div>'
             f'<div class="mj-sub">{rb.html(f"{_han_fu_text(best)} ／ {_yaku_names(best)}{dora}")}</div>'

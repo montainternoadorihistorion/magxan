@@ -136,7 +136,8 @@ st.html(subhead("スタンプ（成立させた役）", rb))
 st.progress(done.rate, text=completion_text(done))
 st.page_link("views/yaku_book.py", label="役図鑑で、スタンプを見る", icon=":material/menu_book:")
 
-st.html(subhead("一人練習の成績", rb) + stats_html(summarize(history), rb) + target_stats_html(target_stats(history), rb))
+aimed = target_stats(history)
+st.html(subhead("一人練習の成績", rb) + stats_html(summarize(history), rb, aimed=sum(stat.tries for stat in aimed.values())) + target_stats_html(aimed, rb))
 
 rows = ['<tr class="mj-dim"><td>ドリル</td><td>進み具合</td></tr>']
 for kind, info in KINDS.items():
@@ -160,7 +161,11 @@ try:
     )
 except UnicodeEncodeError:        # 念のため：書き出せない文字が残っていても、下の「読み込む」「消す」は使えるようにする
     st.error("記録の中に、ファイルに書き出せない文字がありました。下の「ファイルから読み込む」で置き換えるか、「すべて消す」で消してください。")
-st.html(f'<div class="mj-sub">{rb.html(f"入るもの：成績 {size.hands} 局・スタンプ {size.stamps} 役・ドリル {size.answers} 回ぶんの記録と、一人練習の設定。打っている途中の局は入らない。")}</div>')
+st.html(
+    f'<div class="mj-sub">{rb.html(f"入るもの：成績 {size.hands} 局・スタンプ {size.stamps} 役・ドリル {size.answers} 回ぶんの記録と、一人練習の設定。打っている途中の局は入らない。")}</div>'
+    # 押しても画面は変わらない（ブラウザがファイルを保存するだけ）。どこに入るかを、ここで言っておく
+    f'<div class="mj-sub">{rb.html("iPhone では、確認が出たら「ダウンロード」を押す。ファイルは「ファイル」アプリの「ダウンロード」に入る。")}</div>'
+)
 with st.expander("ファイルに保存できないとき（文字としてコピーする）", key="rc_x_copy"):
     st.caption("下のボタンで、記録の文字をコピーできます。メモ帳やメールに貼り付けて、残しておいてください。")
     copy_button(
@@ -174,12 +179,20 @@ round_ = ss.get("rc_upload", 0)
 st.file_uploader(
     "保存したファイル（.json）を選ぶ", type=["json", "txt"], key=f"rc_w_file_{round_}", max_upload_size=MAX_FILE_MB,
 )
+# ファイルを選ぶ部品の文字（ボタンと、大きさの上限）は、英語のまま変えられないので、ここで説明する
+st.caption(f"「Upload」（または「Browse files」）を押して、保存したファイル（名前が mjdojo- で始まる .json）を選びます。{MAX_FILE_MB}MB まで。")
 with st.expander("ファイルを選べないとき（文字を貼り付ける）", key="rc_x_paste"):
-    st.text_area("コピーしておいた記録の文字", key=f"rc_w_paste_{round_}", height=120, placeholder='{"app": "mjdojo", …')
+    with st.container(key="rc_paste_box"):            # 英語の案内（Press Ctrl+Enter to apply）を隠すための目印
+        st.text_area("コピーしておいた記録の文字", key=f"rc_w_paste_{round_}", height=120, placeholder='{"app": "mjdojo", …')
+    st.caption("貼り付けたら、下の「この文字を確かめる」を押してください。中身が下に出ます。")
+    st.button("この文字を確かめる", key=f"rc_b_check_{round_}")       # 押すと、貼り付けた文字が届いて、画面が描き直される
 
 incoming, problem = _incoming(round_)
 if problem:
     st.error(problem)
+pasted = ss.get(f"rc_w_paste_{round_}")
+if ss.get(f"rc_w_file_{round_}") is not None and isinstance(pasted, str) and pasted.strip():
+    st.info("ファイルと、貼り付けた文字の両方があります。ファイルのほうを読み込みます（貼り付けた文字は使いません）。")
 
 if incoming is not None:
     try:

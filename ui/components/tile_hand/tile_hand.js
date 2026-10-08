@@ -5,18 +5,23 @@
 //   tiles        [{ id, src, label, short, mark, markLabel }]  並べる順。id は牌ID。mark は牌の左上に出す印（無ければ空）
 //   drawnId      ツモ牌の牌ID（無ければ null）
 //   drawnLabel   ツモ牌の下に出す文字（既定「ツモ」）
-//   enabled      false なら表示だけ
+//   enabled      false なら表示だけ（牌は押せない。確定のボタンと案内文の段は隠す）
 //   prompt       何も選んでいないときの案内文
 //   confirmLabel 確定ボタンの文字
 //   riichiIds    リーチを宣言して切れる牌ID の一覧。空ならリーチのボタンを出さない
+//   riichiLabel  リーチのボタンの文字（既定「リーチ」。リーチを勧めるときは「◎ リーチ」など）
 //   twoRows      true なら、案内文を上の段、ボタンを下の段に、いつも分けて置く（リーチのボタンが出たり消えたり
 //                しても、確定ボタンの位置が動かないようにする）
 //   scrollTop    true なら、画面のいちばん上までスクロールを戻す（新しい局を始めたとき）。同じ rev では 1 回だけ
+//   actionLabel  空でなければ、確定ボタンの横に、牌を切らずにする操作のボタンを出す（例「ツモ（あがる）」）。1 回押せば送る
+//   chosenId     表示だけのとき、選ばれた牌として枠を付ける牌ID（ドリルで答えた牌。無ければ null）
+//   chosenLabel  選ばれた牌の、読み上げ用の説明
 //
 // 送る値（ここ → Python）: 確定したとき 1 回だけ "pick" を送る
 //   { id, rev, riichi, prevMs, vw, vh, dpr, imgNg }
 //   riichi は、リーチを宣言して切るとき true
 //   prevMs は「ひとつ前の確定」から画面が更新されるまでにかかった時間（ミリ秒）。体感の応答時間の計測に使う
+//   操作のボタン（actionLabel）を押したときは { action: true, rev, prevMs, vw, vh, dpr, imgNg }
 //
 // リーチの操作: 「リーチ」を押すと、切れる牌（聴牌を保てる牌）だけが明るく残る。牌を選んで確定するとリーチ。
 // もう一度「リーチ」を押すと取り消し。
@@ -47,6 +52,7 @@ export default function (component) {
   const status = root.querySelector(".mj-status");
   const confirm = root.querySelector(".mj-confirm");
   const riichi = root.querySelector(".mj-riichi");
+  const action = root.querySelector(".mj-action");
   const note = root.querySelector(".mj-note");
 
   const state =
@@ -105,19 +111,33 @@ export default function (component) {
     }
     confirm.textContent = state.riichi ? "リーチして切る" : data.confirmLabel || "この牌を切る";
     confirm.disabled = !data.enabled || !picked || Boolean(state.pending);
+    action.hidden = !data.enabled || !data.actionLabel;
+    action.textContent = data.actionLabel || "";
+    action.disabled = Boolean(state.pending);
     riichi.hidden = !data.enabled || riichiIds.size === 0;
     riichi.disabled = Boolean(state.pending);
     riichi.setAttribute("aria-pressed", String(state.riichi));
-    riichi.textContent = state.riichi ? "やめる" : "リーチ";
+    riichi.textContent = state.riichi ? "やめる" : data.riichiLabel || "リーチ";
     root.classList.toggle("mj-riichi-on", state.riichi);
-    // リーチのボタンがあるあいだは、案内文を上の段、ボタンを下の段に固定する
+    // リーチや操作のボタンがあるあいだは、案内文を上の段、ボタンを下の段に固定する
     // （牌を選ぶと案内文の長さが変わる。同じ段に置くと、そのたびにボタンの位置が動いてしまう）。
     // twoRows が指定されていれば、いつも 2 段にする（巡目によって確定ボタンの高さが変わらないように）
-    root.classList.toggle("mj-two-rows", Boolean(data.twoRows) || !riichi.hidden);
+    root.classList.toggle("mj-two-rows", Boolean(data.twoRows) || !riichi.hidden || !action.hidden);
   }
 
-  function send() {
-    if (!data.enabled || state.pending || state.picked === null) return;
+  // 計測値（体感の応答時間・画面の大きさ・読めなかった画像の数）
+  function measures() {
+    return {
+      prevMs: state.lastMs,
+      vw: window.innerWidth,
+      vh: window.innerHeight,
+      dpr: window.devicePixelRatio || 1,
+      imgNg: state.imgNg,
+    };
+  }
+
+  // 送信中にする（応答が返るまで、押し直しを防ぐ）
+  function begin() {
     state.pending = { rev: data.rev, t0: performance.now() };
     root.classList.add("mj-pending");
     state.timer = setTimeout(() => {
@@ -127,28 +147,38 @@ export default function (component) {
       refresh();
     }, PENDING_TIMEOUT_MS);
     refresh();
-    setTriggerValue("pick", {
-      id: state.picked,
-      rev: data.rev,
-      riichi: state.riichi && riichiIds.has(state.picked),
-      prevMs: state.lastMs,
-      vw: window.innerWidth,
-      vh: window.innerHeight,
-      dpr: window.devicePixelRatio || 1,
-      imgNg: state.imgNg,
-    });
+  }
+
+  function send() {
+    if (!data.enabled || state.pending || state.picked === null) return;
+    const id = state.picked;
+    const withRiichi = state.riichi && riichiIds.has(id);
+    begin();
+    setTriggerValue("pick", Object.assign({ id, rev: data.rev, riichi: withRiichi }, measures()));
+  }
+
+  // 牌を切らずにする操作（ツモあがりなど）。選んでいた牌は解いてから送る
+  function sendAction() {
+    if (!data.enabled || state.pending || !data.actionLabel) return;
+    state.picked = null;
+    begin();
+    setTriggerValue("pick", Object.assign({ action: true, rev: data.rev }, measures()));
   }
 
   // 牌を並べ直す
   grid.replaceChildren();
   for (const t of tiles) {
     const isDrawn = t.id === data.drawnId;
+    const isChosen = !data.enabled && t.id === data.chosenId;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "mj-tile" + (isDrawn ? " mj-drawn" : "");
+    btn.className = "mj-tile" + (isDrawn ? " mj-drawn" : "") + (isChosen ? " mj-chosen" : "");
     btn.dataset.id = String(t.id);
     if (isDrawn) btn.dataset.note = data.drawnLabel || "ツモ";
-    const extras = (isDrawn ? "（ツモ牌）" : "") + (t.mark && t.markLabel ? "（" + t.markLabel + "）" : "");
+    const extras =
+      (isDrawn ? "（ツモ牌）" : "") +
+      (isChosen ? "（" + (data.chosenLabel || "選んだ牌") + "）" : "") +
+      (t.mark && t.markLabel ? "（" + t.markLabel + "）" : "");
     btn.setAttribute("aria-label", t.label + extras);
     btn.setAttribute("aria-pressed", "false");
 
@@ -189,6 +219,7 @@ export default function (component) {
   }
 
   confirm.onclick = send;
+  action.onclick = sendAction;
   riichi.onclick = () => {
     if (!data.enabled || state.pending || !riichiIds.size) return;
     state.riichi = !state.riichi;

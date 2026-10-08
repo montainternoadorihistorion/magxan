@@ -15,10 +15,10 @@ from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS
 from engine.coach import analyze
 from engine.content import yaku_page_map
 from engine.luck import PRESETS
-from engine.practice import Outcome
+from engine.practice import DEAL_TENPAI_TARGETS, Outcome
 from engine.records import summarize, target_stats
 from engine.scoring.explain import explain
-from engine.target_coach import target_result
+from engine.target_coach import target_result, wants_riichi
 from ui.components.browser_store import BrowserStore
 from ui.components.choices import Option, choice_buttons
 from ui.components.tile_hand import Pick, tile_hand
@@ -37,6 +37,7 @@ from ui.practice_view import (
     advice_headline_html,
     candidates_html,
     chance_html,
+    coach_note_text,
     draw_note_html,
     exhausted_html,
     hand_summary_html,
@@ -50,6 +51,7 @@ from ui.practice_view import (
     plan_html,
     review_list_html,
     riichi_draws_html,
+    riichi_headline_html,
     river_html,
     shanten_html,
     shapeless_tip,
@@ -256,6 +258,8 @@ if not state.finished:
     last = session.last_decision
     analysis = analyze(practice.position_of(state)) if hint == HINT_BEFORE else None
     advice = practice.target_advice_of(state) if analysis is not None and aiming else None
+    # リーチが要る役（立直・一発・ダブル立直）を狙う局で、聴牌にとれる：「リーチして切る」を勧める（リーチのボタンにも ◎）
+    riichi_on = analysis is not None and wants_riichi(analysis, target, first=not state.discards)
 
     if analysis is not None:
         session.note_hint_shown()          # 打つ前のヒントを出した局は、成績で「ヒントあり」に分ける
@@ -265,8 +269,14 @@ if not state.finished:
             if state.can_tsumo:            # いまあがると、狙った役が付くか
                 win = target_result(explain(practice.apply(state, practice.TSUMO).result.win, state.config.rules), target)
             st.html(target_headline_html(advice, analysis, rb, can_riichi=can_riichi, win=win))
+        elif riichi_on:
+            st.html(riichi_headline_html(analysis, target, rb))
         else:
-            st.html(advice_headline_html(analysis, rb, can_riichi=can_riichi))
+            lead = ""
+            if target in DEAL_TENPAI_TARGETS and state.discards and state.riichi_index is None:
+                # ダブル立直は、最初の打牌でリーチしたときだけ付く（2 打目からは、ふつうの局と同じ）
+                lead = f'<span class="mj-chip mj-chip-luck">{rb.html(f"{target_name(target)}は、もう付かない")}</span> '
+            st.html(advice_headline_html(analysis, rb, can_riichi=can_riichi, lead=lead))
     elif hint == HINT_AFTER:
         if last is not None and last.target is not None:
             st.html(target_verdict_headline_html(last, rb, aka=aka))
@@ -295,12 +305,14 @@ if not state.finished:
         aka=aka,
         marks=marks,
         riichi_ids=() if state.can_tsumo else state.riichi_discards,     # あがれるときは、リーチを出さない（押し間違いを防ぐ）
+        riichi_label=f"{MARK_PICK[0]} リーチ" if riichi_on else "リーチ",
         drawn_label="ツモ ★" if lucky_draw else "ツモ",
         two_rows=True,                       # リーチのボタンが出る巡目でも、確定ボタンの位置を変えない
         scroll_top=session.take_scroll(),    # 新しい局は、画面のいちばん上から
+        # あがれるときは、確定のボタンの横に「ツモ（あがる）」を出す（手牌のすぐ下なので、小さい画面でも隠れない）
+        action_label="ツモ（あがる）" if state.can_tsumo else "",
+        on_action=_on_tsumo,
     )
-    if state.can_tsumo:
-        st.button("ツモ（あがる）", type="primary", on_click=_on_tsumo, width="stretch")
     if aim_on:
         speed_note = target_speed_note_html(advice, analysis, rb)
         if speed_note:
@@ -429,6 +441,10 @@ with st.expander("設定（ツキ補正・役指定・コーチ）", key="pr_x_s
         )
         if chosen is not None:
             st.html(target_guide_html(chosen, srb))
+            if session.target_changed:
+                # 役を選んだ位置のすぐ下から始められるように（上の「この設定で新しい局を始める」は、画面の外にあることが多い）
+                st.caption(f"いまの局は、{'役指定なし' if target is None else '役指定：' + target_name(target)}のまま。")
+                st.button(f"{target_name(chosen)}を狙う局を始める", type="primary", on_click=_next_hand, key="pr_b_target_start")
         else:
             st.html(note_html("狙う役を 1 つ選んでください。", srb))
     st.html(note_html("対々和・嶺上開花など、鳴きやカン、相手の牌が要る役は、一人練習では狙えません（役図鑑の各ページに、理由を書いてあります）。", srb))
@@ -436,7 +452,7 @@ with st.expander("設定（ツキ補正・役指定・コーチ）", key="pr_x_s
     st.html(subhead_html("コーチ", "", srb))
     st.segmented_control("ヒントのタイミング", list(HINTS), key="pr_w_hint", required=True)
     st.segmented_control("表示の量", list(LEVELS), key="pr_w_level", required=True)
-    st.html(note_html("コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役や打点との兼ね合いは、対局のコーチで扱う予定です。", srb))
+    st.html(note_html(coach_note_text(settings["target"]), srb))
 
     st.html(
         subhead_html(
@@ -461,7 +477,8 @@ with st.expander("設定（ツキ補正・役指定・コーチ）", key="pr_x_s
 
 with st.expander("成績", key="pr_x_stats"):
     inner = rb.fork()
-    st.html(stats_html(summarize(session.history), inner) + target_stats_html(target_stats(session.history), inner))
+    aimed = target_stats(session.history)
+    st.html(stats_html(summarize(session.history), inner, aimed=sum(stat.tries for stat in aimed.values())) + target_stats_html(aimed, inner))
     st.page_link("views/records.py", label="記録と保存（スタンプ・ファイルへの書き出し）", icon=":material/save:")
     if session.history:
         with st.popover("成績を消す"):

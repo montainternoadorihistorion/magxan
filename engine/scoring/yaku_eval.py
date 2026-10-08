@@ -297,6 +297,11 @@ def toitoi(h: _Hand) -> YakuResult:
     return h.result("toitoi", [Check("4 つの面子がすべて刻子か槓子", not h.shuntsu, detail)], hint=hint)
 
 
+def _how_many(noun: str, count: int) -> str:
+    """「暗刻は 2 つ」。0 のときは「暗刻は 1 つも無い」（「0 つ」とは言わないので）"""
+    return f"{noun}は 1 つも無い" if count == 0 else f"{noun}は {count} つ"
+
+
 def _concealed_sets(h: _Hand) -> list[Block]:
     return [b for b in h.sets if b.is_concealed_set]
 
@@ -308,7 +313,7 @@ def sanankou(h: _Hand) -> YakuResult:
     if len(concealed) == 3:
         detail = _texts(concealed)
     else:
-        detail = f"暗刻は {len(concealed)} つ" + (f"（{_texts(concealed)}）" if concealed else "")
+        detail = _how_many("暗刻", len(concealed)) + (f"（{_texts(concealed)}）" if concealed else "")
         if len(concealed) == 2 and ron_made:
             detail += f"。{ron_made[0].text()} はロンで完成したので明刻として数える"
             hint = "ツモで和了していれば成立"
@@ -397,7 +402,7 @@ def suuankou(h: _Hand) -> YakuResult:
                 ],
             )
         return h.result("suuankou", [Check("暗刻（暗槓を含む）が 4 つある（双碰待ちはツモ和了に限る）", True, _texts(concealed))])
-    detail = f"暗刻は {len(concealed)} つ" + (f"（{_texts(concealed)}）" if concealed else "")
+    detail = _how_many("暗刻", len(concealed)) + (f"（{_texts(concealed)}）" if concealed else "")
     ron_made = [b for b in h.sets if b.ron_completed]
     if ron_made:
         detail += f"。{ron_made[0].text()} はロンで完成したので明刻として数える"
@@ -425,7 +430,7 @@ def daisangen(h: _Hand) -> YakuResult:
     dragon_sets = [b for b in h.sets if b.first in DRAGONS]
     if len(dragon_sets) == 3:
         return h.result("daisangen", [Check("白・發・中のすべてが刻子か槓子", True, _texts(dragon_sets))])
-    detail = f"三元牌の刻子は {len(dragon_sets)} つ" + (f"（{_texts(dragon_sets)}）" if dragon_sets else "")
+    detail = _how_many("三元牌の刻子", len(dragon_sets)) + (f"（{_texts(dragon_sets)}）" if dragon_sets else "")
     if h.pair is not None and h.pair.first in DRAGONS:
         detail += f"。{name_of_kind(h.pair.first)}は雀頭（2 枚）"
     return h.result("daisangen", [Check("白・發・中のすべてが刻子か槓子", False, detail)])
@@ -438,7 +443,7 @@ def _wind_sets(h: _Hand) -> list[Block]:
 def daisuushii(h: _Hand) -> YakuResult:
     wind_sets = _wind_sets(h)
     ok = len(wind_sets) == 4
-    detail = _texts(wind_sets) if ok else f"風牌の刻子は {len(wind_sets)} つ" + (f"（{_texts(wind_sets)}）" if wind_sets else "")
+    detail = _texts(wind_sets) if ok else _how_many("風牌の刻子", len(wind_sets)) + (f"（{_texts(wind_sets)}）" if wind_sets else "")
     return h.result("daisuushii", [Check("東・南・西・北のすべてが刻子か槓子", ok, detail)])
 
 
@@ -452,7 +457,7 @@ def shousuushii(h: _Hand) -> YakuResult:
     elif len(wind_sets) == 4:
         detail = "4 種類とも刻子（大四喜になる）"
     else:
-        detail = f"風牌の刻子は {len(wind_sets)} つ、雀頭は {pair_text}"
+        detail = f"{_how_many('風牌の刻子', len(wind_sets))}。雀頭は {pair_text}"
     return h.result("shousuushii", [Check("風牌の 3 種類が刻子、残り 1 種類が雀頭", ok, detail)])
 
 
@@ -471,7 +476,7 @@ def chinroutou(h: _Hand) -> YakuResult:
 def suukantsu(h: _Hand) -> YakuResult:
     kans = [b for b in h.mentsu if b.type is BlockType.KANTSU]
     ok = len(h.kans) == 4
-    detail = _texts(kans) if ok else f"槓子は {len(h.kans)} つ"
+    detail = _texts(kans) if ok else _how_many("槓子", len(h.kans))
     return h.result("suukantsu", [Check("槓子が 4 つある", ok, detail)])
 
 
@@ -619,13 +624,16 @@ def _situation_checks(key: str, h: _Hand) -> list[Check] | None:
     if key == "double_riichi":
         return [
             _menzen_check(h),
-            _flag("最初の自分の番で（誰も鳴かないうちに）リーチを宣言した", ctx.double_riichi, "最初の番でのリーチではない"),
+            _flag(
+                "最初の自分の番で（誰も鳴かないうちに）リーチを宣言した", ctx.double_riichi,
+                "最初の番でのリーチではない" if ctx.riichi else "リーチを宣言していない",
+            ),
         ]
     if key == "ippatsu":
-        return [
-            _flag("リーチを宣言している", ctx.riichi, "リーチを宣言していない"),
-            _flag("リーチのあと 1 巡以内に、誰も鳴かないうちに和了した", ctx.ippatsu, "1 巡を過ぎた、または途中で鳴きが入った"),
-        ]
+        checks = [_flag("リーチを宣言している", ctx.riichi, "リーチを宣言していない")]
+        if ctx.riichi:          # リーチしていなければ、「1 巡以内」は数えようがない（足りないのは、リーチそのもの）
+            checks.append(_flag("リーチのあと 1 巡以内に、誰も鳴かないうちに和了した", ctx.ippatsu, "1 巡を過ぎた、または途中で鳴きが入った"))
+        return checks
     if key == "menzen_tsumo":
         return [_menzen_check(h), _flag("ツモで和了した", ctx.is_tsumo, "ロンで和了した")]
     if key == "rinshan":

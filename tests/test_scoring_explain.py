@@ -262,3 +262,17 @@ def test_rule_notes_point_out_house_rule_differences():
     aka = run("0m345567p234678s", "5m", riichi=True)
     assert any("赤ドラ（赤い 5）を使わないルールもある" in note for note in aka.rule_notes)
     assert run("123m456p789s23s19p", "4s").rule_notes == ()        # 和了の形でなければ何も出さない
+
+
+def test_dora_words_keep_red_and_ura_dora_apart():
+    """ドラの内訳は、ドラ・赤ドラ・裏ドラを分けて書く（裏ドラはリーチした人だけ、という区別が見えるように）"""
+    from engine.scoring.notation import make_context
+
+    # 0p は赤 5筒。ドラ表示牌 1m → ドラは 2m（1 枚）。裏ドラ表示牌 3z（西）→ 裏ドラは 4z（北。単騎であがった雀頭で 2 枚）
+    ctx = make_context("234789m067p567s4z", "4z", dora="1m", ura="3z", riichi=True, is_tsumo=True)
+    result = explain(ctx)
+    assert result.dora_words == ("ドラ 1", "赤ドラ 1", "裏ドラ 2")
+    plain = explain(make_context("234789m678p678s4z", "4z", is_tsumo=True, riichi=True))         # 5 の牌が無い（赤ドラも無い）
+    assert plain.dora_words == ()
+    yakuman = explain(make_context("19m19p19s1234567z", "1m", dora="9m", is_tsumo=True))
+    assert yakuman.best is not None and yakuman.best.is_yakuman and yakuman.dora_words == ()

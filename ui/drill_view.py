@@ -10,6 +10,7 @@ from html import escape
 from engine.coach import Position
 from engine.drills import KINDS, NEW, REVIEW, DrillProgress, Graded, Question
 from engine.scoring.dora import dora_kind_of
+from engine.scoring.texts import kind_text
 from engine.srs import MAX_BOX, Card
 from engine.tiles import EAST, kind_of
 from ui.drill_session import EARLY
@@ -22,15 +23,16 @@ from ui.win_view import WIND_NAMES
 REASON_LABELS = {REVIEW: "復習", NEW: "新しい問題", EARLY: "先取りの復習"}
 
 
-def progress_text(kind: str, progress: DrillProgress) -> str:
-    """種類の一覧に出す、進み具合のひとこと"""
+def progress_text(kind: str, progress: DrillProgress, *, due: bool = True) -> str:
+    """進み具合のひとこと。due が偽なら、復習の時刻になった問題の数は書かない（すぐ横に札で出すとき）"""
     if not progress.answered:
         return "まだ答えていない"
     parts = [f"{progress.answered} 回答えて、正答率 {percent(progress.accuracy)}"]
     if KINDS[kind].finite and progress.total:
         parts.append(f"定着 {progress.learned} / {progress.total} 問")
     if progress.due:
-        parts.append(f"復習 {progress.due} 問")
+        if due:
+            parts.append(f"復習 {progress.due} 問")
     elif progress.waiting:
         parts.append(f"復習待ち {progress.waiting} 問")
     return "・".join(parts)
@@ -75,22 +77,27 @@ def position_status_html(position: Position, rb: Rubifier) -> str:
     ]
     html = "".join(f'<span class="mj-chip">{chip}</span>' for chip in chips)
     for indicator in position.dora_indicators:
-        html += (
+        dora = dora_kind_of(kind_of(indicator))
+        html += (           # 小さい牌の絵だけだと見分けにくいので、ドラの名前も書く
             f'<span class="mj-chip mj-chip-tiles">ドラ表示牌 {tile_img(indicator, aka=aka, cls="mj-s")} → ドラ '
-            f'{kind_img(dora_kind_of(kind_of(indicator)), cls="mj-s")}</span>'
+            f'{kind_img(dora, cls="mj-s")} {escape(kind_text(dora))}</span>'
         )
     return f'<div class="mj-chips">{html}</div>'
 
 
 def verdict_banner_html(correct: bool, rb: Rubifier, *, text: str = "") -> str:
-    """正解・不正解の札"""
+    """正解・不正解の札（mj-verdict は、答えた直後に画面を動かして見せる目印）"""
     if correct:
-        return f'<div class="mj-headline mj-headline-short good"><b class="mj-stage">○ 正解</b>{"　" + rb.html(text) if text else ""}</div>'
-    return f'<div class="mj-headline mj-headline-short bad"><b class="mj-stage">✗ ちがう</b>{"　" + rb.html(text) if text else ""}</div>'
+        return f'<div class="mj-headline mj-headline-short mj-verdict good"><b class="mj-stage">○ 正解</b>{"　" + rb.html(text) if text else ""}</div>'
+    return f'<div class="mj-headline mj-headline-short mj-verdict bad"><b class="mj-stage">✗ ちがう</b>{"　" + rb.html(text) if text else ""}</div>'
 
 
 def choices_review_html(question: Question, graded: Graded, rb: Rubifier) -> str:
-    """選択肢を、正解・選んだ答えの印つきで並べる（はずれには、それが何にあたるかを添える）"""
+    """選択肢を、正解・選んだ答えの印つきで並べる（はずれには、それが何にあたるかを添える）。
+
+    選ばなかった正解には「選び忘れ」（いくつも選ぶ問題）か「正解」（1 つ選ぶ問題）の札を付ける。
+    印の色だけでは、選んだ正解と見分けられないため。
+    """
     rows = []
     for choice in question.choices:
         right = choice.key in question.correct
@@ -101,7 +108,12 @@ def choices_review_html(question: Question, graded: Graded, rb: Rubifier) -> str
             mark, cls = "✗", "mj-choice-wrong"
         else:
             mark, cls = "", "mj-choice-other"
-        you = '<span class="mj-badge mj-badge-you">選んだ答え</span>' if picked else ""
+        if picked:
+            you = '<span class="mj-badge mj-badge-you">選んだ答え</span>'
+        elif right:
+            you = f'<span class="mj-badge mj-badge-miss">{"選び忘れ" if question.multi else "正解"}</span>'
+        else:
+            you = ""
         tile = kind_img(choice.tile, cls="mj-s") + " " if choice.tile is not None else ""
         label = rb.html(choice.label)           # 画面に出る順（選択肢 → その説明）に作る
         why = f'<div class="mj-sub">{rb.html(choice.why)}</div>' if choice.why else ""
@@ -145,6 +157,6 @@ def done_html(kind: str, progress: DrillProgress, now: int, rb: Rubifier) -> str
 def kind_card_html(kind: str, progress: DrillProgress, rb: Rubifier) -> str:
     """種類の一覧の 1 つ（名前の下に出す説明と進み具合）"""
     info = KINDS[kind]
-    stats = progress_text(kind, progress)
-    due = f' <span class="mj-badge">復習 {progress.due}</span>' if progress.due else ""
+    stats = progress_text(kind, progress, due=False)         # 復習の時刻になった問題の数は、すぐ横の札で出す
+    due = f' <span class="mj-badge">復習 {progress.due} 問</span>' if progress.due else ""
     return f'<div class="mj-sub mj-kind-note">{rb.html(info.short)}。<span class="mj-dimtext">{escape(stats)}</span>{due}</div>'

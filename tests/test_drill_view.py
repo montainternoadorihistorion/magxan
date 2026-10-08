@@ -69,25 +69,28 @@ def page_pieces(kind: str, item: str, *, answered: bool, correct: bool = True) -
     if q.hand:
         pieces.append((f'<div class="mj-hand">{tiles_fit_html(q.hand, aka=True)}</div>', 0))
     analysis = None
+    # 答えたあとは、正解・不正解の帯 →（ボタン）→ 解説 の順（views/drill.py と同じ順に作る）
     if q.position is not None:
         analysis = analyze(q.position)
         pieces.append((position_status_html(q.position, ruby), 0))
-        if answered:
-            pieces.append((f'<div class="mj-sub">{ruby.html("◎ いちばん速い打牌　○ 同じ速さの打牌")}</div>', 0))
-        pieces.append((river_html(q.river or (), ruby, caption="河（切った牌）", aka=q.position.rules.aka_dora), 0))
-        if answered:
+        if not answered:
+            pieces.append((river_html(q.river or (), ruby, caption="河（切った牌）", aka=q.position.rules.aka_dora), 0))
+        else:
             best = [c.tile for c in analysis.best]
             tile = best[0] if correct else next(t for t in q.position.tiles if t // 4 not in {b // 4 for b in best})
             right, verdict, _ = grade_discard(q, tile)
             assert right == correct
             reasons = "".join(f"<li>{ruby.html(reason)}</li>" for reason in verdict.reasons)
-            pieces.append((verdict_banner_html(right, ruby, text=verdict.label), 0))
+            legend = f'<div class="mj-sub">{ruby.html("◎ いちばん速い打牌　○ 同じ速さの打牌　青い枠：切った牌")}</div>'
+            pieces.append((legend + verdict_banner_html(right, ruby, text=verdict.label), 0))
             pieces.append((f'<div class="mj-review"><div>{ruby.html(verdict.text)}</div><ul>{reasons}</ul></div>', 0))
             pieces.append((answer_lines_html(q, ruby), 0))
+            pieces.append((river_html(q.river or (), ruby, caption="河（切った牌）", aka=q.position.rules.aka_dora), 0))
     elif answered:
         graded = grade(q, q.correct if correct else wrong_answer(q))
         assert graded.correct == correct
-        pieces.append((verdict_banner_html(graded.correct, ruby) + choices_review_html(q, graded, ruby) + answer_lines_html(q, ruby), 0))
+        pieces.append((verdict_banner_html(graded.correct, ruby), 0))
+        pieces.append((choices_review_html(q, graded, ruby) + answer_lines_html(q, ruby), 0))
     if answered:
         card = Card(0, NOW + INTERVALS[0], 1, 0, NOW) if not correct else Card(2, NOW + INTERVALS[2], 1, 1, NOW)
         note = srs_note_html(kind, card, correct, NOW, ruby)
@@ -184,6 +187,11 @@ def test_position_status_shows_round_seat_draws_and_dora():
     assert "場" in text and "家（" in text and f"残りツモ {q.position.draws_left} 回" in text
     assert text.count("ドラ表示牌") == len(q.position.dora_indicators) >= 1
     assert html.count("<img") == 2 * len(q.position.dora_indicators)        # 表示牌と、その次の牌（ドラ）
+    from engine.scoring.dora import dora_kind_of
+    from engine.scoring.texts import kind_text
+    from engine.tiles import kind_of
+    for indicator in q.position.dora_indicators:                          # 小さい絵だけでは見分けにくいので、名前も
+        assert f"→ ドラ  {kind_text(dora_kind_of(kind_of(indicator)))}" in text
 
 
 def test_verdict_banner():
@@ -201,8 +209,19 @@ def test_choices_review_marks_right_wrong_and_picked():
     assert html.count("mj-choice-other") == len(q.choices) - 2 and html.count("選んだ答え") == 1
     right_row = html[html.index("mj-choice-right"):].split("</div></div>")[0]
     assert "3,900 点" in text_of(right_row) and "選んだ答え" not in right_row
+    assert ">正解</span>" in right_row          # 1 つ選ぶ問題：選ばなかった正解には「正解」の札
     perfect = choices_review_html(q, grade(q, q.correct), rb())
-    assert "mj-choice-wrong" not in perfect and perfect.count("選んだ答え") == 1
+    assert "mj-choice-wrong" not in perfect and perfect.count("選んだ答え") == 1 and "mj-badge-miss" not in perfect
+
+
+def test_choices_review_tells_which_right_answers_were_not_picked():
+    """いくつも選ぶ問題で、選ばなかった正解には「選び忘れ」の札を付ける（印の色だけでは、選んだ正解と見分けにくい）"""
+    q = next(q for q in (question("wait", str(seed)) for seed in range(50)) if len(q.correct) >= 2)
+    first, *rest = sorted(q.correct)
+    html = choices_review_html(q, grade(q, [first]), rb())
+    assert html.count("選び忘れ") == len(rest) and html.count("選んだ答え") == 1 and ">正解</span>" not in html
+    nothing = choices_review_html(q, grade(q, []), rb()) if q.multi else ""
+    assert nothing.count("選び忘れ") == len(q.correct)
 
 
 def test_choices_review_puts_the_label_before_its_explanation():
@@ -256,13 +275,15 @@ def test_done_card_and_kind_card():
         assert missing_ruby(ruby_parts(card)) == [], kind
         assert KINDS[kind].short in text_of(card) and "まだ答えていない" in text_of(card) and "mj-badge" not in card
     due = kind_card_html("han", progress_of("han", deck, NOW + DAY), rb())
-    assert '<span class="mj-badge">復習 1</span>' in due
+    # 復習の時刻になった問題の数は、札だけで言う（文の中でも言うと、同じことを 2 回言うことになる）
+    assert '<span class="mj-badge">復習 1 問</span>' in due and text_of(due).count("復習 1 問") == 1
 
 
 def test_progress_text():
     assert progress_text("han", DrillProgress(0, 0, 0, 0, 38)) == "まだ答えていない"
     finite = DrillProgress(answered=10, right=8, due=2, waiting=3, total=38, seen=9, learned=4)
     assert progress_text("han", finite) == "10 回答えて、正答率 80%・定着 4 / 38 問・復習 2 問"
+    assert progress_text("han", finite, due=False) == "10 回答えて、正答率 80%・定着 4 / 38 問"
     waiting = DrillProgress(answered=10, right=8, due=0, waiting=3, total=38, seen=9, learned=4)
     assert progress_text("han", waiting) == "10 回答えて、正答率 80%・定着 4 / 38 問・復習待ち 3 問"
     generated = DrillProgress(answered=3, right=3, due=0, waiting=0, total=None)

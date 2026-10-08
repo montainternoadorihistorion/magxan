@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import streamlit as st
 
-from engine.content import glossary, yaku_pages
+from engine.content import Term, glossary, yaku_pages
 from ui.components.choices import Option, choice_buttons
 from ui.learn_view import (
     YAKU_CATEGORY,
     YAKU_CATEGORY_NAME,
     certainty_legend_html,
-    search_terms,
+    search_results,
     sources_html,
     subhead,
     term_html,
@@ -22,6 +22,8 @@ from ui.learn_view import (
 from ui.ruby import Rubifier
 
 ss = st.session_state
+#: 言葉でさがしたときに出す数の上限（多すぎると、画面がとても長くなる）
+MAX_RESULTS = 60
 book = glossary()
 pages = yaku_pages()
 categories = {**book.categories, YAKU_CATEGORY: YAKU_CATEGORY_NAME}
@@ -50,16 +52,18 @@ if picked is not None:
 
 query = st.text_input("言葉でさがす", key="gl_w_query", placeholder="例：テンパイ、待ち、鳴き", autocomplete="off")
 if query.strip():
-    terms, found = search_terms(book, pages, query)
-    total = len(terms) + len(found)
-    st.caption(f"「{query.strip()}」で {total} 件")
-    if total == 0:
+    # 見出し語・読みがぴったり合うもの → 先頭が合うもの → … の順。用語と役の名前をまぜて並べる
+    results = search_results(book, pages, query)
+    st.caption(f"「{query.strip()}」で {len(results)} 件")
+    if not results:
         st.html(f'<div class="mj-sub">{rb.html("見つからなかった。ひらがな・カタカナ・漢字のどれでもさがせる。短い言葉で試すと、見つかりやすい。")}</div>')
-    html = "".join(term_html(term, rb, category=categories[term.category]) for term in terms[:40])
-    html += "".join(yaku_term_html(page, rb) for page in found[:20])
+    html = "".join(
+        term_html(item, rb, category=categories[item.category]) if isinstance(item, Term) else yaku_term_html(item, rb)
+        for item in results[:MAX_RESULTS]
+    )
     if html:
         st.html(html)
-    if len(terms) > 40 or len(found) > 20:
+    if len(results) > MAX_RESULTS:
         st.caption("多すぎるので、はじめのほうだけを出している。")
 else:
     if ss.get("gl_category") not in categories:

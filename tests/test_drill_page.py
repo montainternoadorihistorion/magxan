@@ -1,16 +1,17 @@
 """ドリルのページを、画面なしで動かして確かめる。
 
-答えの選択肢と手牌は、ブラウザの中の部品が描く（ここでは押せない）。答えたあとの状態は、ページが覚えている値
-（セッション）を直接入れて作る。問題を進める仕組みそのものは test_drill_session.py、実際の画面は tools/e2e_phase2_check.py。
+答えの選択肢と手牌は、ブラウザの中の部品が描く。ここでは、部品から答えが届いたときと同じ値を送るか（component_helpers）、
+答えたあとの状態を、ページが覚えている値（セッション）に直接入れて作る。問題を進める仕組みそのものは test_drill_session.py、
+実際の画面は tools/e2e_phase2_check.py。
 """
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from component_helpers import choose, component_data, pick_tile, send
 from html_helpers import check_tile_images, page_html, page_parts, text_of
 from streamlit.testing.v1 import AppTest
 
@@ -99,8 +100,12 @@ def assert_ruby(at: AppTest, where: object = "") -> None:
 
 def choices_of(at: AppTest) -> dict:
     """選択肢の部品に渡した内容"""
-    component = next(c for c in at.get("bidi_component") if c.proto.component_name == "mjdojo_choices")
-    return json.loads(component.proto.json)
+    return component_data(at, "mjdojo_choices")
+
+
+def visible_text(at: AppTest) -> str:
+    """いつも見えている部分の文字を、画面に出る順につなげたもの（ボタンの名前も入る。折りたたみの中身は入らない）"""
+    return "".join(text for text, _, scope in page_parts(at) if scope == 0)
 
 
 # ---------------------------------------------------------------- 開く・種類の一覧
@@ -175,12 +180,15 @@ def test_question_page_before_and_after_answering(kind):
     else:
         assert any(c.proto.component_name == "mjdojo_tile_hand" for c in at.get("bidi_component"))
 
+    assert component_data(at, "mjdojo_scroll_top")["reveal"] == []          # 新しい問題は、画面のいちばん上から
+
     for correct in (True, False):
         at = answer(show(at, kind, item), correct=correct)
         text = page_text(at)
         assert ("○ 正解" in text) == correct and ("✗ ちがう" in text) != correct, (kind, correct)
         assert all(line in text for line in q.answer)
         assert {"次の問題", "種類の一覧へ"} <= set(buttons(at)) and "やめて、種類の一覧へ" not in buttons(at)
+        assert buttons(at).count("次の問題") == 2               # 正解・不正解の帯のすぐ下と、解説のいちばん下
         assert "この回 1 問・正解" in text
         assert_ruby(at, (kind, correct))
         labels = [e.label for e in at.expander]
@@ -188,6 +196,44 @@ def test_question_page_before_and_after_answering(kind):
         assert ("受け入れ表（切る牌と、手が進む牌）" in labels) == (kind == "discard")
         if not correct:
             assert "もう一度出す" in text
+        # 出る順：正解・不正解の帯 → 次の問題 → 解説 → （解説の下の）次の問題
+        shown = visible_text(at)
+        verdict = shown.index("○ 正解" if correct else "✗ ちがう")
+        first_next, last_next = shown.index("次の問題"), shown.rindex("次の問題")
+        lesson = shown.index(q.answer[0])
+        assert verdict < first_next < lesson < last_next, (kind, correct, verdict, first_next, lesson, last_next)
+        # 答えた直後は、正解・不正解の帯と、そのすぐ下のボタンが見えるところまで、画面を動かす
+        assert component_data(at, "mjdojo_scroll_top")["reveal"] == [".mj-verdict", ".st-key-dr_actions"]
+        assert "mj-verdict" in page_html(at)
+        if q.position is not None:
+            hand = component_data(at, "mjdojo_tile_hand")
+            tile = at.session_state["dr_graded"]["tile"]
+            assert hand["enabled"] is False and hand["chosenId"] == tile and hand["chosenLabel"] == "切った牌"
+            assert "青い枠：切った牌" in text
+
+
+def test_answering_through_the_hand_and_the_choices():
+    """部品から答えが届くと、採点して記録し、正解・不正解を出す。同じ画面からの 2 回目の答えは数えない"""
+    at = show(open_drill(), "discard", "777")
+    q = question("discard", "777")
+    best = {c.tile // 4 for c in analyze(q.position).best}
+    tile = next(t for t in q.position.tiles if t // 4 in best)
+    stale = component_data(at, "mjdojo_tile_hand")["rev"]
+    pick_tile(at, tile)
+    assert at.session_state["dr_graded"] == {"tile": tile, "correct": True} and at.session_state["dr_count"] == 1
+    assert "○ 正解" in page_text(at)
+    # 答えたあとの手牌は押せない。古い画面から届いた確定（二重送信）は無視する
+    assert component_data(at, "mjdojo_tile_hand")["enabled"] is False
+    other = next(t for t in q.position.tiles if t // 4 not in best)
+    send(at, "mjdojo_tile_hand", "pick", {"id": other, "rev": stale})
+    assert at.session_state["dr_graded"]["tile"] == tile and at.session_state["dr_count"] == 1
+
+    at = show(at, "table", "cr:30:3")
+    choice = question("table", "cr:30:3")
+    wrong = next(c.key for c in choice.choices if c.key not in choice.correct)
+    choose(at, [wrong])
+    assert at.session_state["dr_graded"] == {"picked": [wrong], "correct": False} and "✗ ちがう" in page_text(at)
+    assert ">正解</span>" in page_html(at)          # 選ばなかった正解に、札が付く
 
 
 def test_reading_drill_hides_readings_until_answered():

@@ -14,6 +14,7 @@ from engine.progress import Stamp, dump_stamps, parse_export
 from engine.records import HandRecord, dump_record, load_history
 from engine.srs import Card, Deck, dump_deck, load_deck
 from ui.components.browser_store import initial_state
+from ui.layout import _BASE_STYLE
 from ui.practice_session import DEFAULT_SETTINGS
 from ui.progress_store import DRILL_PREFIX, HAND_NAME, HISTORY_NAME, SETTINGS_NAME, STAMPS_NAME
 from ui.ruby import missing_ruby
@@ -287,6 +288,29 @@ def test_import_refuses_content_that_changed_after_the_preview():
     click(at, "読み込む")
     assert any("確かめたときから変わりました" in e.value for e in at.error)
     assert known(at)[HISTORY_NAME] == filled()[HISTORY_NAME]
+
+
+def test_paste_area_explains_itself_in_japanese():
+    """貼り付けの欄には、日本語の案内と「この文字を確かめる」がある（英語の「Press Ctrl+Enter to apply」は、CSS で隠す）"""
+    at = open_records()
+    assert "この文字を確かめる" in [b.label for b in at.button]
+    assert any("貼り付けたら、下の「この文字を確かめる」を押してください。" in c.value for c in at.caption)
+    assert any("「Upload」（または「Browse files」）を押して" in c.value for c in at.caption)
+    assert "「ダウンロード」に入る" in page_text(at)
+    assert '.st-key-rc_paste_box [data-testid="InputInstructions"] { display: none; }' in _BASE_STYLE
+    paste(at, exported(open_records(filled())))
+    click(at, "この文字を確かめる")
+    assert "入っているもの：成績 2 局" in page_text(at) and "読み込む" in [b.label for b in at.button]
+
+
+def test_file_wins_over_pasted_text_and_says_so():
+    at = open_records()
+    text = exported(open_records(filled()))
+    paste(at, '{"app": "mjdojo"}')
+    at.file_uploader[0].set_value(("mjdojo.json", text.encode("utf-8"), "application/json")).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("ファイルのほうを読み込みます（貼り付けた文字は使いません）。" in i.value for i in at.info)
+    assert "入っているもの：成績 2 局" in page_text(at)
 
 
 def test_export_text_is_reused_while_the_records_do_not_change():

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from ui.components.browser_store import BrowserStore, initial_state
-from ui.components.tile_hand import parse_pick
+from ui.components.tile_hand import parse_action, parse_pick
 
 HAND = [4, 8, 12, 52, 132]
 
@@ -43,6 +43,18 @@ def test_parse_pick_accepts_riichi_only_for_tiles_that_allow_it():
 def test_parse_pick_tolerates_missing_measurements():
     pick = parse_pick({"id": 4, "rev": 0, "prevMs": None}, rev=0, tile_ids=HAND)
     assert pick is not None and pick.prev_response_ms is None and pick.image_errors == 0
+
+
+def test_action_button_values_are_told_apart_from_picks():
+    """牌を切らずにする操作（ツモあがり）のボタンの値は、牌の確定とは別に受け取る"""
+    action = {"action": True, "rev": 3, "prevMs": 120, "vw": 375}
+    assert parse_action(action, rev=3) is True
+    assert parse_action(action, rev=4) is False                      # 古い画面から届いた
+    assert parse_action({"action": "yes", "rev": 3}, rev=3) is False
+    assert parse_action({"id": 52, "rev": 3}, rev=3) is False        # ふつうの確定
+    assert parse_action(None, rev=3) is False and parse_action([True, 3], rev=3) is False
+    # 操作のボタンの値に牌IDが入っていても、牌を切ったことにはしない
+    assert parse_pick({"action": True, "id": 52, "rev": 3}, rev=3, tile_ids=HAND) is None
 
 
 def browser_reply(state: dict, store_key: str, name: str, *, to: str | None = None, **value) -> None:

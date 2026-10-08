@@ -139,6 +139,18 @@ class Explanation:
         return tuple(words)
 
     @property
+    def dora_words(self) -> tuple[str, ...]:
+        """採用した読み方で数えるドラの内訳（例：「ドラ 1」「赤ドラ 1」「裏ドラ 2」）。ドラを数えない手（役なし・役満）では空。
+
+        裏ドラと赤ドラも「ドラ」とまとめて書くと、裏ドラはリーチした人だけのもの、という区別が見えなくなるので、分けて書く。
+        """
+        best = self.best
+        if best is None or not best.dora_han:
+            return ()
+        counts = (("ドラ", self.dora.dora), ("赤ドラ", self.dora.aka), ("裏ドラ", self.dora.ura))
+        return tuple(f"{label} {count}" for label, count in counts if count)
+
+    @property
     def declaration(self) -> str:
         """卓での申告のしかた（発声 → 役 → 点数）。例: ロン。リーチ・ピンフ・ドラ 1。3900。
 

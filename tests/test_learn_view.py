@@ -48,6 +48,7 @@ from ui.learn_view import (
     rule_item_html,
     rule_names_html,
     score_table_html,
+    search_results,
     search_terms,
     sources_html,
     stamp_html,
@@ -226,14 +227,17 @@ def test_result_line_shows_what_the_scoring_engine_computed():
             else:
                 assert f"{best.han} 翻 {best.fu.fu} 符" in line
             if best.dora_han:
-                assert f"ドラ {best.dora_han}" in line
+                words = result.dora_words
+                assert words and sum(int(word.split()[-1]) for word in words) == best.dora_han
+                assert all(word in line for word in words)
 
 
 def test_result_line_examples():
     riichi = BY_KEY["riichi"]
     first, second = (text_of(example_html(riichi, hand, rb())) for hand in riichi.examples[:2])
     assert "立直1 翻 40 符　1,300 点" in first
-    assert "立直・門前清自摸和・平和・ドラ 25 翻（満貫）　2,000・4,000 点" in second
+    # 裏ドラは「ドラ」とまとめず、裏ドラと書く（本文で「裏ドラは、リーチしてあがった人だけ」と区別を教えているので）
+    assert "立直・門前清自摸和・平和・裏ドラ 25 翻（満貫）　2,000・4,000 点" in second
 
 
 def test_example_card_shows_the_checks_of_the_page_yaku():
@@ -319,7 +323,8 @@ def test_frequency_of_a_combined_count_does_not_claim_it_for_one_yaku():
         assert stat.combined and stat.note
         text = text_of(frequency_html(BY_KEY[key], stats, rb()))
         assert f"{stat.combined}として、和了 {stat.total:,} 回のうち {stat.count:,} 回" in text, text
-        assert "この役だけの回数は、分からない" in text and stat.note in text
+        assert "この役だけの回数は分からない" in text and stat.note in text
+        assert text.count("この役だけの回数") == 1 and "1 回）。" in text           # 同じことを 2 回言わない。文の終わりに「。」
     alone = text_of(frequency_html(BY_KEY["kokushi"], stats, rb()))
     assert "として、" not in alone and "分からない" not in alone
 
@@ -425,6 +430,24 @@ def test_search_puts_headword_hits_first_and_needs_every_word():
     assert set(t.term for t in both) < set(t.term for t in one)
     assert search_terms(book, PAGES, "") == ([], []) == search_terms(book, PAGES, "   ")
     assert search_terms(book, PAGES, "zzzz") == ([], [])
+
+
+def test_search_ranks_exact_then_prefix_then_contains_across_terms_and_yaku():
+    """読みがぴったり合うものを先に出す（「りーち」なら立直。分類の順に並べると、説明に「リーチ」を含む用語が先に来てしまう）"""
+    book = glossary()
+
+    def first(query: str) -> str:
+        item = search_results(book, PAGES, query)[0]
+        return getattr(item, "term", None) or item.name
+
+    assert first("りーち") == first("リーチ") == first("立直") == "立直"
+    assert first("かん") == "カン" and first("ぽん") == "ポン" and first("ちー") == "チー" and first("てんぱい") == "聴牌"
+    names = [getattr(item, "term", None) or item.name for item in search_results(book, PAGES, "ぽん")]
+    assert names.index("ポン") < names.index("双碰")
+    # 用語と役をまぜても、件数は search_terms と同じ（どちらにも入る当たりを、落としも重ねもしない）
+    terms, pages = search_terms(book, PAGES, "りーち")
+    assert len(search_results(book, PAGES, "りーち")) == len(terms) + len(pages)
+    assert search_results(book, PAGES, "  ") == []
 
 
 def test_sources_are_links_that_open_in_a_new_tab():
@@ -546,7 +569,20 @@ def test_rules_page_gives_ruby_inside_and_outside_the_folds():
     ruby = rb()
     pieces = [
         (f'<div class="mj-note">{ruby.html(book.intro)}</div>' + rule_names_html(book.names, book.surveyed, ruby), 0),
-        (subhead("★ 卓に着く前に確かめること", ruby) + checklist_html(book, ruby), 0),
+        (
+            subhead("★ 卓に着く前に確かめること", ruby)
+            + f'<div class="mj-note"><b>{ruby.html(f"まず聞いておくこと（{len(book.first_checks)} つ）")}</b></div>'
+            + f'<div class="mj-sub">{ruby.html("あがれるかどうかや、点数に、すぐ関わるもの。初めての卓では、これだけでも聞いておくと安心。")}</div>'
+            + checklist_html(book.first_checks, ruby)
+            + f'<div class="mj-sub">{ruby.html("聞き方の例：「アリアリですか？」（喰いタンと後付けが、どちらもありか、という意味）「赤は何枚ですか？」「トビはありますか？」。分からないことは、打つ前に聞けばよい。")}</div>',
+            0,
+        ),
+        (checklist_html(book.more_checks, ruby.fork()), 50),
+        (
+            subhead("項目ごとの違い", ruby)
+            + f'<div class="mj-sub">{ruby.html("点数・あがりと流局・試合の進め方・卓での決まりの、4 つのまとまりに分けた。開くと、6 つのルールでどう分かれるかと、このアプリの扱いが出る。")}</div>',
+            0,
+        ),
     ]
     for scope, group in enumerate(book.groups, start=1):
         inner = ruby.fork()
@@ -560,9 +596,14 @@ def test_rules_page_gives_ruby_inside_and_outside_the_folds():
 
 def test_checklist_and_rule_names():
     book = rule_book()
-    html = checklist_html(book, rb())
+    html = checklist_html(book.checklist, rb())
     assert html.count("<li>") == len(book.checklist) > 0
     assert all(item.title in text_of(html) and item.ask in text_of(html) for item in book.checklist)
+    # 初めての卓で、まず聞くものは 5 つまで（全部を聞くのは現実的でない）。残りは「余裕があれば」
+    first = [item.key for item in book.first_checks]
+    assert first == ["aka", "kuitan", "atozuke", "ippatsu_ura", "tobi"]
+    assert set(book.first_checks) | set(book.more_checks) == set(book.checklist)
+    assert not set(book.first_checks) & set(book.more_checks)
     names = text_of(rule_names_html(book.names, "2026-10-07", rb()))
     assert "2026/10/07 に調べた" in names and all(name in names for name in book.names.values())
 

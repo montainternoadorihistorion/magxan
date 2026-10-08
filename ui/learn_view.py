@@ -17,7 +17,6 @@ from engine.content import (
     GuideSection,
     Hand,
     Origin,
-    RuleBook,
     RuleItem,
     Source,
     Term,
@@ -144,7 +143,7 @@ def result_line_html(result: Explanation, rb: Rubifier) -> str:
     best = result.best
     assert best is not None and best.points is not None
     names = "・".join(item.name for item in best.evaluation.yaku)
-    dora = f"・ドラ {best.dora_han}" if best.dora_han else ""
+    dora = "".join(f"・{word}" for word in result.dora_words)
     if best.is_yakuman:
         size = best.points.level_name
     elif best.points.level_name:
@@ -232,7 +231,8 @@ def head_html(page: YakuPage, rb: Rubifier, *, stat: YakuStat | None) -> str:
     text = han_text(page)
     if text:
         chips.append(f'<span class="mj-chip mj-chip-han">{rb.html(text)}</span>')
-    chips.append(f'<span class="mj-chip">{rb.html(GROUPS[page.group])}</span>')
+    else:           # 翻数の札があるときは、まとまりの名前（「1 翻」など）を並べない（同じことを 2 回言うことになる）
+        chips.append(f'<span class="mj-chip">{rb.html(GROUPS[page.group])}</span>')
     if stat is not None:
         chips.append(f'<span class="mj-chip mj-freq-{LEVEL_CLASS[stat.level]}">出やすさ：{escape(stat.level)}</span>')
     spoken = ""
@@ -281,10 +281,10 @@ def frequency_html(page: YakuPage, stats: YakuStats, rb: Rubifier) -> str:
     else:
         rate = f"{stat.per} {stat.total:,} 回のうち 0 回"
     if stat.combined:
-        # 出典がほかの役とまとめて数えている。この役だけの回数は分からないので、まとまりの回数として出す
-        rate = f"{stat.combined}として、{rate}。この役だけの回数は、分からない"
+        # 出典がほかの役とまとめて数えている。この役だけの回数は分からないので、まとまりの回数として出す（そのことは note に書く）
+        rate = f"{stat.combined}として、{rate}"
     html = (
-        f'<div class="mj-note"><span class="mj-chip mj-freq-{LEVEL_CLASS[stat.level]}">{escape(stat.level)}</span> {rb.html(rate)}</div>'
+        f'<div class="mj-note"><span class="mj-chip mj-freq-{LEVEL_CLASS[stat.level]}">{escape(stat.level)}</span> {rb.html(rate + "。")}</div>'
         f'<div class="mj-sub">出典：<a href="{escape(source.url, quote=True)}" target="_blank" rel="noopener noreferrer">{escape(source.title)}</a>'
         f"（{escape(source.site)}、{escape(source.published)}）。{rb.html(source.data.rstrip('。') + '。')}</div>"
     )
@@ -347,21 +347,64 @@ def _kana(text: str) -> str:
     return "".join(chr(ord(ch) + 0x60) if "ぁ" <= ch <= "ゖ" else ch for ch in text)
 
 
-def search_terms(glossary: Glossary, pages: Sequence[YakuPage], query: str) -> tuple[list[Term], list[YakuPage]]:
-    """用語と役の名前を、言葉でさがす（見出し語・読み・別の言い方・意味のどこかに含まれていれば当たり）"""
+def _names(*texts: str) -> tuple[list[str], list[str]]:
+    """見出し語・読みの書き方（さがすときの形）→（そのままの形, 「・」で区切った読みの 1 つずつ）"""
+    whole = [_kana(text) for text in texts if text]
+    parts = [_kana(part) for text in texts if text and "・" in text for part in text.split("・") if part]
+    return whole, parts
+
+
+def _rank(word: str, names: tuple[list[str], list[str]]) -> int:
+    """見出し語・読みへの当たり方（小さいほど良い）。
+
+    0 ＝ 見出し語か読みと、ぴったり一致　1 ＝ 区切った読みの 1 つと一致、または先頭が一致
+    2 ＝ どこかに含む　3 ＝ 見出し語・読みには無い（説明の中にだけある）
+    """
+    whole, parts = names
+    if word in whole:
+        return 0
+    if word in parts or any(name.startswith(word) for name in whole):
+        return 1
+    if any(word in name for name in whole):
+        return 2
+    return 3
+
+
+def _spoken_name(page: YakuPage) -> str:
+    """卓での呼び方のうち、言葉 1 つのもの（「白なら『ハク』…」のような説明は、名前として比べない）"""
+    spoken = page.spoken
+    return spoken if spoken and not any(mark in spoken for mark in "、。「」 ") else ""
+
+
+def search_results(glossary: Glossary, pages: Sequence[YakuPage], query: str) -> list[Term | YakuPage]:
+    """用語と役の名前を、言葉でさがす。見出し語・読み・別の言い方・意味のどこかに、すべての言葉が含まれていれば当たり。
+
+    並べ方：見出し語か読みが、ぴったり一致 → 先頭が一致 → どこかに含む → 説明の中にだけある、の順（いくつかの言葉で
+    さがしたときは、最初の言葉で決める）。同じ順位なら、用語辞典の並び（分類の順）のまま、用語を役より先に。
+    """
     words = [_kana(word) for word in query.split() if word.strip()]
     if not words:
-        return [], []
+        return []
 
     def hit(*texts: str) -> bool:
         joined = _kana(" ".join(texts))
         return all(word in joined for word in words)
 
-    terms = [t for t in glossary.terms if hit(t.term, t.reading, t.alt, t.meaning)]
-    # 見出し語か読みに当たったものを先に
-    terms.sort(key=lambda t: 0 if any(word in _kana(t.term + " " + t.reading) for word in words) else 1)
-    found = [p for p in pages if hit(p.name, p.reading, p.spoken, p.short)]
-    return terms, found
+    ranked: list[tuple[int, int, int, Term | YakuPage]] = []
+    for index, term in enumerate(glossary.terms):
+        if hit(term.term, term.reading, term.alt, term.meaning):
+            ranked.append((_rank(words[0], _names(term.term, term.reading)), 0, index, term))
+    for index, page in enumerate(pages):
+        if hit(page.name, page.reading, page.spoken, page.short):
+            ranked.append((_rank(words[0], _names(page.name, page.reading, _spoken_name(page))), 1, index, page))
+    ranked.sort(key=lambda row: row[:3])
+    return [item for *_, item in ranked]
+
+
+def search_terms(glossary: Glossary, pages: Sequence[YakuPage], query: str) -> tuple[list[Term], list[YakuPage]]:
+    """search_results を、用語と役の名前に分けたもの（それぞれ、当たり方の良い順）"""
+    results = search_results(glossary, pages, query)
+    return [r for r in results if isinstance(r, Term)], [r for r in results if not isinstance(r, Term)]
 
 
 def term_html(term: Term, rb: Rubifier, *, category: str = "") -> str:
@@ -483,9 +526,9 @@ def rule_item_html(item: RuleItem, rb: Rubifier) -> str:
     return f'<div class="mj-termcard">{"".join(parts)}</div>'
 
 
-def checklist_html(book: RuleBook, rb: Rubifier) -> str:
-    """卓に着く前に確かめること（★ の項目）"""
-    rows = "".join(f"<li><b>{rb.html(item.title)}</b>：{rb.html(item.ask)}</li>" for item in book.checklist)
+def checklist_html(items: Sequence[RuleItem], rb: Rubifier) -> str:
+    """卓に着く前に確かめること（★ の項目のうち、渡したもの）"""
+    rows = "".join(f"<li><b>{rb.html(item.title)}</b>：{rb.html(item.ask)}</li>" for item in items)
     return f'<ul class="mj-rules">{rows}</ul>'
 
 

@@ -12,7 +12,7 @@ import streamlit as st
 
 from engine.coach import analyze
 from engine.content import glossary, yaku_page_map
-from engine.drills import DONE, GROUPS, KINDS, early_item, grade, grade_discard, progress_of
+from engine.drills import DONE, GROUPS, KINDS, LEARNED_BOX, early_item, grade, grade_discard, progress_of
 from engine.scoring.explain import Status, explain
 from engine.srs import INTERVALS
 from ui.components.browser_store import BrowserStore
@@ -47,6 +47,10 @@ session = DrillSession(ss, store)
 DETAIL_KEYS = {"fu": ("reading", "fu"), "yaku": ("reading", "yaku", "dora"), "valid": ("reading", "yaku"), "score": None, "win": None}
 #: 選択肢の並べ方（種類ごと。書いていない種類は、縦に並べる）
 LAYOUTS = {"valid": "row", "yaku": "chips", "wait": "chips"}
+#: 答えたあとのボタンの入れ物の鍵（画面では st-key-… という印になる）
+ACTIONS_KEY = "dr_actions"
+#: 答えた直後に、見えるところまで画面を動かす部分：正解・不正解の帯と、そのすぐ下の「次の問題」
+REVEAL = (".mj-verdict", f".st-key-{ACTIONS_KEY}")
 
 
 def _now() -> int:
@@ -98,13 +102,15 @@ def _menu(rb: Rubifier) -> None:
     with st.expander("ドリルのしくみ", key="dr_x_about"):
         inner = rb.fork()
         steps = " → ".join(span_text(seconds) for seconds in INTERVALS)
+        learned = span_text(INTERVALS[LEARNED_BOX])
         lines = [
             f"間違えた問題は、間隔をあけて、もう一度出す。正解するたびに、次に出すまでの間隔が延びる（{steps}）。間違えると、最初の間隔に戻る。",
             "はじめての問題に正解したら、3 日後から始める（もう知っている問題を、何度も出さないため）。",
             "読み・翻数・成立/不成立・点数早見は、問題の数が決まっている。全部の問題を、覚えるまで追いかける。",
+            f"「定着」は、正解を重ねて、次に出すまでの間隔が {learned}以上になった問題の数（問題の数が決まっている種類だけ）。",
             "役の判定・あがれる？・待ち・符・点数計算・何切るは、その場で問題を作る。間違えた問題だけを覚えておいて、あとでもう一度出す。",
             "正解は、すべて点数計算・向聴数・牌効率の計算で決めている。ルールは、このアプリの初期設定（雀魂の段位戦と同じ）。",
-            "危険牌を見分けるドリルは、相手のいる対局（Phase 3）と一緒に入れる予定。",
+            "危険牌を見分けるドリルは、今後の版で、相手のいる対局と一緒に入れる予定。",
         ]
         st.html('<ul class="mj-rules">' + "".join(f"<li>{inner.html(line)}</li>" for line in lines) + "</ul>")
     st.page_link("views/records.py", label="記録と保存（ドリルの記録も、ファイルに保存できる）", icon=":material/save:")
@@ -137,7 +143,19 @@ def _options(q, rb: Rubifier) -> list[Option]:
     return options
 
 
-def _quiz(kind: str, rb: Rubifier) -> None:
+def _actions(rev: int) -> None:
+    """答えたあとのボタン。正解・不正解の帯のすぐ下に置く（解説を読まずに次へ進みたいとき、画面を送らなくてよいように）"""
+    with st.container(horizontal=True, key=ACTIONS_KEY):
+        st.button("次の問題", type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_{rev}")
+        st.button("種類の一覧へ", on_click=session.leave, width="stretch", key=f"dr_b_leave_{rev}")
+
+
+def _quiz(kind: str, rb: Rubifier) -> bool:
+    """問題の画面。答えたあとの画面なら True を返す（正解・不正解の帯が見えるところまで、画面を動かすため）。
+
+    答えたあとは、上から 問題 → 手牌など → 正解・不正解の帯 → 「次の問題」 → 解説 の順に出す。
+    解説の下にも「次の問題」を置く（解説を読み終えた位置から、そのまま進めるように）。
+    """
     rev = session.rev
     now = _now()
     q = session.question
@@ -149,7 +167,7 @@ def _quiz(kind: str, rb: Rubifier) -> None:
             if early_item(kind, deck) is not None:
                 st.button("先取りで復習する", type="primary", on_click=session.early, width="stretch")
             st.button("種類の一覧へ", on_click=session.leave, width="stretch")
-        return
+        return False
     state = session.result
     answered = state is not None
     # 読みの問題では、答える前に読みが見えてしまわないように、ルビを振らない
@@ -168,6 +186,7 @@ def _quiz(kind: str, rb: Rubifier) -> None:
         st.html(f'<div class="mj-hand">{tiles_fit_html(q.hand, aka=True)}</div>')
 
     analysis = None
+    review = ""             # 答えたあと、ボタンの下に出す解説（画面に出る順に作る。用語のルビを、最初に出てくるところに振るため）
     if q.position is not None:
         position = q.position
         analysis = analyze(position)
@@ -180,16 +199,19 @@ def _quiz(kind: str, rb: Rubifier) -> None:
             rev=rev * 2 + (1 if answered else 0),       # 答えたら番号を進める（手牌の部品は、番号が変わると「応答した」と分かる）
             on_pick=_on_discard, drawn_id=position.drawn, aka=position.rules.aka_dora,
             enabled=not answered, marks=marks, confirm_label="この牌を切る", prompt="切る牌をタップして選ぶ",
+            chosen_id=state["tile"] if answered else None, chosen_label="切った牌",
         )
-        if answered:
-            st.html(f'<div class="mj-sub">{qrb.html(f"{MARK_PICK[0]} いちばん速い打牌　{MARK_EQUAL[0]} 同じ速さの打牌")}</div>')
-        st.html(river_html(q.river or (), qrb, caption="河（切った牌）", aka=position.rules.aka_dora))
-        if answered:
+        if not answered:
+            st.html(river_html(q.river or (), qrb, caption="河（切った牌）", aka=position.rules.aka_dora))
+        else:
             correct, verdict, _ = grade_discard(q, state["tile"])
-            st.html(verdict_banner_html(correct, qrb, text=verdict.label))
+            legend = f"{MARK_PICK[0]} いちばん速い打牌　{MARK_EQUAL[0]} 同じ速さの打牌　青い枠：切った牌"
+            st.html(f'<div class="mj-sub">{qrb.html(legend)}</div>' + verdict_banner_html(correct, qrb, text=verdict.label))
+            _actions(rev)
             reasons = "".join(f"<li>{qrb.html(reason)}</li>" for reason in verdict.reasons)
-            st.html(f'<div class="mj-review {"good" if correct else "bad"}"><div>{qrb.html(verdict.text)}</div>{"<ul>" + reasons + "</ul>" if reasons else ""}</div>')
-            st.html(answer_lines_html(q, qrb))
+            review = f'<div class="mj-review {"good" if correct else "bad"}"><div>{qrb.html(verdict.text)}</div>{"<ul>" + reasons + "</ul>" if reasons else ""}</div>'
+            review += answer_lines_html(q, qrb)
+            review += river_html(q.river or (), qrb, caption="河（切った牌）", aka=position.rules.aka_dora)      # 河は、解説の下へ
     elif not answered:
         choice_buttons(
             _options(q, qrb), key="dr_choices", rev=rev, on_pick=_on_choice, multi=q.multi, layout=LAYOUTS.get(kind, "list"),
@@ -197,27 +219,27 @@ def _quiz(kind: str, rb: Rubifier) -> None:
         )
     else:
         graded = grade(q, state["picked"])
-        st.html(verdict_banner_html(graded.correct, qrb) + choices_review_html(q, graded, qrb) + answer_lines_html(q, qrb))
+        st.html(verdict_banner_html(graded.correct, qrb))
+        _actions(rev)
+        review = choices_review_html(q, graded, qrb) + answer_lines_html(q, qrb)
 
-    if answered:
-        note = srs_note_html(kind, session.card, state["correct"], session.answered_at or now, qrb)
-        if note:            # その場で作った問題に正解したときは、何も出さない（覚えておかないので）
-            st.html(note)
-        with st.container(horizontal=True):
-            st.button("次の問題", type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_{rev}")
-            st.button("種類の一覧へ", on_click=session.leave, width="stretch", key=f"dr_b_leave_{rev}")
-        if analysis is not None:
-            with st.expander("受け入れ表（切る牌と、手が進む牌）", expanded=not state["correct"], key=f"dr_x_table_{rev}"):
-                inner = qrb.fork()
-                st.html(shanten_html(analysis, inner) + candidates_html(analysis, inner, chosen_kind=state["tile"] // 4))
-        _detail(kind, explanation, qrb)
-        if q.page:
-            name = yaku_page_map()[q.page].name
-            st.page_link("views/yaku_book.py", label=f"役図鑑で「{name}」を見る", icon=":material/menu_book:", query_params={"y": q.page})
-        if q.term and glossary().find(q.term) is not None:
-            st.page_link("views/glossary.py", label=f"用語辞典で「{q.term}」を見る", icon=":material/dictionary:", query_params={"t": q.term})
-    else:
+    if not answered:
         st.button("やめて、種類の一覧へ", on_click=session.leave, key=f"dr_b_quit_{rev}")
+        return False
+    # その場で作った問題に正解したときは、いつ出すかの説明を出さない（覚えておかないので）
+    st.html(review + srs_note_html(kind, session.card, state["correct"], session.answered_at or now, qrb))
+    if analysis is not None:
+        with st.expander("受け入れ表（切る牌と、手が進む牌）", expanded=not state["correct"], key=f"dr_x_table_{rev}"):
+            inner = qrb.fork()
+            st.html(shanten_html(analysis, inner) + candidates_html(analysis, inner, chosen_kind=state["tile"] // 4))
+    _detail(kind, explanation, qrb)
+    if q.page:
+        name = yaku_page_map()[q.page].name
+        st.page_link("views/yaku_book.py", label=f"役図鑑で「{name}」を見る", icon=":material/menu_book:", query_params={"y": q.page})
+    if q.term and glossary().find(q.term) is not None:
+        st.page_link("views/glossary.py", label=f"用語辞典で「{q.term}」を見る", icon=":material/dictionary:", query_params={"t": q.term})
+    st.button("次の問題", type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_end_{rev}")
+    return True
 
 
 # ---------------------------------------------------------------- 画面
@@ -239,12 +261,14 @@ if wanted is not None:
 
 rb = Rubifier()
 current = session.kind
+answered = False
 if current is not None:
-    _quiz(current, rb)
+    answered = _quiz(current, rb)
 else:
     _menu(rb)
 
 if not store.available:
     st.caption("この端末・ブラウザでは保存を使っていません（ページを閉じると、ドリルの記録は残りません）")
-scroll_top(session.rev, key="dr_scroll")
+# 新しい問題（と種類の一覧）は、画面のいちばん上から。答えた直後は、正解・不正解の帯と「次の問題」が見えるところまで
+scroll_top(session.rev * 2 + (1 if answered else 0), key="dr_scroll", reveal=REVEAL if answered else ())
 store.mount()

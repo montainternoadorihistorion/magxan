@@ -74,6 +74,13 @@
   outline-offset: 1px;
 }
 
+/* 表示だけのときの、選ばれた牌（ドリルで答えた牌）。選んでいる途中の赤い枠と見分けられるように、青い枠にする */
+.mj-tile.mj-chosen {
+  transform: translateY(-7px);
+  outline: 3px solid #4a90d9;
+  outline-offset: 1px;
+}
+
 /* ツモ牌の下の文字（既定は「ツモ」。ツキ補正で来た牌には印を付けて出せる） */
 .mj-tile.mj-drawn::after {
   content: attr(data-note);
@@ -131,6 +138,8 @@
 
 .mj-buttons {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   margin-left: auto;
 }
@@ -151,7 +160,8 @@
 }
 
 .mj-confirm,
-.mj-riichi {
+.mj-riichi,
+.mj-action {
   flex: none;
   min-height: 48px;
   border-radius: 10px;
@@ -168,6 +178,18 @@
   border: 0;
   background: var(--st-primary-color, #ff4b4b);
   color: #fff;
+}
+
+/* 牌を切らずにする操作（ツモあがり）。切るボタン（赤）と見分けられるように、あがりを表す緑にする */
+.mj-action {
+  padding: 0 16px;
+  border: 0;
+  background: #23784a;
+  color: #fff;
+}
+
+.mj-action[hidden] {
+  display: none;
 }
 
 .mj-riichi {
@@ -187,7 +209,8 @@
 }
 
 .mj-confirm:disabled,
-.mj-riichi:disabled {
+.mj-riichi:disabled,
+.mj-action:disabled {
   opacity: 0.35;
   cursor: default;
 }
@@ -203,6 +226,17 @@
 .mj-hand-root.mj-pending .mj-tile,
 .mj-hand-root.mj-off .mj-tile {
   pointer-events: none;
+}
+
+/* 表示だけのとき（ドリルで答えたあと）は、押せない確定のボタンと案内文の段を出さない
+   （残っていると、答えが受け付けられたのか分かりにくい）。ツモ牌の下の文字のぶんだけ、下に余白を残す */
+.mj-hand-root.mj-off .mj-bar,
+.mj-hand-root.mj-off .mj-note {
+  display: none;
+}
+
+.mj-hand-root.mj-off .mj-grid {
+  padding-bottom: 20px;
 }
 
 .mj-hand-root.mj-pending .mj-tile:not([aria-pressed="true"]) {

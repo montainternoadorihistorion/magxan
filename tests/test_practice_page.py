@@ -1,8 +1,8 @@
 """一人練習のページを、画面なしで動かして確かめる。
 
-牌をタップする部品はブラウザの中で動くので、ここでは動かせない（操作の流れは test_practice_session.py、
-実際の画面は tools/e2e_practice_check.py で確かめる）。ここで見るのは、いろいろな局面でページが正しく描かれることと、
-ボタンや設定の入力欄の動き。
+牌をタップする部品はブラウザの中で動く。ここでは、部品から確定が届いたときと同じ値を送って動かす（component_helpers）。
+操作の流れそのものは test_practice_session.py、実際の画面は tools/e2e_practice_check.py で確かめる。ここで見るのは、
+いろいろな局面でページが正しく描かれることと、ボタンや設定の入力欄の動き。
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 import pytest
+from component_helpers import choose, component_data, pick_tile, press_action, send
 from html_helpers import headings_of, page_html, page_parts, ruby_terms
 from practice_helpers import nearest_discard
 from streamlit.testing.v1 import AppTest
@@ -287,7 +288,7 @@ def test_tsumo_button_shows_the_full_explanation_and_records_the_hand():
     state = find(LuckSettings(75, 75), lambda s: s.can_tsumo)
     at = open_practice({HAND_NAME: hand_json(state)})
     assert "あがりの形です" in page_text(at)
-    click(at, "ツモ（あがる）")
+    press_action(at)
     won = at.session_state["pr_state"]
     assert won.finished and won.result.outcome is Outcome.TSUMO
     text = page_text(at)
@@ -507,7 +508,7 @@ def test_playing_through_the_session_object_updates_the_page():
     while not at.session_state["pr_state"].finished:
         state = at.session_state["pr_state"]
         if state.can_tsumo:
-            click(at, "ツモ（あがる）")
+            press_action(at)
         else:
             session_pick(at, nearest_discard(state))
             if not at.session_state["pr_state"].finished:
@@ -633,7 +634,7 @@ def test_winning_with_the_target_gives_a_stamp_and_a_record():
     state = find_target("tanyao", wins_with("tanyao"))
     at = open_target(None, {HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(target="tanyao")})
     assert "あがりの形です。断么九が付きます。" in page_text(at)
-    click(at, "ツモ（あがる）")
+    press_action(at)
     text = page_text(at)
     assert "狙った断么九が付いた。" in text and "はじめて成立させた役" in text and "役図鑑に、スタンプを押しました。" in text
     # スタンプの案内は、「次の局へ」の下に出す（上に置くと、ボタンが最初の画面から押し出される）
@@ -651,7 +652,7 @@ def test_winning_with_the_target_gives_a_stamp_and_a_record():
     assert missing_ruby(page_parts(at)) == []
     # もう 1 回あがっても「はじめて」とは言わない
     again = open_target(None, {**at.session_state[STORE_STATE]["known"], HAND_NAME: hand_json(state)})
-    click(again, "ツモ（あがる）")
+    press_action(again)
     assert "狙った断么九が付いた。" in page_text(again) and "はじめて成立させた役" not in page_text(again)
     assert json.loads(stored(again, "progress.stamps"))["tanyao"]["n"] == 2
 
@@ -679,5 +680,81 @@ def test_target_stats_are_listed_apart_from_ordinary_hands():
     ]
     at = open_practice({HISTORY_NAME: history_json(records)})
     text = page_text(at)
-    assert "三色同順211（50%）" in text and "役指定練習の局は、上の表（ふつうの一人練習）には入れていない。" in text
-    assert "まだ記録がありません" in text                               # ふつうの一人練習の表は、空のまま
+    assert "三色同順211（50%）" in text and "役指定練習の局は、役指定なしの一人練習の成績には入れていない。" in text
+    # 役指定なしの表は空。打ったのに記録が無いように読めないよう、役指定練習の局がどこにあるかを言う
+    assert "役指定なしの一人練習の記録は、まだありません（役指定練習の 2 局は、下の「役指定練習」の表に出ています）。" in text
+    assert "上の表" not in text
+
+
+# ---------------------------------------------------------------- 手牌の部品から届く操作（牌の確定・ツモ・リーチ）
+
+
+def test_tsumo_button_lives_in_the_hand_bar():
+    """あがれるときの「ツモ（あがる）」は、手牌の部品の、確定のボタンの横に出す（小さい画面でも、手牌のすぐ下で見える）"""
+    state = find(LuckSettings(75, 75), lambda s: s.can_tsumo)
+    at = open_practice({HAND_NAME: hand_json(state)})
+    hand = component_data(at, "mjdojo_tile_hand")
+    assert hand["actionLabel"] == "ツモ（あがる）" and hand["riichiIds"] == []
+    assert "ツモ（あがる）" not in [b.label for b in at.button]          # 別のボタンとしては、もう置かない
+    assert "「ツモ（あがる）」を押すと、あがれます。" in page_text(at)
+    press_action(at)
+    assert at.session_state["pr_state"].finished and at.session_state["pr_state"].result.outcome is Outcome.TSUMO
+
+    playing = open_practice({HAND_NAME: hand_json(find(LuckSettings(75, 75), lambda s: not s.can_tsumo and s.turn >= 2))})
+    assert component_data(playing, "mjdojo_tile_hand")["actionLabel"] == ""         # あがれない巡目には出さない
+
+
+def test_picking_a_tile_in_the_hand_component_plays_the_turn():
+    at = open_practice({SETTINGS_NAME: settings_json(hint="after")})
+    state = at.session_state["pr_state"]
+    stale = component_data(at, "mjdojo_tile_hand")["rev"]
+    pick_tile(at, state.drawn)
+    after = at.session_state["pr_state"]
+    assert len(after.discards) == 1 and after.discards[0] == state.drawn
+    assert "1 巡目の打牌" in page_text(at)
+    # 古い画面から届いた確定（二重送信）は、無視する
+    send(at, "mjdojo_tile_hand", "pick", {"id": after.hand[0], "rev": stale})
+    assert len(at.session_state["pr_state"].discards) == 1
+
+
+def test_double_riichi_hand_asks_for_riichi_and_marks_a_skipped_one():
+    settings = settings_json(target="double_riichi", deal=75, draw=75)
+    state = practice.start(PracticeConfig(seed=471178, luck=LuckSettings(75, 75), target="double_riichi"))
+    assert state.riichi_discards
+    at = open_practice({SETTINGS_NAME: settings, HAND_NAME: hand_json(state)})
+    text = page_text(at)
+    assert "「リーチ」を押して" in text and "いまリーチすればダブル立直" in text and "リーチもできます" not in text
+    hand = component_data(at, "mjdojo_tile_hand")
+    assert hand["riichiLabel"] == "◎ リーチ" and hand["riichiIds"]
+    assert missing_ruby(page_parts(at)) == []
+    # リーチを押さずに切った：ダブル立直は、もう付かない
+    best = analyze(practice.position_of(state)).pick.tile
+    pick_tile(at, best)
+    after = at.session_state["pr_state"]
+    if after.finished:
+        return                                  # 最初のツモで流局・あがりになる局ではない（番号を変えたら、ここを見直す）
+    decision = at.session_state["pr_decisions"][-1]
+    assert decision.verdict.grade.value == "no_riichi"
+    text = page_text(at)
+    assert "ダブル立直は、もう付かない" in text and "リーチを宣言しなかった" in text
+    assert component_data(at, "mjdojo_tile_hand")["riichiLabel"] == "リーチ"     # 2 打目からは、リーチを勧めない
+    assert missing_ruby(page_parts(at)) == []
+
+    # リーチして切ると、リーチのまま局が進む
+    again = open_practice({SETTINGS_NAME: settings, HAND_NAME: hand_json(state)})
+    pick_tile(again, best, riichi=True)
+    assert again.session_state["pr_state"].riichi_index == 0
+
+
+def test_choosing_a_target_mid_hand_offers_to_start_right_there():
+    """局の途中で狙う役を選んだら、そのすぐ下から、その役を狙う局を始められる"""
+    at = open_practice()
+    choose(at, ["1 翻"], key="pr_c_tgroup")
+    choose(at, ["pinfu"], key="pr_c_target")
+    assert at.session_state["pr_state"].config.target is None              # いまの局は、そのまま
+    assert "平和を狙う局を始める" in [b.label for b in at.button]
+    assert any("いまの局は、役指定なしのまま。" in c.value for c in at.caption)
+    assert missing_ruby(page_parts(at)) == []           # ボタンや注意書きの「平和」より前に、読みつきの「平和」が出ている
+    click(at, "平和を狙う局を始める")
+    assert at.session_state["pr_state"].config.target == "pinfu" and at.session_state["pr_state"].turn == 1
+    assert "平和を狙う局を始める" not in [b.label for b in at.button]        # いまの局が、もう平和を狙っている

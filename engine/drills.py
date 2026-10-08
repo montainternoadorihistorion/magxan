@@ -453,7 +453,7 @@ def _score_question(item: str) -> Question:
         why = f"{points.han} 翻（{points.level_name}）"
     rows = sorted([(points.total, label, why), *others])
     names = "・".join(y.name for y in best.evaluation.yaku)
-    dora = f"・ドラ {best.dora_han}" if best.dora_han else ""
+    dora = "".join(f"・{word}" for word in result.dora_words)
     answer = [f"{names}{dora} で {why}。{_who(dealer)}の{_how(tsumo)}なので、{pay_text(points, tsumo=tsumo, dealer=dealer)}。"]
     answer.append(points.formula)
     return Question(

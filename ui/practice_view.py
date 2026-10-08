@@ -13,7 +13,7 @@ from engine.analysis.blocks import MENTSU_TYPES, PART_NAMES, TAATSU_TYPES, Part,
 from engine.analysis.shanten import TENPAI, shanten_meaning, shanten_text
 from engine.analysis.target import SHAPELESS_KEYS, BlockKind, Plan, target_plan
 from engine.analysis.ukeire import remaining_counts
-from engine.coach import Analysis, Candidate, Grade
+from engine.coach import Analysis, Candidate, Grade, Verdict
 from engine.content import yaku_page_map
 from engine.luck import PRESETS, deal_candidates, draw_probability, target_goal
 from engine.practice import DEAL_TENPAI_TARGETS, IPPATSU_BOOST, MAX_DRAWS, Decision, Draw, Outcome, PracticeState
@@ -22,7 +22,7 @@ from engine.scoring.decompose import Form
 from engine.scoring.dora import dora_kind_of
 from engine.scoring.explain import Explanation, Status
 from engine.scoring.texts import kind_text
-from engine.target_coach import BLOCK_NAMES, TargetAdvice, TargetGrade, TargetResult
+from engine.target_coach import BLOCK_NAMES, RIICHI_TARGETS, TargetAdvice, TargetGrade, TargetResult
 from engine.tiles import EAST, counts34, kind_of
 from ui.ruby import Rubifier
 from ui.tile_view import kind_img, tile_img, tile_short_label
@@ -33,8 +33,8 @@ HINT_LABELS = {HINT_BEFORE: "打つ前に表示", HINT_AFTER: "打った後に�
 LEVEL_MIN, LEVEL_NORMAL, LEVEL_FULL = 1, 2, 3
 LEVEL_LABELS = {LEVEL_FULL: "詳しい", LEVEL_NORMAL: "ふつう", LEVEL_MIN: "最小"}
 
-GRADE_ICONS = {Grade.BEST: "✓", Grade.NARROWER: "△", Grade.FARTHER: "✗", Grade.DEAD: "✗", Grade.PASSED: "！"}
-GRADE_CLASS = {Grade.BEST: "good", Grade.NARROWER: "soso", Grade.FARTHER: "bad", Grade.DEAD: "bad", Grade.PASSED: "bad"}
+GRADE_ICONS = {Grade.BEST: "✓", Grade.NARROWER: "△", Grade.FARTHER: "✗", Grade.DEAD: "✗", Grade.PASSED: "！", Grade.NO_RIICHI: "✗"}
+GRADE_CLASS = {Grade.BEST: "good", Grade.NARROWER: "soso", Grade.FARTHER: "bad", Grade.DEAD: "bad", Grade.PASSED: "bad", Grade.NO_RIICHI: "bad"}
 TARGET_ICONS = {TargetGrade.BEST: "✓", TargetGrade.NARROWER: "△", TargetGrade.FARTHER: "✗", TargetGrade.LOST: "✗"}
 TARGET_CLASS = {TargetGrade.BEST: "good", TargetGrade.NARROWER: "soso", TargetGrade.FARTHER: "bad", TargetGrade.LOST: "bad"}
 MARK_PICK = ("◎", "おすすめ")
@@ -103,17 +103,20 @@ def status_html(state: PracticeState, rb: Rubifier) -> str:
         rb.html(f"{seat}家（{'親' if state.seat_wind == EAST else '子'}）"),
         rb.html(turn),
     ]
-    html = "".join(f'<span class="mj-chip">{chip}</span>' for chip in chips)
+    # 札の中身は、1 つの span に入れる（札の高さをそろえて、中身を下にそろえるため。ui/layout.py の mj-status-fixed）
+    html = "".join(f'<span class="mj-chip"><span>{chip}</span></span>' for chip in chips)
     for indicator in state.dora_indicators:
+        dora = dora_kind_of(kind_of(indicator))
+        # 小さい牌の絵だけだと、6索と7索・8筒と9筒などが見分けにくいので、名前も書く
         html += (
-            f'<span class="mj-chip mj-chip-tiles">ドラ表示牌 {_small(indicator, aka)} → ドラ '
-            f"{_small_kind(dora_kind_of(kind_of(indicator)))}</span>"
+            f'<span class="mj-chip mj-chip-tiles"><span>ドラ表示牌 {_small(indicator, aka)} → ドラ '
+            f"{_small_kind(dora)} {escape(kind_text(dora))}</span></span>"
         )
     off = " mj-chip-plain" if luck.is_off else " mj-chip-luck"
-    html += f'<span class="mj-chip{off}">{rb.html(luck_text(luck.deal, luck.draw))}</span>'
+    html += f'<span class="mj-chip{off}"><span>{rb.html(luck_text(luck.deal, luck.draw))}</span></span>'
     if state.config.target:
-        html += f'<span class="mj-chip mj-chip-target">{rb.html(f"役指定：{target_name(state.config.target)}")}</span>'
-    return f'<div class="mj-chips mj-statusbar">{html}</div>'
+        html += f'<span class="mj-chip mj-chip-target"><span>{rb.html(f"役指定：{target_name(state.config.target)}")}</span></span>'
+    return f'<div class="mj-chips mj-statusbar mj-status-fixed">{html}</div>'
 
 
 def target_name(key: str) -> str:
@@ -144,7 +147,7 @@ def _advice_body(analysis: Analysis, rb: Rubifier, *, can_riichi: bool) -> tuple
     """打つ前のヒントの本文と、色の名前"""
     aka = analysis.position.rules.aka_dora
     if analysis.can_win:
-        return f'<b class="mj-stage">あがりの形です。</b>{rb.html("下の「ツモ」を押すと、あがれます。")}', "good"
+        return f'<b class="mj-stage">あがりの形です。</b>{rb.html("「ツモ（あがる）」を押すと、あがれます。")}', "good"
     pick = analysis.pick
     what = f"{_small(pick.tile, aka)} <b>{escape(_name(pick.tile, aka))}</b>"
     if analysis.last_discard:
@@ -167,6 +170,26 @@ def _advice_body(analysis: Analysis, rb: Rubifier, *, can_riichi: bool) -> tuple
     return body, ""
 
 
+#: リーチが要る役を狙う局で、リーチを勧めるときの 2 行目（{name} は役の名前、{width} は待ちの広さ）
+RIICHI_FOLLOW = {
+    "riichi": "リーチすれば{name}が付く（{width}）",
+    "ippatsu": "次のツモであがれば{name}（{width}）",
+    "double_riichi": "いまリーチすれば{name}（{width}）",
+}
+
+
+def riichi_headline_html(analysis: Analysis, key: str, rb: Rubifier) -> str:
+    """リーチが要る役（立直・一発・ダブル立直）を狙う局で、聴牌にとれるときの、打つ前のヒント：リーチして切る。
+
+    ふつうの見出し（「聴牌にとれます。リーチもできます」）だと、リーチを押さずに切ってしまい、狙いを逃しやすい。
+    """
+    aka = analysis.position.rules.aka_dora
+    pick = analysis.pick
+    what = f"{_small(pick.tile, aka)} <b>{escape(_name(pick.tile, aka))}</b>"
+    follow = RIICHI_FOLLOW[key].format(name=target_name(key), width=f"待ち {pick.kinds} 種 {pick.total} 枚")
+    return _headline(f'<b class="mj-stage">「リーチ」を押して</b> {what} {rb.html("を切る")}<br><span class="mj-sub">{rb.html(follow)}</span>')
+
+
 def _stalled_text(analysis: Analysis) -> str:
     """形の上ではもっと近い切り方があるのに、おすすめが別の切り方になっている理由"""
     if analysis.shanten == TENPAI:
@@ -181,9 +204,21 @@ def verdict_headline_html(decision: Decision, rb: Rubifier, *, aka: bool) -> str
     assert tile is not None
     icon = f'<span class="mj-icon {GRADE_CLASS[verdict.grade]}">{GRADE_ICONS[verdict.grade]}</span>'
     body = f"{icon} {_small(tile, aka)} <b>{escape(_name(tile, aka))}</b> 切り：{rb.html(verdict.label)}"
-    if not verdict.is_best and verdict.grade is not Grade.PASSED:
-        body += f"<br><span class=\"mj-sub\">おすすめは {_small(verdict.pick.tile, aka)} {escape(_name(verdict.pick.tile, aka))} 切り</span>"
+    better = _better_html(verdict, aka)
+    if better:
+        body += f'<br><span class="mj-sub">{better}</span>'
     return _headline(body, GRADE_CLASS[verdict.grade])
+
+
+def _better_html(verdict: Verdict, aka: bool) -> str:
+    """おすすめだった打牌（おすすめどおりなら空）。リーチが要る役を狙う局でリーチしなかったときは「リーチして ○ 切り」"""
+    if verdict.is_best or verdict.grade is Grade.PASSED:
+        return ""
+    if verdict.grade is Grade.NO_RIICHI:
+        # 切った牌そのものが速さで一番なら、その牌のまま、リーチだけが足りない
+        tile = verdict.chosen.tile if verdict.chosen.is_best else verdict.pick.tile
+        return f"おすすめは リーチして {_small(tile, aka)} {escape(_name(tile, aka))} 切り"
+    return f"おすすめは {_small(verdict.pick.tile, aka)} {escape(_name(verdict.pick.tile, aka))} 切り"
 
 
 # ---------------------------------------------------------------- 河
@@ -594,7 +629,8 @@ def hand_summary_html(state: PracticeState, decisions: Sequence[Decision], rb: R
         rows.append(f"<li>{rb.html(f'打牌：{name}を狙えた {len(aimed)} 回のうち、役にいちばん近い切り方は {best} 回（{percent(best / len(aimed))}）。')}</li>")
     elif decisions:
         best = sum(1 for d in decisions if d.verdict.is_best)
-        rows.append(f"<li>{rb.html(f'打牌：自分で選んだ {len(decisions)} 回のうち、いちばん速い打牌は {best} 回（{percent(best / len(decisions))}）。')}</li>")
+        what = "おすすめどおりの打牌（速さ・聴牌したらリーチ）" if state.config.target in RIICHI_TARGETS else "いちばん速い打牌"
+        rows.append(f"<li>{rb.html(f'打牌：自分で選んだ {len(decisions)} 回のうち、{what}は {best} 回（{percent(best / len(decisions))}）。')}</li>")
     note = "" if counted else f'<div class="mj-sub">{rb.html("この局は、やり直し・番号を指定した局なので、成績には入れていない（スタンプは押す）。")}</div>'
     return f'<div class="mj-card"><div class="mj-chips">{chips}</div><ul class="mj-rules">{"".join(rows)}</ul>{note}</div>'
 
@@ -622,9 +658,9 @@ def review_list_html(decisions: Sequence[Decision], rb: Rubifier, *, aka: bool) 
             )
             continue
         icon = f'<span class="mj-icon {GRADE_CLASS[verdict.grade]}">{GRADE_ICONS[verdict.grade]}</span>'
-        better = ""
-        if not verdict.is_best and verdict.grade is not Grade.PASSED:
-            better = f'<div class="mj-sub"><span class="mj-inline">おすすめは {_small(verdict.pick.tile, aka)} {escape(_name(verdict.pick.tile, aka))}</span></div>'
+        better = _better_html(verdict, aka)
+        if better:
+            better = f'<div class="mj-sub"><span class="mj-inline">{better}</span></div>'
         rows.append(
             f'<tr><td class="num">{decision.turn}</td><td><span class="mj-inline">{icon} {_small(tile, aka)}{riichi}</span></td>'
             f"<td>{rb.html(verdict.label)}{better}</td></tr>"
@@ -649,12 +685,13 @@ def note_html(text: str, rb: Rubifier) -> str:
 #: 使い方（見出し, 説明）
 HELP_ITEMS = (
     ("切る", "牌をタップして選び、「この牌を切る」を押す（同じ牌をもう一度タップしても切れる）。"),
-    ("あがる", "あがりの形になると「ツモ（あがる）」が出る。相手がいないので、あがりはツモだけ。"),
+    ("あがる", "あがりの形になると、手牌の下に「ツモ（あがる）」が出る。相手がいないので、あがりはツモだけ。"),
     ("リーチ", "聴牌にとれるとき「リーチ」が出る。押すと、切っても聴牌が残る牌だけが明るく残るので、その中から選ぶ。"
      "リーチのあとは、あがり牌が来るまで自動でツモ切りになる。"),
     ("1 局の長さ", f"ツモは {MAX_DRAWS} 回まで（4 人で打つときの 1 人ぶん）。あがれなければ流局。"),
     ("白い牌", "何も描かれていない白い牌は、白（ハク）。画像が欠けているわけではない。"),
-    ("コーチ", "ヒントは「打つ前に表示」「打った後に答え合わせ」「オフ」から選べる。◎ がおすすめ、○ はおすすめと同じ速さの牌。"),
+    ("コーチ", "ヒントは「打つ前に表示」「打った後に答え合わせ」「オフ」から選べる。◎ がおすすめ、○ はおすすめと同じ速さの牌"
+     "（役指定練習では、狙った役への近さが同じ牌）。"),
     ("ツキ補正", "配牌とツモの「引きの良さ」を上げる。山の牌を並べ替えているだけなので、同じ牌が 5 枚になることはない。"
      "補正の強さはいつも画面の上に出ていて、成績も補正の強さごとに分けて記録する。"),
     ("役指定練習", "狙う役を 1 つ決めて打つ。配牌がその役に近くなり、ツモの補正も、その役に近づく牌を引き寄せる。"
@@ -684,9 +721,10 @@ def luck_now_html(deal: int, draw: int, rb: Rubifier, *, target: str | None = No
         elif target in DEAL_TENPAI_TARGETS:
             deal_line = f"配牌：聴牌になるまで、配牌の牌を山の牌と入れ替える（{name}は、配牌で聴牌していないと狙えない）"
         elif goal == 0:
-            deal_line = f"配牌：{name}の聴牌になるまで、配牌の牌を山の牌と入れ替える"
+            deal_line = f"配牌：{name}の聴牌（完成まで あと 1 枚）になるまで、配牌の牌を山の牌と入れ替える"
         else:
-            deal_line = f"配牌：{name}の聴牌まで あと {goal} 枚になるまで、配牌の牌を山の牌と入れ替える"
+            # 近さは、見出しや結果と同じ物差し（役の完成まで あと何枚）で書く。goal は聴牌までの枚数なので、1 枚足す
+            deal_line = f"配牌：{name}の完成まで あと {goal + 1} 枚になるまで、配牌の牌を山の牌と入れ替える"
         if target not in SHAPELESS_KEYS:
             wanted = f"{name}に近づく牌"
     else:
@@ -713,10 +751,17 @@ def luck_guide_html(rb: Rubifier) -> str:
     )
 
 
-def stats_html(summaries: Sequence[Summary], rb: Rubifier) -> str:
-    """成績。条件（ツキ補正の強さ・打つ前のヒントを見たか）ごとに分け、補正なし・ヒントなしのぶんを「実力」として先頭に出す"""
+def stats_html(summaries: Sequence[Summary], rb: Rubifier, *, aimed: int = 0) -> str:
+    """成績。条件（ツキ補正の強さ・打つ前のヒントを見たか）ごとに分け、補正なし・ヒントなしのぶんを「実力」として先頭に出す。
+
+    aimed は、役指定練習の局の数（その局は、ここには入れない。target_stats_html で、狙った役ごとに出す）。
+    """
     if not summaries:
-        return f'<div class="mj-sub">{rb.html("まだ記録がありません。1 局打ち終わると、ここに出ます。")}</div>'
+        if aimed:
+            text = f"役指定なしの一人練習の記録は、まだありません（役指定練習の {aimed} 局は、下の「役指定練習」の表に出ています）。"
+        else:
+            text = "まだ記録がありません。1 局打ち終わると、ここに出ます。"
+        return f'<div class="mj-sub">{rb.html(text)}</div>'
     rows = [
         f'<tr class="mj-dim"><td>ツキ補正</td><td class="num">局数</td><td class="num">あがり</td><td class="num">{rb.html("巡目")}</td>'
         f'<td class="num">点</td><td class="num">{rb.html("打牌")}</td></tr>',
@@ -776,12 +821,24 @@ def shapeless_tip(state: PracticeState) -> str:
     return f"{name}を狙う局：{SHAPELESS_TIPS[target]}"
 
 
+def coach_note_text(target: str | None) -> str:
+    """設定の「コーチ」の説明：おすすめを、何で決めているか（狙う役によって変わる）"""
+    if target is None:
+        return "コーチのおすすめは、速さ（向聴数と受け入れ枚数）だけで決めています。役や打点との兼ね合いは、対局のコーチで扱う予定です。"
+    name = target_name(target)
+    if target in RIICHI_TARGETS:
+        return f"コーチのおすすめは、速さ（向聴数と受け入れ枚数）で決めます。{name}を狙う局では、聴牌にとれたら「リーチして切る」を勧めます。"
+    if target in SHAPELESS_KEYS:
+        return f"コーチのおすすめは、速さ（向聴数と受け入れ枚数）で決めます（{name}は、手の形を問わない役なので）。"
+    return f"{name}を狙う局では、コーチは、{name}への近さで切る牌を勧めます。受け入れ表は、速さだけで見たものです。"
+
+
 #: 役指定練習の効き具合の目安。tools/measure_target.py で、機械的な打ち手（役を狙うコーチのおすすめを切り、狙った役が付く
 #: あがりだけを取る）が各 30 局打った結果。役 →（補正が 中・強・最大 のときに、狙った役か上位の役が付いた局の割合。%）
 TARGET_GUIDE: dict[str, tuple[int, int, int]] = {
     "riichi": (87, 100, 97), "ippatsu": (50, 100, 97), "menzen_tsumo": (87, 100, 100), "tanyao": (73, 93, 100),
-    "pinfu": (63, 93, 100), "iipeikou": (63, 90, 100), "yakuhai": (50, 97, 100), "double_riichi": (97, 97, 97),
-    "chiitoitsu": (40, 80, 100), "sanankou": (60, 97, 100), "sanshoku": (77, 97, 100), "sanshoku_doukou": (43, 93, 100),
+    "pinfu": (80, 100, 100), "iipeikou": (63, 90, 100), "yakuhai": (50, 97, 100), "double_riichi": (97, 97, 97),
+    "chiitoitsu": (43, 80, 100), "sanankou": (60, 97, 100), "sanshoku": (77, 97, 100), "sanshoku_doukou": (43, 93, 100),
     "ittsu": (57, 93, 100), "chanta": (63, 93, 97), "shousangen": (43, 90, 100), "honroutou": (50, 93, 100),
     "ryanpeikou": (33, 90, 100), "honitsu": (67, 93, 100), "junchan": (57, 97, 97), "chinitsu": (63, 100, 100),
     "kokushi": (60, 97, 100), "suuankou": (50, 93, 100), "daisangen": (33, 93, 100), "tsuuiisou": (33, 97, 100),
@@ -809,26 +866,22 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
     """役指定練習の、打つ前のヒント：役の完成まであと何枚かと、役に近い切り方。
 
     win は、いまの 14 枚であがったときに、狙った役が付くかどうか（あがりの形のときだけ渡す）。
-    見出しの高さが巡ごとに変わると手牌の位置が動くので、速さだけのおすすめとの違いは、target_speed_note_html で手牌の下に出す。
+    見出しの高さが巡ごとに変わると手牌の位置が動くので、見出しは 2 行までにする。速さだけのおすすめとの違いや、
+    あがりの形でも役が付かないときの「狙い続けるなら」は、target_speed_note_html で手牌の下に出す。
     """
     aka = analysis.position.rules.aka_dora
     name = advice.name
     if analysis.can_win:
         if win is not None and win.achieved:
             what = f"{name}が付きます。" if win.made else f"{name}の形ができています。"
-            return _headline(f'<b class="mj-stage">あがりの形です。</b>{rb.html(what + "下の「ツモ」を押すと、あがれます。")}', "good")
+            return _headline(f'<b class="mj-stage">あがりの形です。</b>{rb.html(what + "「ツモ（あがる）」を押すと、あがれます。")}', "good")
         if analysis.last_discard:
             return _headline(f'<b class="mj-stage">あがりの形です。</b>{rb.html(f"{name}は付きませんが、最後のツモなので、あがりましょう。")}', "good")
         # 役の付かないあがりの形（嵌張待ちの平和、高点法でほかの読み方になる、など）：あがるか、狙い続けるかを選べる
         stage = f'<b class="mj-stage">{rb.html(f"あがりの形ですが、{name}は付きません")}</b>'
-        pick = advice.pick
-        if pick is None:
-            return _headline(f'{stage}<br><span class="mj-sub">{rb.html(f"「ツモ」であがるか、1 枚切って{name}を狙い続けるかを、選べます。")}</span>', "soso")
-        choice = (
-            f'{rb.html(f"「ツモ」であがるか、{name}を狙い続けるか。狙うなら")} {_small(pick.tile, aka)} {escape(_name(pick.tile, aka))} '
-            f'{rb.html(f"切り（{name}まで あと {pick.missing} 枚）。")}'
-        )
-        return _headline(f'{stage}<br><span class="mj-sub">{choice}</span>', "soso")
+        if advice.pick is None:             # もう作れない（必要な牌が見えてしまった）
+            return _headline(f'{stage}<br><span class="mj-sub">{rb.html(f"{name}は、もう作れません。ツモであがりましょう。")}</span>', "soso")
+        return _headline(f'{stage}<br><span class="mj-sub">{rb.html(f"ツモであがるか、{MARK_PICK[0]} を切って狙い続けるか。")}</span>', "soso")
     if not advice.possible or advice.pick is None:
         lead = f'<span class="mj-chip mj-chip-luck">{rb.html(f"{name}は、もう作れない")}</span> '
         return advice_headline_html(analysis, rb, can_riichi=can_riichi, lead=lead)
@@ -843,10 +896,22 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
 
 
 def target_speed_note_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier) -> str:
-    """役を狙うおすすめが、速さだけのおすすめと違うとき、そのことを手牌の下に 1 行で出す（同じなら空）"""
-    if analysis.can_win or not advice.differs_from_speed:
-        return ""
+    """手牌の下に 1 行で出す補足（無ければ空）。
+
+    あがりの形でも狙った役が付かないとき：狙い続けるなら、どれを切って、役の完成まであと何枚か。
+    役を狙うおすすめが、速さだけのおすすめと違うとき：速さだけなら、どれを切るか。
+    """
     aka = analysis.position.rules.aka_dora
+    pick = advice.pick
+    if analysis.can_win:
+        if pick is None or analysis.last_discard:
+            return ""
+        return (
+            f'<div class="mj-sub mj-speed-note">{rb.html(f"{advice.name}を狙い続けるなら")} {_small(pick.tile, aka)} {escape(_name(pick.tile, aka))} '
+            f'{rb.html(f"切り（{advice.name}の完成まで あと {pick.missing} 枚）。")}</div>'
+        )
+    if not advice.differs_from_speed:
+        return ""
     speed = analysis.pick
     return (
         f'<div class="mj-sub mj-speed-note">{rb.html("速さだけなら")} {_small(speed.tile, aka)} {escape(_name(speed.tile, aka))} '
@@ -1018,5 +1083,5 @@ def target_stats_html(stats: dict[str, TargetStat], rb: Rubifier) -> str:
             f'<tr><td>{rb.html(pages[key].name)}</td><td class="num">{stat.tries}</td><td class="num">{stat.wins}</td>'
             f'<td class="num">{stat.made}（{percent(stat.made_rate)}）</td></tr>'
         )
-    note = "役指定練習の局は、上の表（ふつうの一人練習）には入れていない。「役が付いた」は、狙った役か、その上位の役が付いた局。"
+    note = "役指定練習の局は、役指定なしの一人練習の成績には入れていない。「役が付いた」は、狙った役か、その上位の役が付いた局。"
     return f'{head}<table class="mj-table mj-stats">{"".join(rows)}</table><div class="mj-sub">{rb.html(note)}</div>'
