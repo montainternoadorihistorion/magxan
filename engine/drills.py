@@ -988,11 +988,15 @@ def _discard_question(item: str) -> Question:
 # ---------------------------------------------------------------- 危険牌
 
 
+#: 危険牌の問題を作る対局のルール。鳴きなし（問題の画面は、副露を出さない作り。Phase 3 と同じ問題になるようにもする）
+DANGER_RULES = replace(DEFAULT_RULES, calls=False)
+
+
 def _danger_question(item: str) -> Question:
     """CPU（弱い）4 人に打たせて、自分以外の誰かのリーチが成立し、自分が切る番になった局面を使う"""
     number = _number(item)
     for attempt in range(120):
-        config = GameConfig(seed=(number * 137 + attempt) % 10**9, cpu_level=CpuLevel.WEAK)
+        config = GameConfig(seed=(number * 137 + attempt) % 10**9, cpu_level=CpuLevel.WEAK, rules=DANGER_RULES)
         hand = start_game(config).current
         found = None
         while hand.result is None:

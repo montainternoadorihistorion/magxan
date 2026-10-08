@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 from html import escape
 
 from engine.analysis.waits import wait_kinds
+from engine.call_coach import CallAdvice, CallDecision, CallGrade, CallOption, YakuStatus, call_name
 from engine.defense import BASIS_NAMES, LEVEL_NAMES, Basis, TileDanger, reasons, summary
 from engine.game import (
     END_NAMES,
@@ -17,8 +19,10 @@ from engine.game import (
     NUM_PLAYERS,
     RIICHI_STICK,
     SEAT_NAMES,
+    Action,
     EndKind,
     Furiten,
+    Furo,
     GameState,
     HandState,
     Move,
@@ -26,7 +30,17 @@ from engine.game import (
     Win,
     nine_kinds,
 )
-from engine.game_coach import FURITEN_SHORT, RiichiView, SafetyGrade, Stance, TurnAdvice, TurnDecision, YakuHint
+from engine.game_coach import (
+    FURITEN_SHORT,
+    KanAdvice,
+    RiichiView,
+    SafetyGrade,
+    Stance,
+    TurnAdvice,
+    TurnDecision,
+    YakuHint,
+    formal_tenpai,
+)
 from engine.game_records import (
     GOAL_DEAL_IN,
     GOAL_GAMES,
@@ -37,6 +51,8 @@ from engine.game_records import (
     Tally,
     rules_text,
 )
+from engine.kifu import Note
+from engine.melds import MeldType, display_order
 from engine.rules import Rules
 from engine.scoring.dora import dora_kind_of
 from engine.scoring.explain import Explanation
@@ -44,7 +60,7 @@ from engine.scoring.texts import kind_text
 from engine.tiles import HAKU, kind_of
 from ui.practice_view import GRADE_CLASS, GRADE_ICONS, luck_text, percent, rounded
 from ui.ruby import Rubifier
-from ui.tile_view import kind_img, tile_img, tile_short_label
+from ui.tile_view import back_img, kind_img, tile_img, tile_short_label
 from ui.win_view import WIND_NAMES, tiles_fit_html
 
 LEVEL_CLASS = ("lv0", "lv1", "lv2", "lv3", "lv4", "lv5")
@@ -84,6 +100,18 @@ def round_text(hand: HandState) -> str:
     return f"{WIND_NAMES[start.round_wind]} {start.round_number} 局"
 
 
+def hand_title(hand: HandState) -> str:
+    """局の呼び方（牌譜の局を選ぶとき）。例：東 1 局 0 本場（下家の和了）"""
+    result = hand.result
+    if result is None:
+        tail = "打っている局"
+    elif result.kind.is_win:
+        tail = "・".join(f"{SEAT_NAMES[w.seat]}の{'ツモ' if w.from_seat is None else 'ロン'}" for w in result.wins)
+    else:
+        tail = END_NAMES[result.kind]
+    return f"{round_text(hand)} {hand.start.honba} 本場（{tail}）"
+
+
 # ---------------------------------------------------------------- 上の札と点数
 
 
@@ -102,7 +130,9 @@ def status_html(game: GameState, rb: Rubifier) -> str:
     # 札は 2 段に収める（3 段になると、手牌と「この牌を切る」が画面の下に押し出される）。
     # CPU にも補正があるときは、補正を 1 枚の札にまとめ、ドラの札を短くする
     compact = not cpu.is_off
-    for indicator in hand.dora_indicators:
+    indicators = hand.dora_indicators
+    if len(indicators) == 1:
+        indicator = indicators[0]
         dora = dora_kind_of(kind_of(indicator))
         lead = "ドラ " if compact else "ドラ表示牌 "
         arrow = "→" if compact else " → ドラ "
@@ -110,6 +140,11 @@ def status_html(game: GameState, rb: Rubifier) -> str:
             f'<span class="mj-chip mj-chip-tiles"><span>{lead}{_small(indicator, aka)}{arrow}'
             f"{kind_img(dora, cls='mj-s')} {escape(kind_text(dora))}</span></span>"
         )
+    else:
+        # カンでドラが増えたら、ドラそのものだけを 1 枚の札に並べる（札が 3 段にならないように）
+        doras = "".join(kind_img(dora_kind_of(kind_of(t)), cls="mj-s") for t in indicators)
+        names = "・".join(kind_text(dora_kind_of(kind_of(t))) for t in indicators)
+        html += f'<span class="mj-chip mj-chip-tiles" title="{escape("ドラ：" + names)}"><span>ドラ {doras}</span></span>'
     if compact:
         mine = "なし" if luck.is_off else f"{luck.deal}・{luck.draw}"
         text = f"ツキ補正：自分 {mine}／CPU {cpu.deal}・{cpu.draw}"
@@ -141,15 +176,20 @@ def scores_html(game: GameState, rb: Rubifier, *, mark: int = 0) -> str:
         if seat == HUMAN:
             classes.append("mj-seat-me")
         riichi = '<span class="mj-seat-riichi">リーチ</span>' if player.in_riichi else ""
+        # 鳴いた数（暗槓は数えない）。リーチの印と同じ場所に出す（鳴いた人はリーチできないので、重ならない）
+        opened = sum(1 for f in player.furo if f.from_seat is not None)
+        naki = f'<span class="mj-seat-naki">鳴き {opened}</span>' if opened else ""
         dealer = '<span class="mj-seat-dealer">親</span>' if seat == hand.dealer else ""
         last = ""
         if player.river:
             discard = player.river[-1]
             cls = "mj-seat-tile" + (" mj-new" if discard.order >= new_from else "") + (" mj-tg" if discard.tsumogiri else "")
+            if discard.called_by is not None:
+                cls += " mj-called"                     # 鳴かれた牌（河と同じく、とても薄くする）
             last = tile_img(discard.tile, aka=aka, cls=cls)
         cells.append(
             f'<div class="{" ".join(classes)}"><div class="mj-seat-name">{rb.html(SEAT_NAMES[seat])} {escape(wind)}{dealer}</div>'
-            f'<div class="mj-seat-score">{_pts(shown[seat])}</div>{riichi}{last}</div>'
+            f'<div class="mj-seat-score">{_pts(shown[seat])}</div>{riichi}{naki}{last}</div>'
         )
     rb.note("親")
     return f'<div class="mj-seats">{"".join(cells)}</div>'
@@ -195,7 +235,8 @@ def advice_headline_html(advice: TurnAdvice, hand: HandState, rb: Rubifier, *, w
         safety = f"{LEVEL_NAMES[level]}・{_basis_word(advice, pick)}"
         if advice.stance is Stance.FOLD:
             head = f'<b class="mj-stage">{rb.html(_threat_text(advice))}</b>　{rb.html("オリる：")}{what}'
-            sub = f"聴牌していないので守る。{safety}"
+            why = "あがれない聴牌（役が無い）なので守る" if analysis.pick.shanten == 0 else "聴牌していないので守る"
+            sub = f"{why}。{safety}"
         else:
             verb = "リーチで押す：" if advice.recommend_riichi else "押す："
             head = f'<b class="mj-stage">{rb.html(_threat_text(advice))}</b>　{rb.html(verb)}{what}'
@@ -208,6 +249,11 @@ def advice_headline_html(advice: TurnAdvice, hand: HandState, rb: Rubifier, *, w
         recommend = view is not None and view.can_riichi and view.recommend_riichi
         head = f'<b class="mj-stage">{rb.html("聴牌")}にとれます</b>　{rb.html("リーチで ") if recommend else ""}{what}'
         sub = f"待ち {candidate.kinds} 種 {candidate.total} 枚"
+        if advice.fastest is not None:
+            # 鳴いた手で、役のある聴牌をすすめた。待ちの広い聴牌もあるが、役が無い
+            sub += f"・{_name(advice.fastest, aka)} 切りは役なし"
+        elif advice.keeps_yaku:
+            sub += f"・{advice.kept_yaku or '役'}を残す"
         if recommend:
             sub += f"・先に「{MARK_RIICHI}」を押す"
         elif view is not None and view.can_riichi:
@@ -216,6 +262,19 @@ def advice_headline_html(advice: TurnAdvice, hand: HandState, rb: Rubifier, *, w
         stage = "聴牌" if candidate.shanten == 0 else f"{candidate.shanten} 向聴"
         head = f'<b class="mj-stage">{rb.html(stage)}</b>　おすすめ：{what}'
         sub = f"受け入れ {candidate.kinds} 種 {candidate.total} 枚" if candidate.total > 0 else "有効牌は残っていません"
+        if advice.fastest is not None:
+            # 鳴いた手で、役を残すために、速さだけの牌とは違う牌をすすめた（向聴数が同じなら、受け入れの差を書く）
+            fast = analysis.candidate(kind_of(advice.fastest))
+            if fast is None:
+                more = ""
+            elif fast.shanten < candidate.shanten:
+                more = "で聴牌" if fast.shanten == 0 else f"で {fast.shanten} 向聴"
+            else:
+                more = f"：受け入れ {fast.total - candidate.total} 枚多い"
+            sub = f"{advice.kept_yaku or '役'}を残す（速さだけなら {_name(advice.fastest, aka)} 切り{more}）"
+        elif advice.keeps_yaku:
+            # 速さが同じ牌の中から、役を残せる牌を選んだ
+            sub += f"・{advice.kept_yaku or '役'}を残す"
         if can_nine:
             sub += "・九種九牌で流すこともできる"
     return _headline(_two_lines(head, sub, rb))
@@ -242,16 +301,28 @@ def _basis_word(advice: TurnAdvice, tile: int) -> str:
     return BASIS_WORDS[row.worst.basis]
 
 
+def decision_label(decision: TurnDecision, *, detailed: bool = False) -> str:
+    """打牌の評価の短い呼び方（案内・振り返りの一覧・牌譜で同じものを使う）。detailed なら、かっこ書きの説明も付ける"""
+    safety = decision.safety
+    if safety is not None and decision.advice.stance is Stance.FOLD:
+        if detailed:
+            return safety.text
+        return "いちばん安全な牌" if safety.grade is SafetyGrade.SAFE else "もっと安全な牌があった"
+    if decision.skipped_riichi:
+        return "リーチしなかった（リーチをすすめる聴牌）" if detailed else "リーチしなかった"
+    if decision.lost_yaku:
+        return "役が見えなくなった（鳴いた手は、役が無いとあがれない）" if detailed else "役が見えなくなった"
+    if decision.yaku_detour:
+        return "役が遠のいた（役まで遠回りになる）" if detailed else "役が遠のいた"
+    return decision.verdict.label
+
+
 def decision_headline_html(decision: TurnDecision, rb: Rubifier, *, aka: bool) -> str:
     """打った後の答え合わせ（上の行に評価、下の行におすすめ）"""
     cls, icon = _decision_mark(decision)
     tile = decision.action.tile
     assert tile is not None
-    label = decision.verdict.label
-    if decision.safety is not None and decision.advice.stance is Stance.FOLD:
-        label = "いちばん安全な牌" if decision.safety.grade is SafetyGrade.SAFE else "もっと安全な牌があった"
-    elif decision.skipped_riichi:
-        label = "リーチしなかった"
+    label = decision_label(decision)
     head = f'<span class="mj-icon {cls}">{icon}</span> {_small(tile, aka)} <b>{escape(_name(tile, aka))}</b> 切り：{rb.html(label)}'
     body = head
     if not decision.followed:
@@ -268,6 +339,10 @@ def _decision_mark(decision: TurnDecision) -> tuple[str, str]:
         return ("good", "✓") if safety.grade is SafetyGrade.SAFE else ("bad", "✗")
     if decision.skipped_riichi:              # リーチをすすめたのに、ダマで切った
         return "soso", "△"
+    if decision.lost_yaku:                   # 鳴いた手で、役が見えなくなる牌を切った（このままでは、あがれない）
+        return "bad", "✗"
+    if decision.yaku_detour:                 # 鳴いた手で、役まで遠回りになる牌を切った
+        return "soso", "△"
     if safety is not None and safety.grade is SafetyGrade.RISKY:
         return "soso", "△"
     grade = decision.verdict.grade
@@ -275,12 +350,13 @@ def _decision_mark(decision: TurnDecision) -> tuple[str, str]:
 
 
 def claim_headline_html(hand: HandState, explanation: Explanation | None, rb: Rubifier, *, bumped: bool) -> str:
-    """ロンできる牌が出たとき"""
+    """ロンできる牌が出たとき（捨て牌・加槓の牌）"""
     aka = hand.rules.aka_dora
-    last = hand.last_discard
-    assert last is not None
-    seat, discard = last
-    head = f'<b class="mj-stage">ロンできます</b>　{escape(SEAT_NAMES[seat])}の {_small(discard.tile, aka)} <b>{escape(_name(discard.tile, aka))}</b>'
+    claim = hand.claim
+    assert claim is not None
+    seat, tile = claim.seat, claim.tile
+    word = "ロンできます" if claim.kind.value == "discard" else "槍槓でロンできます"
+    head = f'<b class="mj-stage">{rb.html(word)}</b>　{escape(SEAT_NAMES[seat])}の {_small(tile, aka)} <b>{escape(_name(tile, aka))}</b>'
     if bumped:
         sub = "頭ハネ：先の順番の人だけがあがる（ロンしても無効）"
     elif explanation is not None and explanation.best is not None and explanation.best.points is not None:
@@ -288,6 +364,210 @@ def claim_headline_html(hand: HandState, explanation: Explanation | None, rb: Ru
     else:
         sub = ""
     return _headline(_two_lines(head, sub, rb), "good")
+
+
+# ---------------------------------------------------------------- 副露
+
+
+MELD_LABELS = {MeldType.CHI: "チー", MeldType.PON: "ポン", MeldType.MINKAN: "大明槓", MeldType.ANKAN: "暗槓", MeldType.KAKAN: "加槓"}
+
+
+def meld_tiles(furo: Furo, seat: int) -> tuple[tuple[int, bool, bool], ...]:
+    """副露 1 組を、卓に置く並び（鳴いた牌は横向き・暗槓は両端を裏向き）にする"""
+    source = None if furo.from_seat is None else (furo.from_seat - seat) % NUM_PLAYERS
+    return display_order(furo.meld, source, furo.added)
+
+
+def meld_label(furo: Furo) -> str:
+    """副露 1 組の呼び方（例：ポン 白、チー 3萬4萬5萬）"""
+    meld = furo.meld
+    if meld.type is MeldType.CHI:
+        return "チー " + "".join(kind_text(k) for k in sorted({kind_of(t) for t in meld.tiles}))
+    return f"{MELD_LABELS[meld.type]} {kind_text(meld.first_kind)}"
+
+
+def melds_label(furo_list: Sequence[Furo]) -> str:
+    """副露の段の頭に付ける見出し（鳴いた面子だけなら「鳴き」、暗槓だけなら「暗槓」）"""
+    opened = any(f.from_seat is not None for f in furo_list)
+    closed = any(f.from_seat is None for f in furo_list)
+    return "鳴き・暗槓" if opened and closed else ("鳴き" if opened else "暗槓")
+
+
+def melds_html(furo_list: Sequence[Furo], seat: int, *, aka: bool, rb: Rubifier | None = None) -> str:
+    """副露を、卓に置く並びで小さく（河の下・局の終わりの手牌の下）。段の頭に「鳴き」などの見出しを付ける
+    （河の牌と見分けられるように）"""
+    if not furo_list:
+        return ""
+    head = melds_label(furo_list)
+    groups = [f'<span class="mj-mf-label">{rb.html(head) if rb is not None else escape(head)}</span>']
+    for furo in furo_list:
+        cells = []
+        for tile, side, back in meld_tiles(furo, seat):
+            image = back_img(cls="mj-s") if back else tile_img(tile, aka=aka, cls="mj-s")
+            cells.append(f'<span class="mj-mf{" mj-mf-side" if side else ""}">{image}</span>')
+        label = escape(meld_label(furo))
+        groups.append(f'<span class="mj-mfuro" role="img" aria-label="{label}" title="{label}">{"".join(cells)}</span>')
+    return f'<div class="mj-mfuros">{"".join(groups)}</div>'
+
+
+def kan_notes_html(hand: HandState, dora_seen: int | None, rb: Rubifier) -> str:
+    """カンのあとの知らせ：嶺上牌を引いた（自分）・ドラが増えた（自分が最後に行動する前と比べて）"""
+    lines = []
+    me = hand.players[HUMAN]
+    if me.rinshan and me.drawn is not None and hand.result is None:
+        lines.append("カンしたので、嶺上牌（王牌から引く、カンの補充の牌）を引いた。手牌の右の「リンシャン」の牌。")
+    if dora_seen is not None and len(hand.dora_indicators) > dora_seen:
+        added = hand.dora_indicators[dora_seen:]
+        doras = "・".join(kind_text(dora_kind_of(kind_of(t))) for t in added)
+        lines.append(f"カンで、ドラが {len(added)} 枚増えた（新しいドラ：{doras}）。増えたドラは、ほかの人にも乗る。")
+    return "".join(f'<div class="mj-sub">{rb.html(line)}</div>' for line in lines)
+
+
+def call_headline_html(hand: HandState, advice: CallAdvice | None, rb: Rubifier) -> str:
+    """鳴ける牌が出たとき（ロンはできない）。打つ前のヒントなら、おすすめを下の行に"""
+    aka = hand.rules.aka_dora
+    claim = hand.claim
+    assert claim is not None
+    moves = {a.move for a in hand.call_actions(HUMAN)}
+    words = "・".join(w for m, w in ((Move.CHI, "チー"), (Move.PON, "ポン"), (Move.KAN, "カン")) if m in moves)
+    head = (
+        f'<b class="mj-stage">{rb.html(words)}できます</b>　{escape(SEAT_NAMES[claim.seat])}の '
+        f"{_small(claim.tile, aka)} <b>{escape(_name(claim.tile, aka))}</b>"
+    )
+    if advice is None:
+        sub = "鳴くか、見送るかを選ぶ"
+    else:
+        # 「おすすめ：見送る（鳴いても速くならない）」。くわしい理由は、下の「鳴きの判断」の表に出す
+        how = "見送る" if advice.recommend is None else call_name(advice.recommend)
+        sub = f"おすすめ：{how}（{_short_reason(advice)}）"
+    return _headline(_two_lines(head, sub, rb), "call")
+
+
+def _short_reason(advice: CallAdvice) -> str:
+    """おすすめの理由のひとこと（案内の 1 行に収める）"""
+    return advice.short or advice.reason.split("。")[0]
+
+
+def call_phrase(action: Action, tile: int, *, aka: bool) -> str:
+    """返事の書き方（HTML）：「[2索][3索] で [1索] をチー」「[白] をポン」「[5萬] を見送った」"""
+    if action.move is Move.CHI:
+        return f'{"".join(_small(t, aka) for t in action.tiles)} で {_small(tile, aka)} をチー'
+    word = {Move.PON: "ポン", Move.KAN: "カン（大明槓）"}.get(action.move)
+    return f"{_small(tile, aka)} を{word}" if word else f"{_small(tile, aka)} を見送った"
+
+
+def call_decision_headline_html(decision: CallDecision, rb: Rubifier, *, aka: bool) -> str:
+    """鳴ける牌への返事の答え合わせ（打った後に答え合わせ）。上の行に返事、下の行に評価（2 行に収める）"""
+    cls, icon = CALL_MARKS[decision.grade]
+    head = f'<span class="mj-icon {cls}">{icon}</span> {call_phrase(decision.action, decision.advice.tile, aka=aka)}'
+    sub = decision.label
+    # 評価の言葉がおすすめを言っているとき（見送るのがおすすめだった・ロンできた）は、おすすめをくり返さない
+    if not decision.followed and decision.label not in ("見送るのがおすすめだった", "ロンできた"):
+        how = "見送る" if decision.advice.recommend is None else call_name(decision.advice.recommend)
+        sub += f"（おすすめは {how}）"
+    return _headline(_two_lines(head, sub, rb), cls)
+
+
+def kan_headline_html(advice: KanAdvice, hand: HandState, rb: Rubifier) -> str:
+    """カンをすすめるとき（打つ前のヒント）。上の行に「カンできます　おすすめ：暗槓 ○」、下の行に、ひとことの理由"""
+    aka = hand.rules.aka_dora
+    word = "加槓" if advice.added else "暗槓"
+    head = (
+        f'<b class="mj-stage">カンできます</b>　おすすめ：{rb.html(word)} {_small(advice.tile, aka)} <b>{escape(_name(advice.tile, aka))}</b>'
+    )
+    return _headline(_two_lines(head, "手は遅くならない。嶺上牌を 1 枚引ける", rb))
+
+
+CALL_MARKS = {CallGrade.GOOD: ("good", "✓"), CallGrade.SOSO: ("soso", "△"), CallGrade.BAD: ("bad", "✗")}
+
+
+# ---------------------------------------------------------------- 鳴きの判断（比べ方の表）
+
+
+def _status_text(option: CallOption) -> str:
+    outlook = option.outlook
+    if outlook.status is YakuStatus.SECURED:
+        return "役が確定（" + "・".join(c.name for c in outlook.secured) + "）"
+    if outlook.status is YakuStatus.ON_PATH:
+        # まだ確定していない（遠回りせずに、作れる見込みがある）。「役あり」とは書かない
+        return "役の見込みあり（" + "・".join(c.name for c in outlook.path_yaku[:2]) + "：遠回りせずに作れる）"
+    if outlook.status is YakuStatus.RIICHI:
+        return "聴牌すればリーチで役が付く（門前）"
+    nearest = outlook.nearest
+    if outlook.status is YakuStatus.DETOUR and nearest is not None:
+        return f"役まで遠回り（{nearest.name}の聴牌まで、あと {max(nearest.distance, 0)} 枚）"
+    return "役なし（このままでは、あがれない）"
+
+
+def _speed_text(option: CallOption) -> str:
+    outlook = option.outlook
+    stage = "聴牌" if outlook.shanten == 0 else f"{outlook.shanten} 向聴"
+    noun = "待ち" if outlook.shanten == 0 else "受け入れ"
+    text = f"{stage}・{noun} {outlook.total} 枚"
+    if option.fastest is not None and option.fastest < outlook.shanten:
+        fastest = "聴牌" if option.fastest == 0 else f"{option.fastest} 向聴"
+        lose = "役が見えなくなる" if option.fastest_status in (None, YakuStatus.NONE) else "役まで遠回りになる"
+        text += f"（役を残す切り方で数えた。速さだけなら {fastest} だが、{lose}）"
+    return text
+
+
+def _value_text(option: CallOption) -> str:
+    outlook = option.outlook
+    parts = [f"{c.name} {c.han}" for c in outlook.secured]
+    if outlook.can_riichi:
+        parts.append("リーチ 1")
+    best = max(outlook.path_yaku, key=lambda c: c.han, default=None)
+    if best is not None:
+        parts.append(f"{best.name} {'役満' if best.yakuman else best.han}")
+    if outlook.dora:
+        parts.append(f"ドラ {outlook.dora}")
+    total = outlook.han
+    return f"目安 {total} 翻" + (f"（{'・'.join(parts)}）" if parts else "（役なし）" if outlook.status is YakuStatus.NONE else "")
+
+
+def call_html(advice: CallAdvice, rb: Rubifier, *, aka: bool) -> str:
+    """鳴く・鳴かないの比べ方：役が残るか・打点の目安・速さ（向聴数と受け入れ）"""
+    # 画面に出る順にルビを振る（いちばん上に出す、おすすめの文を先に）
+    lead = f"おすすめ：{'見送る' if advice.recommend is None else call_name(advice.recommend)}。{advice.reason}"
+    lead_html = f'<div class="mj-note">{rb.html(lead)}</div>'
+    rows = []
+    options = [advice.stay, *advice.calls]
+    for option in options:
+        if option.action is None:
+            name = "見送る（鳴かない）"
+            tiles = ""
+        else:
+            name = call_name(option.action)
+            tiles = "".join(_small(t, aka) for t in option.action.tiles)
+            if option.discard is not None:
+                tiles += f'<br><span class="mj-sub">{rb.html("鳴いたら")} {_small(option.discard, aka)} {rb.html("切り")}</span>'
+        pick = (advice.recommend is None and option.action is None) or (option.action is not None and option.action == advice.recommend)
+        mark = "◎ " if pick else ""
+        # 緑：役が確定・門前（リーチで付く）。橙：役の見込み・遠回り（まだ確定していない）。赤：役が見えない
+        status_cls = {YakuStatus.NONE: "bad", YakuStatus.DETOUR: "soso", YakuStatus.ON_PATH: "soso"}.get(option.outlook.status, "good")
+        rows.append(
+            f'<tr><td>{rb.html(mark + name)}<br>{tiles}</td>'
+            f'<td><span class="mj-yaku-{status_cls}">{rb.html(_status_text(option))}</span>'
+            f'<br><span class="mj-sub">{rb.html(_value_text(option))}</span>'
+            f'<br><span class="mj-sub">{rb.html(_speed_text(option))}</span></td></tr>'
+        )
+    head = f'<tr><td>{rb.html("選び方")}</td><td>{rb.html("役・打点・速さ")}</td></tr>'
+    note = (
+        "役：鳴いたあとに役が付けられるか。鳴くとリーチができないので、役が無いと、あがれない（「見込み」は、まだ確定していない役）。"
+        "打点の目安：確定した役＋リーチ（門前のとき）＋いまの形で付く役のうち一番高いもの＋ドラ（役どうしが同時に付くかまでは見ていない、おおまかな目安）。"
+        "速さ：鳴くなら、鳴いて 1 枚切ったあとの向聴数と受け入れ（残り枚数）。切る牌は、役を残せる牌を先に選ぶ。"
+        "門前で 1 向聴以内なのに、鳴くと打点の目安が 2 翻以上下がるときは、見送るをすすめる（このアプリの目安）。"
+    )
+    return f'{lead_html}<table class="mj-table mj-call-table">{head}{"".join(rows)}</table><div class="mj-sub">{rb.html(note)}</div>'
+
+
+def call_decision_html(decision: CallDecision, rb: Rubifier, *, aka: bool) -> str:
+    """鳴ける牌への返事の評価（打った後に答え合わせ・振り返り）"""
+    cls, icon = CALL_MARKS[decision.grade]
+    phrase = call_phrase(decision.action, decision.advice.tile, aka=aka)
+    head = f'<div class="mj-review-head"><span class="mj-icon {cls}">{icon}</span> {rb.html(f"{decision.number} 巡目：")}{phrase}</div>'
+    body = f"<div>{rb.html(decision.label + '。' + decision.text)}</div>"
+    return f'<div class="mj-review {cls}">{head}{body}</div>'
 
 
 # ---------------------------------------------------------------- CPU の打牌
@@ -298,9 +578,11 @@ def _discard_of(hand: HandState, seat: int, tile: int):
 
 
 def moves_since(hand: HandState, mark: int) -> list[tuple[int, str, int | None, bool]]:
-    """自分が最後に行動したあとの動き。（席, 種類, 牌, ツモ切りか）の列。種類は discard・riichi・tsumo・ron・nine"""
+    """自分が最後に行動したあとの動き。（席, 種類, 牌, ツモ切りか）の列。
+    種類は discard・riichi・tsumo・ron・nine・chi・pon・kan（大明槓）・ankan・kakan。鳴いた牌は、鳴かれた捨て牌"""
     found = []
-    for action in hand.actions[mark:]:
+    called = _called_tiles(hand)
+    for index, action in enumerate(hand.actions[mark:], start=mark):
         if action.move in (Move.DISCARD, Move.RIICHI):
             assert action.tile is not None
             discard = _discard_of(hand, action.seat, action.tile)
@@ -309,10 +591,31 @@ def moves_since(hand: HandState, mark: int) -> list[tuple[int, str, int | None, 
         elif action.move in (Move.TSUMO, Move.RON, Move.NINE):
             kind = {Move.TSUMO: "tsumo", Move.RON: "ron", Move.NINE: "nine"}[action.move]
             found.append((action.seat, kind, None, False))
+        elif action.move in (Move.CHI, Move.PON, Move.KAN) and index in called:
+            found.append((action.seat, action.move.name.lower(), called[index], False))
+        elif action.move in (Move.ANKAN, Move.KAKAN):
+            found.append((action.seat, action.move.name.lower(), action.tile, False))
     return found
 
 
-MOVE_WORDS = {"discard": "", "riichi": "リーチ", "tsumo": "ツモ！", "ron": "ロン！", "nine": "九種九牌"}
+def _called_tiles(hand: HandState) -> dict[int, int]:
+    """鳴きが通った行動の番号 → 鳴いた牌（ロン・ポンが優先されて通らなかった鳴きは入れない）"""
+    found = {}
+    last_discard = None
+    for index, action in enumerate(hand.actions):
+        if action.move in (Move.DISCARD, Move.RIICHI):
+            last_discard = action.tile
+        elif action.move in (Move.CHI, Move.PON, Move.KAN) and last_discard is not None:
+            player = hand.players[action.seat]
+            if any(f.meld.called_tile == last_discard and f.from_seat is not None for f in player.furo):
+                found[index] = last_discard
+    return found
+
+
+MOVE_WORDS = {
+    "discard": "", "riichi": "リーチ", "tsumo": "ツモ！", "ron": "ロン！", "nine": "九種九牌",
+    "chi": "チー", "pon": "ポン", "kan": "カン", "ankan": "カン", "kakan": "カン",
+}
 
 
 def moves_html(hand: HandState, mark: int, rb: Rubifier, *, limit: int = 6) -> str:
@@ -348,6 +651,8 @@ def _river_cells(hand: HandState, seat: int, *, new_from: int, aka: bool, upto: 
             classes.append("mj-tg")
         if discard.order >= new_from:
             classes.append("mj-new")
+        if discard.called_by is not None:
+            classes.append("mj-called")
         cells.append(f"<span>{tile_img(discard.tile, aka=aka, cls=' '.join(classes))}</span>")
     return "".join(cells)
 
@@ -368,8 +673,12 @@ def table_html(hand: HandState, mark: int, rb: Rubifier) -> str:
         mark_text = '<span class="mj-seat-riichi">リーチ</span>' if player.in_riichi else ""
         cells = _river_cells(hand, seat, new_from=new_from, aka=aka)
         river = f'<div class="mj-river mj-river-s">{cells}</div>' if cells else '<div class="mj-cap">まだ切っていません</div>'
-        blocks.append(f'<div class="mj-riverbox"><div class="mj-cap">{rb.html(seat_label(hand, seat))} {mark_text}</div>{river}</div>')
+        melds = melds_html(player.furo, seat, aka=aka, rb=rb)
+        blocks.append(f'<div class="mj-riverbox"><div class="mj-cap">{rb.html(seat_label(hand, seat))} {mark_text}</div>{river}{melds}</div>')
+    called = any(d.called_by is not None for p in hand.players for d in p.river)
     legend = "印の付いた牌：自分が切ったあとに切られた牌。横向き：リーチ宣言牌。薄い牌：ツモ切り" if mark else "横向き：リーチ宣言牌。薄い牌：ツモ切り"
+    if called or any(p.furo for p in hand.players):
+        legend += "。とても薄い牌：鳴かれた牌（鳴いた人の副露に入った）。河の下の段：副露と暗槓（横向きの牌が、鳴いた牌。暗槓は両端が裏向き）"
     return f'<div class="mj-cap mj-river-cap">{rb.html("河（捨て牌）")}</div><div class="mj-table4">{"".join(blocks)}</div><div class="mj-sub">{rb.html(legend)}</div>'
 
 
@@ -383,7 +692,11 @@ def moves_each_html(hand: HandState, mark: int, rb: Rubifier) -> str:
         if seat == HUMAN and kind not in ("tsumo", "ron"):
             continue
         number += 1
-        if tile is not None:
+        if kind in ("chi", "pon", "kan", "ankan", "kakan"):
+            assert tile is not None
+            text = f"{seat_label(hand, seat)}：{MOVE_WORDS[kind]}（{_name(tile, aka)}）"
+            river = melds_html(hand.players[seat].furo, seat, aka=aka, rb=rb)
+        elif tile is not None:
             discard = _discard_of(hand, seat, tile)
             order = discard.order if discard is not None else count
             how = "リーチ宣言牌" if kind == "riichi" else ("ツモ切り" if tsumogiri else "手出し")
@@ -410,6 +723,8 @@ def misses_html(hand: HandState, mark: int, rb: Rubifier) -> str:
     for miss in hand.misses:
         if miss.seat != HUMAN or miss.passed:
             continue
+        if miss.chankan:
+            continue                # 槍槓の牌（加槓・暗槓）は、ロンできなければ印を出さない（フリテンだけが理由なので、下の「いまフリテン」で分かる）
         discard = _discard_of(hand, miss.from_seat, miss.tile)
         if discard is None or discard.order < count:
             continue
@@ -418,9 +733,11 @@ def misses_html(hand: HandState, mark: int, rb: Rubifier) -> str:
             why = FURITEN_SHORT[miss.check.furiten] + "ので、ロンできなかった。"
             if miss.check.furiten is Furiten.RIVER:
                 why += "フリテンでも、ツモならあがれる。"
-        else:
+        elif hand.players[HUMAN].menzen:
             why = "役がないので、ロンできなかった（ツモなら門前清自摸和であがれる。リーチしていれば、ロンでもあがれた）。"
-        follow = "このあと自分が切るまでは、ほかの人の捨て牌でもロンできない（同巡内フリテン）。"
+        else:
+            why = "役がないので、ロンできなかった（鳴いた手なので、リーチもできない。役を作らないと、ツモでもあがれない）。"
+        follow = "このあと自分がツモるまでは、ほかの人の捨て牌でもロンできない（同巡内フリテン）。"
         if hand.players[HUMAN].riichi_missed:
             follow = "リーチのあとなので、この局のあいだは、ロンできない（ツモならあがれる）。"
         lines.append(f'<div class="mj-alertnote">{rb.html(what + why + follow)}</div>')
@@ -436,12 +753,12 @@ def passed_html(hand: HandState, rb: Rubifier) -> str:
     for miss in hand.misses:
         if miss.seat != HUMAN or not miss.passed:
             continue
-        discard = _discard_of(hand, miss.from_seat, miss.tile)
-        text = f"{SEAT_NAMES[miss.from_seat]}の {_name(miss.tile, aka)} で、ロンできたが見送った。"
-        if riichi_order is not None and discard is not None and discard.order > riichi_order:
+        what = "槍槓（カンの牌でロン）" if miss.chankan else "ロン"
+        text = f"{SEAT_NAMES[miss.from_seat]}の {_name(miss.tile, aka)} で、{what}できたが見送った。"
+        if riichi_order is not None and miss.order > riichi_order:
             text += "リーチのあとの見逃しなので、この局のあいだはロンできなくなった（ツモならあがれた）。"
         else:
-            text += "そのあと自分が切るまでは、ほかの人の捨て牌でもロンできなかった（同巡内フリテン）。"
+            text += "そのあと自分がツモるまでは、ほかの人の捨て牌でもロンできなかった（同巡内フリテン）。"
         lines.append(f'<div class="mj-alertnote">{rb.html(text)}</div>')
     return "".join(lines)
 
@@ -465,6 +782,7 @@ def danger_html(advice: TurnAdvice, rb: Rubifier, *, detail: bool, chosen_kind: 
     return danger_table_html(
         advice.table, position.tiles, rb, detail=detail, pick_kinds=(kind_of(advice.pick),), chosen_kind=chosen_kind,
         aka=position.rules.aka_dora, pick_note="◎ は、コーチのおすすめ（同じ危険度の中で、手に要らない牌）。",
+        locked_kinds=position.forbidden,
     )
 
 
@@ -492,8 +810,10 @@ def danger_table_html(
     chosen_kind: int | None = None,
     aka: bool = True,
     pick_note: str = "",
+    locked_kinds: Sequence[int] = (),
 ) -> str:
     """手牌の種類ごとの危険度と根拠の表（安全な順）。pick_kinds（おすすめ・正解）に ◎、chosen_kind に「切った」の印を付ける。
+    locked_kinds（鳴いた直後の喰い替えで切れない牌）には、そう添える。
 
     同じ危険度の中では、◎ の牌を先に並べる（「上の行ほど安全」と読んでも、おすすめと食い違わないように）。
     """
@@ -516,6 +836,8 @@ def danger_table_html(
             else:
                 each.append(f'<div class="mj-sub">{rb.html(prefix + summary(danger))}</div>')      # 根拠の名前は、短い説明の中に入っている
         dora = '<span class="mj-badge">ドラ</span>' if row.dora else ""
+        if row.kind in locked_kinds:
+            dora += f'<span class="mj-sub">（{rb.html("いまは喰い替えで切れない")}）</span>'
         rows.append(
             f'<tr><td class="mj-danger-tile">{pick}{_small(tile, aka)}</td>'
             f'<td><span class="mj-level-chip {LEVEL_CLASS[row.level]}">{escape(row.name)}</span>{dora}{"".join(each)}</td></tr>'
@@ -631,21 +953,30 @@ def decision_html(decision: TurnDecision, rb: Rubifier, *, detail: bool, aka: bo
     return f'<div class="mj-review {cls}">{head}{body}</div>'
 
 
-def review_list_html(decisions: Sequence[TurnDecision], rb: Rubifier, *, aka: bool) -> str:
-    """この局の打牌の振り返り（1 打牌 1 行）"""
-    if not decisions:
+def review_list_html(decisions: Sequence[TurnDecision], rb: Rubifier, *, aka: bool, calls: Sequence[CallDecision] = ()) -> str:
+    """この局の自分の判断の振り返り（打牌と、鳴ける牌への返事。1 つ 1 行。巡目の順）"""
+    if not decisions and not calls:
         return f'<div class="mj-sub">{rb.html("この局で、自分で選んだ打牌はありません。")}</div>'
     rows = []
-    for decision in decisions:
+    items: list[tuple[int, int, TurnDecision | CallDecision]] = [(d.number, 1, d) for d in decisions]
+    items += [(c.number, 0, c) for c in calls if c.called or not c.followed]      # 見送りは、おすすめと違ったときだけ
+    for _, _, item in sorted(items, key=lambda x: (x[0], x[1])):
+        if isinstance(item, CallDecision):
+            cls, icon = CALL_MARKS[item.grade]
+            what = call_name(item.action) if item.called else "見送った"
+            rows.append(
+                f'<tr><td class="num">{item.number}</td><td><span class="mj-icon {cls}">{icon}</span> {_small(item.advice.tile, aka)}</td>'
+                f"<td>{rb.html(what + '：' + item.label)}</td></tr>"
+            )
+            continue
+        decision = item
         cls, icon = _decision_mark(decision)
         tile = decision.action.tile
         assert tile is not None
         pick = decision.advice.pick
         how = "リーチ＋" if decision.advice.recommend_riichi else ""
         better = "" if decision.followed else f"おすすめ {how}{_small(pick, aka)}"
-        label = decision.safety.text if decision.safety is not None and decision.advice.stance is Stance.FOLD else decision.verdict.label
-        if decision.skipped_riichi:
-            label = "リーチしなかった（リーチをすすめる聴牌）"
+        label = decision_label(decision, detailed=True)
         rows.append(
             f'<tr><td class="num">{decision.number}</td><td><span class="mj-icon {cls}">{icon}</span> {_small(tile, aka)}</td>'
             f"<td>{rb.html(label)}{('<br>' + better) if better else ''}</td></tr>"
@@ -665,8 +996,10 @@ def result_banner_html(game: GameState, rb: Rubifier) -> str:
         lines = []
         for win in result.wins:
             who = seat_label(hand, win.seat)
-            how = "ツモ" if win.from_seat is None else f"ロン（{SEAT_NAMES[win.from_seat]}から）"
+            how = "ツモ" if win.from_seat is None else ("槍槓" if win.ctx.chankan else "ロン") + f"（{SEAT_NAMES[win.from_seat]}から）"
             lines.append(f'<div class="mj-big">{rb.html(f"{who}の{how}")}</div><div class="mj-note">{rb.html(gain_text(win))}</div>')
+            if win.pao is not None:
+                lines.append(f'<div class="mj-sub">{rb.html(pao_text(win))}</div>')
         if result.bumped:
             names = "・".join(SEAT_NAMES[s] for s in result.bumped)
             lines.append(f'<div class="mj-sub">{rb.html(f"{names}もロンしたが、頭ハネで無効になった。")}</div>')
@@ -690,6 +1023,7 @@ def result_banner_html(game: GameState, rb: Rubifier) -> str:
             EndKind.NINE_TERMINALS: f"{SEAT_NAMES[result.caller] if result.caller is not None else ''}が、最初のツモで么九牌 9 種類以上の手を見せて、流した。",
             EndKind.FOUR_WINDS: "最初の 1 巡で、4 人が同じ風牌を切った。",
             EndKind.FOUR_RIICHI: "4 人のリーチが成立した。",
+            EndKind.FOUR_KANS: "2 人以上で合わせて 4 回カンをして、そのあとの打牌が通った。",
         }[result.kind]
         moved = "リーチ棒のほかは、点の動きは無く" if any(p.riichi_paid for p in hand.players) else "点の動きは無く"
         banner = (
@@ -697,6 +1031,20 @@ def result_banner_html(game: GameState, rb: Rubifier) -> str:
             f'<div class="mj-sub">{rb.html(f"{explain_text}{moved}、親が続ける（本場が 1 つ増える）。")}</div></div>'
         )
     return banner + settlement_html(hand, rb)
+
+
+def pao_text(win: Win) -> str:
+    """責任払いの説明"""
+    assert win.pao is not None
+    name = {"daisangen": "大三元", "daisuushii": "大四喜"}.get(win.pao_yaku or "", "役満")
+    who = SEAT_NAMES[win.pao]
+    if win.from_seat is None:
+        how = f"ツモなので、{name}の点は{who}が全部払った"
+    elif win.from_seat == win.pao:
+        how = f"{who}の放銃なので、{who}が全部払った"
+    else:
+        how = f"{SEAT_NAMES[win.from_seat]}の放銃なので、{name}の点は{SEAT_NAMES[win.from_seat]}と{who}が半分ずつ払った"
+    return f"責任払い（包）：{name}を確定させる牌を鳴かせたのは{who}。{how}（本場の点も{who}）。"
 
 
 def gain_text(win: Win) -> str:
@@ -755,13 +1103,16 @@ def reveal_html(hand: HandState, rb: Rubifier) -> str:
         else:
             shown = tiles_fit_html(list(player.hand), aka=aka, max_px=26)
             waits = wait_kinds(player.hand)
-            state = ("聴牌・待ち " + "・".join(kind_text(k) for k in waits)) if waits else "ノーテン"
+            # 鳴いた手で、どの待ちでも役が付かない聴牌は、あがれない（流局のときだけ、聴牌として数える）
+            formal = "（役なし。形式聴牌）" if waits and formal_tenpai(hand, seat) else ""
+            state = (f"聴牌{formal}・待ち " + "・".join(kind_text(k) for k in waits)) if waits else "ノーテン"
         riichi = "・リーチ" if player.riichi_paid else ""
         cells = _river_cells(hand, seat, new_from=10**9, aka=aka)
         river = f'<div class="mj-river mj-river-s">{cells}</div>' if cells else ""
+        melds = melds_html(player.furo, seat, aka=aka, rb=rb)
         blocks.append(
             f'<div class="mj-reveal"><div class="mj-cap">{rb.html(f"{seat_label(hand, seat)}　{state}{riichi}")}</div>'
-            f'<div class="mj-hand">{shown}</div>{river}</div>'
+            f'<div class="mj-hand">{shown}</div>{melds}{river}</div>'
         )
     return "".join(blocks)
 
@@ -809,6 +1160,8 @@ def _game_stats(game: GameState, tally: Tally) -> str:
         text += f"おすすめと同じ牌を切った割合 {percent(tally.followed / tally.decisions)}（{tally.decisions} 回中 {tally.followed} 回）。"
     if tally.defense:
         text += f"オリる局面で、いちばん安全な牌を切れた割合 {percent(tally.safe / tally.defense)}。"
+    if tally.calls:
+        text += f"鳴いた回数 {tally.calls} 回（そのうち役なしの鳴き {tally.bad_calls} 回）。"
     return text
 
 
@@ -821,7 +1174,8 @@ def _condition(summary_row: Summary) -> str:
     if summary_row.cpu_deal or summary_row.cpu_draw:
         cpu += f"（補正 {summary_row.cpu_deal}・{summary_row.cpu_draw}）"
     hint = "・ヒントあり" if summary_row.hinted else ""
-    return f"{LENGTH_NAMES.get(summary_row.length, summary_row.length)}・{cpu}・{luck}{hint}"
+    rules = f"・{rules_text(summary_row.rules)}" if summary_row.rules else ""
+    return f"{LENGTH_NAMES.get(summary_row.length, summary_row.length)}・{cpu}・{luck}{hint}{rules}"
 
 
 def stats_html(summaries: Sequence[Summary], grad: Graduation, rb: Rubifier) -> str:
@@ -846,28 +1200,48 @@ def stats_html(summaries: Sequence[Summary], grad: Graduation, rb: Rubifier) -> 
     return "".join(parts)
 
 
+#: 卒業の目安に数えない対局（画面に添える）
+GRADUATION_EXCLUDED = "鳴きなし・ルールを変えた対局（鳴きの入る前の版で打った対局を含む）は数えない。"
+
+
 def graduation_html(grad: Graduation, rb: Rubifier) -> str:
-    """卒業の目安（補正 0・CPU ふつう・ヒントなしの東風戦）の進み具合"""
-    head = f"卒業の目安：補正 0・CPU ふつう・ヒントなしの東風戦を {GOAL_GAMES} 回"
+    """卒業の目安（補正 0・CPU ふつう・ヒントなし・初期のルール（鳴きあり）の東風戦）の進み具合"""
+    head = f"卒業の目安：補正 0・CPU ふつう・ヒントなし・初期のルール（鳴きあり）の東風戦を {GOAL_GAMES} 回"
     if grad.games == 0:
-        body = "まだ数えられる対局がありません（補正を 0 にして、打つ前のヒントをオフにした東風戦が対象）。"
+        body = f"まだ数えられる対局がありません（補正を 0 にして、打つ前のヒントをオフにした東風戦が対象。{GRADUATION_EXCLUDED}）"
         return f'<div class="mj-lesson"><b>{rb.html(head)}</b><br>{rb.html(body)}</div>'
     rank = "—" if grad.average_rank is None else rounded(grad.average_rank, 2)
-    deal_in = "—" if grad.deal_in_rate is None else percent(grad.deal_in_rate)
+    # 目標の境目のそばでは、丸めた値と判定が食い違って見えるので、小数 1 桁と、局の数・回数も出す
+    deal_in, counted = "—", ""
+    if grad.deal_in_rate is not None and grad.hands:
+        deal_in = f"{rounded(Decimal(grad.deal_ins * 100) / grad.hands, 1)}%"
+        counted = f"{grad.hands} 局で {grad.deal_ins} 回。"
+    elif grad.deal_in_rate is not None:
+        deal_in = percent(grad.deal_in_rate)
     lines = [
         f"対局数：{grad.games} / {GOAL_GAMES}（{'達成' if grad.enough else f'あと {GOAL_GAMES - grad.games} 回'}）",
         f"平均順位：{rank}（目標 {GOAL_RANK} 以下：{'達成' if grad.rank_ok else 'まだ'}）",
-        f"放銃率：{deal_in}（目標 {percent(GOAL_DEAL_IN)} 以下：{'達成' if grad.deal_in_ok else 'まだ'}）",
+        f"放銃率：{deal_in}（{counted}目標 {percent(GOAL_DEAL_IN)} 以下：{'達成' if grad.deal_in_ok else 'まだ'}）",
     ]
     if grad.games < GOAL_MISS_GAMES:
         misses = f"{GOAL_MISS_GAMES} 戦そろったら判定"
     else:
         misses = "達成" if grad.misses_ok else "まだ"
     lines.append(f"役なし・フリテンの見落とし（直近 {GOAL_MISS_GAMES} 戦）：{grad.recent_misses} 回（目標 0 回：{misses}）")
+    if grad.games < GOAL_MISS_GAMES:
+        calls = f"{GOAL_MISS_GAMES} 戦そろったら判定"
+    else:
+        calls = "達成" if grad.calls_ok else "まだ"
+    lines.append(
+        f"役なしの鳴き（直近 {GOAL_MISS_GAMES} 戦）：{grad.recent_bad_calls} 回（鳴いた回数 {grad.recent_calls} 回のうち。目標 0 回：{calls}）"
+    )
     if grad.passed:
         lines.append("すべての目標を達成した。")
     body = "".join(f"<li>{rb.html(line)}</li>" for line in lines)
-    note = "平均順位と放銃率は、数えた対局ぜんぶ（いまのところの値）。対局数が目標に届いたところで、そろって達成なら卒業の目安を満たす。"
+    note = (
+        "平均順位と放銃率は、数えた対局ぜんぶ（いまのところの値）。対局数が目標に届いたところで、そろって達成なら卒業の目安を満たす。"
+        + GRADUATION_EXCLUDED
+    )
     return f'<div class="mj-lesson"><b>{rb.html(head)}</b><ul class="mj-rules">{body}</ul><div class="mj-sub">{rb.html(note)}</div></div>'
 
 
@@ -891,12 +1265,20 @@ HELP_ITEMS = (
     ("切る・リーチ・ツモ", "一人練習と同じ。牌をタップして選び、「この牌を切る」。聴牌にとれるときは「リーチ」、あがれるときは「ツモ（あがる）」が出る。"
      "リーチのあとのツモ切りは自動で進み、あがり牌を引いたら止まるので、「ツモ（あがる）」を押す。"),
     ("ロン", "ほかの人の捨て牌であがれるとき、手牌の下に「ロン」と「見送る」が出る。ロンできない牌（役なし・フリテン）では出ない（誤ロンにならない）。"
-     "見送ると、自分が次に切るまでロンできない（リーチのあとなら、その局のあいだずっと）。"
+     "見送ると、次に自分がツモるまでロンできない（このアプリは雀魂に合わせて、チー・ポンして切っても解けないことにしている。"
+     "鳴いて切れば解けるルールもある。ルールによって異なる。リーチのあとなら、その局のあいだずっと）。"
      "あがり牌なのにロンできなかったときは、その理由を知らせる。"),
+    ("鳴き", "ほかの人の捨て牌でチー・ポン・カンできるとき、手牌の下に「チー」「ポン」「カン」と「見送る」が出る（チーは上家の牌だけ）。"
+     "チー・ポンしたら、ツモらずに 1 枚切る（カンしたら、嶺上牌をツモってから切る）。鳴いた牌と同じ牌などは、すぐには切れない（喰い替え）。"
+     "鳴いた手はリーチできないので、役が無いとあがれない。"
+     "コーチは、鳴く・鳴かないを、役が残るか・打点の目安・速さで比べる。"),
+    ("カン", "4 枚そろったら、自分の番に「カン」（暗槓）。ポンした牌の 4 枚目なら加槓。ほかの人の捨て牌と手の中の 3 枚でもカンできる（大明槓）。"
+     "カンすると、嶺上牌をツモる。ドラが 1 枚増える（暗槓はすぐ。大明槓・加槓は、次に 1 枚切ったとき。めくる時点は、ルールによって異なる）。"
+     "コーチは、カンしても手が遅くならず、リーチを受けていなければ「◎ カン」にする。"),
     ("守備", "誰かがリーチすると、手牌の危険度と根拠（現物・スジ・壁・字牌の見えている枚数）の表が出る。聴牌していなければ、コーチはオリ（ベタオリ）をすすめる。"),
     ("リーチ判断", "聴牌にとれるとき、リーチとダマ（リーチしない）を、役の有無・待ちの形と残り枚数・点数で比べた表が出る。"),
-    ("局の終わり", "全員の手牌と待ちを公開する。あがった手は、点数計算の全過程を見られる。"),
-    ("対局の終わり", "東風戦（東 1〜4 局）か半荘戦。最後まで打った対局だけを成績に入れる。決まりは雀魂の段位戦に合わせてある（ルールの違いのページも見てください）。"),
+    ("局の終わり", "全員の手牌と待ちを公開する。あがった手は、点数計算の全過程を見られる。牌譜で、局を 1 手ずつ振り返れる（自分の判断の評価つき）。"),
+    ("対局の終わり", "東風戦（東 1〜4 局）か半荘戦。最後まで打った対局だけを成績に入れる。決まりは雀魂の段位戦に合わせてある（雀魂で確かめられなかった細かい点と、ほかのルールとの違いは、ルールの違いのページに書いた）。"),
 )
 
 
@@ -910,5 +1292,28 @@ def phase_text(hand: HandState) -> str:
     if hand.result is not None:
         return "局の終わり"
     if hand.phase is Phase.CLAIM:
-        return "ロンの返事待ち"
+        return "ロン・鳴きの返事待ち"
     return f"{SEAT_NAMES[hand.turn]}の番"
+
+
+# ---------------------------------------------------------------- 牌譜（局後の振り返り）
+
+
+def kifu_notes(found: Sequence[tuple[int, TurnDecision | CallDecision]]) -> dict[int, Note]:
+    """自分の判断の評価を、牌譜の手順に添える形にする（{行動の番号: 評価}）"""
+    notes = {}
+    for index, decision in found:
+        if isinstance(decision, CallDecision):
+            cls, icon = CALL_MARKS[decision.grade]
+            text = decision.text if not decision.followed else ""
+            notes[index] = Note(icon, cls, decision.label, text)
+            continue
+        cls, icon = _decision_mark(decision)
+        label = decision_label(decision, detailed=True)
+        text = ""
+        if not decision.followed:
+            pick = decision.advice.pick
+            how = "リーチして " if decision.advice.recommend_riichi else ""
+            text = f"おすすめは {how}{_name(pick, True)} 切り。" + decision.verdict.text
+        notes[index] = Note(icon, cls, label, text)
+    return notes

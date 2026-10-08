@@ -10,6 +10,7 @@ from engine.cpu import human_turn
 from engine.game import HUMAN, Phase
 from engine.game_coach import coach_action
 from engine.game_records import load_history
+from engine.melds import MeldType
 from ui.game_session import (
     DEFAULT_SETTINGS,
     GAME_HISTORY_NAME,
@@ -43,6 +44,11 @@ def play_one_move(session: GameSession) -> None:
         assert session.pick(action.tile)
     elif action.move is g.Move.RIICHI:
         assert session.pick(action.tile, riichi=True)
+    elif action.move in (g.Move.CHI, g.Move.PON, g.Move.KAN):
+        calls = [a for a in hand.call_actions(HUMAN) if a.move is not g.Move.RON]
+        assert session.act(f"call:{calls.index(action)}")
+    elif action.move in (g.Move.ANKAN, g.Move.KAKAN):
+        assert session.act(f"kan:{action.tile}")
     else:
         assert session.act({g.Move.TSUMO: "tsumo", g.Move.RON: "ron", g.Move.PASS: "pass", g.Move.NINE: "nine"}[action.move])
 
@@ -170,8 +176,9 @@ def test_decisions_of_skips_automatic_riichi_discards():
     session, _ = new_session()
     session.start()
     play_hand(session)
-    rebuilt = decisions_of(session.game)
+    rebuilt, calls = decisions_of(session.game)
     assert [d.action for d in rebuilt] == [d.action for d in session.decisions]
+    assert [c.action for c in calls] == [c.action for c in session.calls]
 
 
 def _won_first_hand(session: GameSession) -> bool:
@@ -241,3 +248,120 @@ def test_riichi_tsumo_waits_for_the_button():
                 return
             game = advance(g.apply(game, coach_action(hand, HUMAN)))
     raise AssertionError("リーチのあとにツモであがれる局面が見つからない")
+
+
+# ---------------------------------------------------------------- 鳴き・カン
+
+
+def _saved_at(game: g.GameState) -> FakeStore:
+    """その局面で止まっている対局の記録が入ったブラウザ（続きから開くため）"""
+    data = {"v": 1, "save": g.to_save(game), "counted": True, "hinted": False, "recorded": False,
+            "tally": {"n": 0, "f": 0, "d": 0, "s": 0}, "mark": len(game.current.actions)}
+    return FakeStore({GAME_NAME: json.dumps(data)})
+
+
+def _find(test, *, seeds=range(80)) -> g.GameState:
+    """局面 test(hand) になる対局（自分はコーチのおすすめどおりに打ち、鳴けるときは鳴かずに進める）"""
+    from engine.cpu import advance
+
+    for seed in seeds:
+        game = advance(g.start_game(g.GameConfig(seed=seed)))
+        while game.current.result is None:
+            hand = game.current
+            if test(hand):
+                return game
+            action = coach_action(hand, HUMAN)
+            if action.move in (g.Move.CHI, g.Move.PON, g.Move.KAN, g.Move.ANKAN, g.Move.KAKAN):
+                action = g.pass_(HUMAN) if hand.phase is Phase.CLAIM else g.discard(HUMAN, hand.players[HUMAN].drawn)
+            game = advance(g.apply(game, action))
+    raise AssertionError("局面が見つからない")
+
+
+def _call_prompt(hand: g.HandState) -> bool:
+    return (hand.phase is Phase.CLAIM and g.waiting_for(hand) == HUMAN and HUMAN not in hand.claim.ron
+            and any(a.move in (g.Move.CHI, g.Move.PON) for a in hand.call_actions(HUMAN)))
+
+
+def test_calling_records_the_call_and_waits_for_the_discard():
+    game = _find(_call_prompt)
+    session = reopen(_saved_at(game))
+    assert session.game.current == game.current
+    calls = [a for a in game.current.call_actions(HUMAN) if a.move is not g.Move.RON]
+    assert not session.act(f"call:{len(calls)}")             # 無い鳴き方は、何もしない
+    assert session.act("call:0")
+    assert len(session.calls) == 1 and session.last_call is session.calls[0]
+    decision = session.calls[0]
+    assert decision.called and decision.action == calls[0]
+    # 続きから開いても、いちばん最近の判断（鳴き）の答え合わせを出せる
+    resumed = reopen(session._store)                               # noqa: SLF001
+    assert resumed.last_call is not None and resumed.last_call.action == calls[0]
+    hand = session.game.current
+    me = hand.players[HUMAN]
+    # 鳴いたら、ツモをせずに 1 枚切る番。喰い替えの牌は切れない
+    assert hand.phase is Phase.DRAW and hand.turn == HUMAN and me.drawn is None and len(me.furo) == 1
+    locked = [t for t in me.hand if t // 4 in hand.forbidden]
+    if locked:
+        assert not session.pick(locked[0])
+    tile = next(t for t in me.hand if t // 4 not in hand.forbidden)
+    assert session.pick(tile)
+    assert session.last_call is None and session.decisions[-1].action.tile == tile
+    # 続きから開き直しても、鳴きの評価は同じに作り直される
+    again = reopen(session._store)                                 # noqa: SLF001
+    assert [c.action for c in again.calls] == [c.action for c in session.calls]
+    assert [d.action for d in again.decisions] == [d.action for d in session.decisions]
+
+
+def test_passing_a_call_is_recorded_as_a_decision():
+    game = _find(_call_prompt)
+    session = reopen(_saved_at(game))
+    assert session.act("pass")
+    assert len(session.calls) == 1 and not session.calls[0].called
+    assert session.calls[0].followed == (session.calls[0].advice.recommend is None)
+
+
+def test_calls_are_counted_in_the_tally():
+    """役なしの鳴き（鳴いたあとの手に役が見えない）を数える。卒業の目安に使う"""
+    from engine.call_coach import YakuStatus, call_advice
+    from ui.game_session import tally_of
+
+    def no_yaku_call(hand: g.HandState) -> bool:
+        if not _call_prompt(hand):
+            return False
+        advice = call_advice(hand, HUMAN)
+        return advice is not None and any(o.outlook.status is YakuStatus.NONE for o in advice.calls)
+
+    game = _find(no_yaku_call)
+    session = reopen(_saved_at(game))
+    before = len(session.calls)                 # それまでに見送った返事（続きから開くと、作り直される）
+    assert all(not c.called for c in session.calls)
+    advice = call_advice(game.current, HUMAN)
+    bad = next(o.action for o in advice.calls if o.outlook.status is YakuStatus.NONE)
+    calls = [a for a in game.current.call_actions(HUMAN) if a.move is not g.Move.RON]
+    assert session.act(f"call:{calls.index(bad)}")
+    assert len(session.calls) == before + 1
+    decision = session.calls[-1]
+    assert decision.no_yaku and not decision.followed
+    tally = tally_of(session.decisions, session.calls)
+    assert tally.calls == 1 and tally.bad_calls == 1
+
+
+def test_kan_key_declares_a_closed_kan_and_draws_from_the_dead_wall():
+    # 親の自分が、配牌（14 枚）で同じ牌を 4 枚持っている対局（844 番。配り方が変わったときのために、ほかの番号も探す）
+    for seed in (844, *range(5000)):
+        game = g.start_game(g.GameConfig(seed=seed))
+        start = game.current
+        if start.phase is Phase.DRAW and start.turn == HUMAN and start.ankan_tiles(HUMAN):
+            break
+    else:
+        raise AssertionError("暗槓できる配牌が見つからない")
+    session = reopen(_saved_at(game))
+    tile = start.ankan_tiles(HUMAN)[0]
+    assert not session.act("kan:999")
+    assert session.act(f"kan:{tile}")
+    hand = session.game.current
+    me = hand.players[HUMAN]
+    assert me.furo[-1].meld.type is MeldType.ANKAN and me.furo[-1].from_seat is None
+    # 嶺上牌を引いて、もう一度自分の番。暗槓のドラは、すぐにめくる
+    assert hand.result is None and hand.turn == HUMAN and me.rinshan and me.drawn is not None
+    assert len(hand.dora_indicators) == len(start.dora_indicators) + 1
+    assert session.calls == []                                     # 暗槓は、鳴きの返事ではない

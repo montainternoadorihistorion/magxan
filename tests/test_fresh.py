@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from ui.fresh import drop_stale_modules, process_start_time, source_stamp
+from ui.fresh import drop_stale_modules, module_replaced, process_start_time, source_stamp
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGES = ("engine", "ui")
@@ -134,3 +134,14 @@ def test_real_tree_has_a_stamp_and_app_uses_the_guard():
     assert 'data_folders=("data",)' in app                  # 図鑑や辞典の内容が変わったときも、読み直す
     guard = app.index("drop_stale_modules")
     assert guard < app.index("from ui.layout import")       # 自作モジュールを読み込む前に、見張りを通す
+    assert guard < app.index("module_replaced") < app.index("from ui.layout import")
+
+
+def test_modules_reloaded_by_streamlit_are_noticed():
+    """Streamlit がページの書き換えで自作モジュールを捨て、読み直したときも気づく（型が作り直されるので、世代を進める）"""
+    holder: dict = {}
+    first, second = object(), object()
+    assert not module_replaced(holder, first)               # はじめての表示
+    assert not module_replaced(holder, first)               # 同じモジュールのまま
+    assert module_replaced(holder, second)                  # 捨てられて、読み直された
+    assert not module_replaced(holder, second)

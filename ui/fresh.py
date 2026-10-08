@@ -24,6 +24,7 @@ from pathlib import Path
 
 SUFFIXES = (".py", ".js", ".css", ".html", ".yaml")
 _STAMP = "stamp"
+_MODULE = "module"
 _UNKNOWN = object()
 
 
@@ -88,3 +89,19 @@ def drop_stale_modules(
     for name in stale:
         del modules[name]
     return stale
+
+
+def module_replaced(holder: MutableMapping, module: object) -> bool:
+    """前回の表示のときと、見張りのモジュールが別のものになっていたら True（読み直されていた）。
+
+    Streamlit も、自分で見張っているファイル（views/ のページを含む）が書き換わると、読み込み済みの自作モジュールを
+    すべて捨てて、読み直させる。ページだけが書き換わったときは、drop_stale_modules は気づかないが、型は作り直される。
+    すると、セッションに残っている古い型のオブジェクトと、新しい型が混ざる（列挙型を is で比べると外れて、
+    対局のコーチが出なくなった。Phase 4 の通し確認で見つけた）。
+
+    module  自作モジュールのどれか 1 つ（読み直されるときは、すべてまとめて読み直される）
+    holder  前回のモジュールを覚えておく入れ物（drop_stale_modules と同じもの）
+    """
+    previous = holder.get(_MODULE)
+    holder[_MODULE] = module
+    return previous is not None and previous is not module

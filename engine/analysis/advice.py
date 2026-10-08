@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from engine.analysis.ukeire import DiscardOption, discard_options
@@ -68,14 +68,15 @@ def advise(
     *,
     value_kinds: Sequence[int] = (),
     dora_of: Mapping[int, int] | None = None,
+    skip: Collection[int] = (),
 ) -> Advice:
-    """14 枚の手で、どれを切るのがよいかを比べる。
+    """14 枚（副露があれば 14 − 3n 枚）の手で、どれを切るのがよいかを比べる。
 
     dora_of は {種類: その種類を切るときに手放すドラの数}（discard_dora で求める）。
-    受け入れが同じ候補の中では、ドラの少ない牌を先に切る。
+    受け入れが同じ候補の中では、ドラの少ない牌を先に切る。skip の種類は切れない（喰い替え）。
     """
     dora_of = dora_of or {}
-    options = discard_options(counts, remaining)
+    options = discard_options(counts, remaining, skip=skip)
     top = options[0]
     best = tuple(o for o in options if (o.reach, o.total) == (top.reach, top.total))
     pick = min(best, key=lambda o: loose_rank(o.kind, value_kinds=value_kinds, dora=dora_of.get(o.kind, 0)))

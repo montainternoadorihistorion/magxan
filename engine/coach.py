@@ -2,6 +2,7 @@
 
     analyze(position)              →  Analysis   向聴数、打牌候補の表、おすすめ、手牌の分け方、待ち、引ける確率
     judge_discard(analysis, tile)  →  Verdict    実際に切った牌を、おすすめと比べる（理由つき）
+    rebase(analysis, kind)         →  Analysis   おすすめをほかの牌に置きかえて、候補の評価を付け直す（対局のコーチが使う）
 
 ここで比べるのは速さ（向聴数と受け入れ枚数）だけ。役や打点、守備との兼ね合いは見ていない
 （対局のコーチで加える）。だから「おすすめ」は「いちばん速い打牌」という意味になる。
@@ -12,7 +13,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import lru_cache
 
@@ -21,38 +22,50 @@ from engine.analysis.blocks import PART_NAMES, Layout, Part, best_layout
 from engine.analysis.shanten import AGARI, TENPAI, ShantenInfo, shanten_info, shanten_text
 from engine.analysis.ukeire import Acceptance, DiscardOption, chance_within, draw_chance, remaining_counts
 from engine.analysis.waits import Wait, waits_of
+from engine.melds import Meld
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.decompose import Form
 from engine.scoring.dora import dora_kind_of
 from engine.scoring.texts import kind_text, kinds_text
 from engine.tiles import CHUN, EAST, HAKU, HATSU, NUM_TILES, counts34, is_red, kind_of
 
-HAND_SIZE = 14      # 打牌の前の手牌の枚数（門前）
+HAND_SIZE = 14      # 打牌の前の手牌の枚数（副露が n 組なら、門前の牌は 14 − 3n 枚）
 
 
 @dataclass(frozen=True)
 class Position:
     """コーチに見せる局面（自分から見えている情報だけ）"""
 
-    tiles: tuple[int, ...]                    # 手牌（ツモ牌を含む 14 枚。いまは門前の手だけを扱う）
-    visible: tuple[int, ...] = ()             # 手牌以外で見えている牌（河・ドラ表示牌）
+    tiles: tuple[int, ...]                    # 門前の手牌（ツモ牌を含む。副露が n 組なら 14 − 3n 枚）
+    visible: tuple[int, ...] = ()             # 門前の手牌以外で見えている牌（河・全員の副露・ドラ表示牌）
     seat_wind: int = EAST
     round_wind: int = EAST
     dora_indicators: tuple[int, ...] = ()
     draws_left: int = 0                       # このあと自分がツモれる回数
-    drawn: int | None = None                  # ツモ牌（手牌に含まれる牌ID）
+    drawn: int | None = None                  # ツモ牌（手牌に含まれる牌ID。鳴いた直後は None）
     can_riichi: bool = False                  # 聴牌したらリーチを宣言できる状況か（門前・未リーチ・ツモが残っている）
     rules: Rules = DEFAULT_RULES
+    melds: tuple[Meld, ...] = ()              # 副露（鳴いた面子と暗槓）
+    forbidden: tuple[int, ...] = ()           # 切れない種類（鳴いた直後の喰い替え）
+    called: bool = False                      # 鳴いた直後（ツモっていないので、あがれない。切るだけ）
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tiles", tuple(self.tiles))
         object.__setattr__(self, "visible", tuple(self.visible))
         object.__setattr__(self, "dora_indicators", tuple(self.dora_indicators))
-        if len(self.tiles) != HAND_SIZE:
-            # 鳴いた手（14 − 3n 枚）は、まだ扱わない（副露の情報を持たせる必要がある。鳴きを実装するときに足す）
-            raise ValueError(f"打牌の前の手牌は {HAND_SIZE} 枚です（門前の手だけを扱う）: {len(self.tiles)} 枚")
+        object.__setattr__(self, "melds", tuple(self.melds))
+        object.__setattr__(self, "forbidden", tuple(sorted(set(self.forbidden))))
+        if len(self.tiles) + 3 * len(self.melds) != HAND_SIZE:
+            raise ValueError(f"打牌の前の手牌は、副露 {len(self.melds)} 組なら {HAND_SIZE - 3 * len(self.melds)} 枚です: {len(self.tiles)} 枚")
         if self.drawn is not None and self.drawn not in self.tiles:
             raise ValueError("ツモ牌が手牌に含まれていません")
+        if all(kind_of(t) in self.forbidden for t in self.tiles):
+            raise ValueError("切れる牌がありません")
+
+    @property
+    def menzen(self) -> bool:
+        """門前か（暗槓だけなら門前のまま）"""
+        return not any(m.is_open for m in self.melds)
 
     @property
     def unseen(self) -> int:
@@ -135,8 +148,8 @@ class Analysis:
 
     @property
     def can_win(self) -> bool:
-        """いま、あがりの形になっているか"""
-        return self.shanten == AGARI
+        """いま、あがりの形になっているか（鳴いた直後は、形がそろっていても、あがれないので含めない）"""
+        return self.shanten == AGARI and not self.position.called
 
     @property
     def stalled(self) -> bool:
@@ -208,7 +221,7 @@ def analyze(position: Position) -> Analysis:
     remaining = remaining_counts(tiles, position.visible)
     # 受け入れが同じ候補の中では、ドラ（赤 5 を含む）を手放さない牌を先に切る
     dora_of = discard_dora(tiles, dora_kinds=position.dora_kinds, aka=position.rules.aka_dora, drawn=position.drawn)
-    advice = advise(counts, remaining, value_kinds=position.value_kinds, dora_of=dora_of)
+    advice = advise(counts, remaining, value_kinds=position.value_kinds, dora_of=dora_of, skip=position.forbidden)
     last = position.draws_left <= 0          # 最後の打牌：このあとツモが無いので、受け入れの広さは関係ない
     top = _last_pick(advice, position, dora_of) if last else advice.pick
 
@@ -240,6 +253,7 @@ def analyze(position: Position) -> Analysis:
             hand,
             remaining,
             visible=(*position.visible, pick.tile),
+            melds=position.melds,
             seat_wind=position.seat_wind,
             round_wind=position.round_wind,
             dora_indicators=position.dora_indicators,
@@ -256,6 +270,45 @@ def analyze(position: Position) -> Analysis:
         next_chance=draw_chance(pick.total, position.unseen) if position.draws_left > 0 else 0.0,
         within_chance=chance_within(pick.total, position.unseen, position.draws_left),
         waits=waits,
+    )
+
+
+def rebase(analysis: Analysis, kind: int) -> Analysis:
+    """おすすめを、ほかの牌（その種類を切る候補）に置きかえた分析。候補の評価（同じ速さ・受け入れが少ない・遠ざかる…）を、
+    その牌と比べて付け直す。
+
+    対局のコーチは、速さだけでなく、役（鳴いた手）やあがれるか・安全度でおすすめを選ぶことがある。切った牌の評価を、
+    そのおすすめと比べて作るのに使う（judge_discard に渡す）。おすすめより速い候補の評価は、意味を持たない
+    （コーチが役などのために避けた牌。対局のコーチは、その牌を切ったときは速さだけの分析で評価する）。
+    """
+    target = analysis.candidate(kind)
+    if target is None:
+        raise ValueError(f"切れる牌の種類ではありません: {kind}")
+    if target.is_pick:
+        return analysis
+    top = target.option
+    last = analysis.last_discard
+    candidates = []
+    for candidate in analysis.candidates:
+        option = candidate.option
+        grade = _last_grade(option, top) if last else _grade(option, top)
+        same_shanten = option.shanten == top.shanten
+        candidates.append(replace(
+            candidate,
+            grade=grade,
+            shanten_loss=0 if grade is Grade.BEST else max(0, option.shanten - top.shanten),
+            tiles_loss=max(0, top.total - option.total) if same_shanten and not last else 0,
+            is_pick=option is top,
+        ))
+    pick = next(c for c in candidates if c.is_pick)
+    position = analysis.position
+    return replace(
+        analysis,
+        candidates=tuple(candidates),
+        pick=pick,
+        next_chance=draw_chance(pick.total, position.unseen) if position.draws_left > 0 else 0.0,
+        within_chance=chance_within(pick.total, position.unseen, position.draws_left),
+        waits=(),                   # 待ちの表は、速さだけのおすすめのもの。置きかえた分析では使わない
     )
 
 

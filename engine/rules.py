@@ -1,7 +1,7 @@
 """ルールの設定。
 
 既定値は雀魂の段位戦（4 人打ち）に合わせてある。流派で分かれるものだけを設定にする。
-点数計算に関わる項目と、対局の進行に関わる項目（流し満貫・途中流局・複数ロン・飛び）がある。
+点数計算に関わる項目と、対局の進行に関わる項目（流し満貫・途中流局・複数ロン・飛び・鳴き）がある。
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ _FLAGS = (
     "abortive_draws",
     "multiple_ron",
     "tobi",
+    "calls",
 )
 
 
@@ -40,12 +41,14 @@ class Rules:
     # ---- 対局の進行に関わること（engine/game.py）
     #: 流し満貫（流局のとき、捨て牌がすべて么九牌で鳴かれていなければ、満貫ぶんをもらう）
     nagashi_mangan: bool = True
-    #: 途中流局（九種九牌・四風連打・四家立直）。四槓散了はカンができてから（Phase 4）
+    #: 途中流局（九種九牌・四風連打・四家立直・四槓散了）
     abortive_draws: bool = True
     #: 複数ロン（2 人以上が同じ牌でロンしたら、全員のあがり）。False なら、捨てた人から見て順番が先の 1 人だけ（頭ハネ）
     multiple_ron: bool = True
     #: 飛び（誰かの持ち点が 0 点より少なくなったら、そこで試合を終わる。0 点ちょうどは続ける）
     tobi: bool = True
+    #: 鳴き（チー・ポン・カン）。False なら、門前だけで打つ（カンもしない。Phase 3 までの対局と同じ）
+    calls: bool = True
 
     def __post_init__(self) -> None:
         for name in _FLAGS:
@@ -72,3 +75,7 @@ class Rules:
 
 #: 既定のルール（雀魂の段位戦に合わせたもの）
 DEFAULT_RULES = Rules()
+
+#: ルールの違い（流派で分かれること）ではなく、練習のための切り替えの項目。
+#: 「ルールの違い」のページ（data/rules.yaml）には載せない（どの流派でも、鳴きはある）
+PRACTICE_SWITCHES = frozenset({"calls"})

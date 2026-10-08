@@ -139,16 +139,18 @@ def acceptance_slow(counts: Sequence[int], remaining: Sequence[int]) -> Acceptan
     return Acceptance(base, tuple(found))
 
 
-def discard_options(counts: Sequence[int], remaining: Sequence[int]) -> list[DiscardOption]:
+def discard_options(counts: Sequence[int], remaining: Sequence[int], *, skip: Iterable[int] = ()) -> list[DiscardOption]:
     """14 枚（副露があれば 14 − 3n 枚）から 1 枚切る候補を、良い順に並べて返す。
 
     良い順：切ったあとの向聴数が小さい → 受け入れ枚数が多い → 受け入れの種類が多い。
     ただし、受け入れが 0 枚の候補は、向聴数が 1 つ大きいものとして並べる（DiscardOption.reach）。
+    skip の種類は候補に入れない（鳴いた直後の喰い替えで、切れない牌）。
     """
     work = list(counts)
+    skipped = set(skip)
     options = []
     for kind in range(NUM_KINDS):
-        if not work[kind]:
+        if not work[kind] or kind in skipped:
             continue
         work[kind] -= 1
         result = acceptance(work, remaining)

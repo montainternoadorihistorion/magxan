@@ -11,6 +11,7 @@ from engine import game as g
 from engine.cpu import advance, all_cpu
 from engine.game import CpuLevel, GameConfig, Length
 from engine.game_records import (
+    GOAL_DEAL_IN,
     GOAL_GAMES,
     GameRecord,
     Tally,
@@ -105,6 +106,16 @@ def test_summaries_split_by_condition_and_put_skill_first():
     assert hinted.follow_rate is None
 
 
+def test_summaries_keep_rule_changes_apart():
+    """鳴きなし（Phase 3 の記録を含む）の対局は、鳴きありの対局と別の行にする。初期値のルールの行が先"""
+    base = GameRecord(time=1, seed=1, length="east", deal=0, draw=0, cpu_deal=0, cpu_draw=0, cpu_level="normal",
+                      hinted=False, rank=2, score=26_000, hands=5, wins=1, deal_ins=0)
+    old = GameRecord.from_dict({k: v for k, v in base.to_dict().items() if k != "naki"})     # 鳴きの無かったころの記録
+    assert old.rules == (("calls", False),)
+    rows = summarize([old, replace(base, rank=1), old])
+    assert [(r.rules, r.games) for r in rows] == [((), 1), ((("calls", False),), 2)]
+
+
 def test_graduation_uses_the_recent_plain_east_games_against_normal_cpu():
     base = GameRecord(time=1, seed=1, length="east", deal=0, draw=0, cpu_deal=0, cpu_draw=0, cpu_level="normal",
                       hinted=False, rank=2, score=26_000, hands=5, wins=1, deal_ins=0)
@@ -119,6 +130,10 @@ def test_graduation_uses_the_recent_plain_east_games_against_normal_cpu():
     assert not missed.misses_ok and not missed.passed
     slow = graduation([replace(base, rank=3)] * GOAL_GAMES)
     assert not slow.rank_ok
+    # 放銃率の目標（15% 以下。局の数で割る）：150 局で 22 回（14.7%）なら届き、23 回（15.3%）なら届かない
+    assert GOAL_DEAL_IN == 0.15
+    assert graduation([replace(base, deal_ins=1)] * 22 + [base] * 8).deal_in_ok
+    assert not graduation([replace(base, deal_ins=1)] * 23 + [base] * 7).deal_in_ok
 
 
 def test_add_record_keeps_the_newest():

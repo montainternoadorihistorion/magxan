@@ -1,26 +1,35 @@
 """CPU との対局。
 
-CPU 3 人と、門前で東風戦（半荘戦も選べる）を打つ。ポン・チー・カンは、まだ無い（Phase 4）。
-自分が切ると、CPU 3 人の打牌がまとめて進む。コーチが、牌効率・守備（危険度と根拠）・リーチ判断・役の候補を出す。
-局が終わると全員の手牌と待ちを公開し、あがった手は点数計算の全過程を見せる。
+CPU 3 人と、東風戦（半荘戦も選べる）を打つ。ポン・チー・カンもある（設定で、門前だけにもできる）。
+自分が切ると、CPU 3 人の打牌がまとめて進む。鳴ける牌が出たら、そこで止まって返事を聞く。
+コーチが、牌効率・守備（危険度と根拠）・リーチ判断・役の候補・鳴きの判断（役が残るか・打点・速さ）を出す。
+局が終わると全員の手牌と待ちを公開し、あがった手は点数計算の全過程を見せる。牌譜で、局を 1 手ずつ振り返れる。
 """
 from __future__ import annotations
 
 import streamlit as st
 
+from engine.call_coach import call_advice
 from engine.cpu import human_turn
-from engine.game import HUMAN, SEAT_NAMES, Phase
-from engine.game_coach import Stance, ron_ahead, ron_preview, tsumo_preview, turn_advice
+from engine.game import HUMAN, SEAT_NAMES, GameState, Move, Phase
+from engine.game_coach import Stance, kan_advice, ron_ahead, ron_preview, tsumo_preview, turn_advice
 from engine.game_records import graduation, summarize
 from engine.luck import PRESETS
 from engine.scoring.explain import explain
+from engine.scoring.texts import kind_text
+from engine.tiles import kind_of
 from ui.components.browser_store import BrowserStore
+from ui.components.kifu_view import kifu_view
 from ui.components.tile_hand import HandButton, Pick, tile_hand
-from ui.game_session import GAME_RULES, MAX_SEED, MOVES_EACH, MOVES_TOGETHER, GameSession
+from ui.game_session import CALL_KEY, GAME_RULES, KAN_KEY, MAX_SEED, MOVES_EACH, MOVES_TOGETHER, GameSession
 from ui.game_view import (
     MARK_RIICHI,
     advice_headline_html,
     betaori_html,
+    call_decision_headline_html,
+    call_decision_html,
+    call_headline_html,
+    call_html,
     claim_headline_html,
     config_text,
     danger_html,
@@ -28,7 +37,12 @@ from ui.game_view import (
     decision_html,
     final_html,
     furiten_note_html,
+    hand_title,
     help_html,
+    kan_headline_html,
+    kan_notes_html,
+    meld_label,
+    meld_tiles,
     misses_html,
     moves_each_html,
     moves_html,
@@ -82,8 +96,9 @@ LENGTHS = {"東風戦": "east", "半荘戦": "south"}
 CPU_LEVELS = {"ふつう": "normal", "弱い": "weak"}
 MOVES = {"まとめて": MOVES_TOGETHER, "1 人ずつ": MOVES_EACH}
 RULE_LABELS = {
+    "calls": "鳴き（チー・ポン・カン）。オフなら、全員が門前だけで打つ",
     "multiple_ron": "2 人以上が同じ牌でロンしたら、全員のあがり（オフなら頭ハネ）",
-    "abortive_draws": "途中流局（九種九牌・四風連打・四家立直）",
+    "abortive_draws": "途中流局（九種九牌・四風連打・四家立直・四槓散了）",
     "nagashi_mangan": "流し満貫",
     "tobi": "飛び（持ち点が 0 点より少なくなったら終わる）",
 }
@@ -153,7 +168,26 @@ def _on_pick(pick: Pick) -> None:
     session.pick(pick.tile_id, riichi=pick.riichi)
 
 
+def _chi_mark(game: GameState) -> tuple[int, int, int]:
+    """チーの組み合わせを選んでいる局面の印（対局の番号・局の数・行動の数。別の対局・別の局に残らないように）"""
+    return (game.config.seed, len(game.hands), len(game.current.actions))
+
+
 def _on_action(key: str) -> None:
+    if key == "chi":                      # チーの組み合わせを選ぶ画面にする
+        ss["gm_chi"] = _chi_mark(session.game)
+        session.refresh()
+        return
+    if key == "back":
+        ss.pop("gm_chi", None)
+        session.refresh()
+        return
+    ss.pop("gm_chi", None)
+    if key == "tsumogiri":                # リーチのあと、暗槓しないでツモ切り
+        drawn = session.game.current.players[HUMAN].drawn
+        if drawn is None or not session.pick(drawn):
+            session.refresh()
+        return
     session.act(key)
 
 
@@ -177,6 +211,10 @@ def _start_numbered() -> None:
 
 def _clear_history() -> None:
     session.clear_history()
+
+
+def _open_kifu() -> None:
+    ss["gm_kifu_on"] = True
 
 
 # ---------------------------------------------------------------- 画面
@@ -219,26 +257,52 @@ st.html(status_html(game, rb) + scores_html(game, rb, mark=mark))
 my_turn = human_turn(game)
 claim = my_turn and hand.phase is Phase.CLAIM
 drawing = my_turn and hand.phase is Phase.DRAW
+player = hand.players[HUMAN]
+claim_actions = hand.call_actions(HUMAN) if claim else ()
+can_ron = any(a.move is Move.RON for a in claim_actions)
+calls = [a for a in claim_actions if a.move is not Move.RON]
+after_call = drawing and player.drawn is None                       # 鳴いた直後（ツモらずに 1 枚切る）
+kan_tiles = (*hand.kakan_tiles(HUMAN), *hand.ankan_tiles(HUMAN)) if drawing else ()
+riichi_kan = drawing and player.in_riichi and bool(kan_tiles)        # リーチのあとで、暗槓できる
 advice = None
-if drawing and hint == HINT_BEFORE:          # 答え合わせ・オフでは、打つ前のおすすめを使わない（評価は、切ったときに作る）
+if drawing and hint == HINT_BEFORE and not (riichi_kan and not hand.can_tsumo(HUMAN)):     # 答え合わせ・オフでは、打つ前のおすすめを使わない
     advice = turn_advice(hand, HUMAN)
+# 鳴きの判断のコーチ（打つ前のヒント）。ロンもできるときは出さない（あがるのがいちばん。鳴きに ◎ を付けて迷わせない）
+call_adv = call_advice(hand, HUMAN) if calls and hint == HINT_BEFORE and not can_ron else None
+# カンの目安（打つ前のヒントのとき）。リーチのあとは出さない
+kan_adv = {a.tile: a for a in kan_advice(hand, HUMAN)} if kan_tiles and hint == HINT_BEFORE else {}
+# カンをすすめるとき（あがれるときを除く）は、案内と ◎ をカンに付ける（打牌の ◎ は付けない。カンのあとは、嶺上牌を引いてから切る）
+kan_pick = next((a for a in kan_adv.values() if a.recommend), None) if drawing and not hand.can_tsumo(HUMAN) else None
+# チーの組み合わせが 2 つ以上のときは、「チー」を押してから組み合わせを選ぶ（ボタンが 1 段に収まるように）
+choosing_chi = claim and ss.get("gm_chi") == _chi_mark(game) and sum(a.move is Move.CHI for a in calls) > 1
 
 if hand.result is None and my_turn:
-    # ---- 自分の番（打牌か、ロンの返事）
+    # ---- 自分の番（打牌か、ロン・鳴きの返事）
     last = session.last_decision
-    player = hand.players[HUMAN]
+    last_call = session.last_call
     can_tsumo = hand.can_tsumo(HUMAN)
     # リーチのあとにあがり牌を引いたら、ツモを宣言するだけ（ツモ切りは、ほかの巡と同じく自動）
     tsumo_only = drawing and player.in_riichi and can_tsumo
-    if claim:
+    if claim and can_ron:
         bumped = bool(ron_ahead(hand, HUMAN)) and not hand.rules.multiple_ron
         st.html(claim_headline_html(hand, ron_preview(hand, HUMAN), rb, bumped=bumped))
+    elif claim:
+        if call_adv is not None:
+            session.note_hint_shown()
+        st.html(call_headline_html(hand, call_adv, rb))
     elif tsumo_only and hint != HINT_BEFORE:
         # 手順の案内（コーチの助言ではない）。前の打牌の答え合わせは、リーチのあと何巡も前のものなので出さない
         st.html(plain_headline_html("リーチのあとに、あがり牌を引いた。「ツモ（あがる）」を押して、あがる。", rb))
+    elif riichi_kan and not can_tsumo:
+        st.html(plain_headline_html("リーチ中：暗槓できる（カンしても待ちは変わらない）。カンするか、ツモ切りするかを選ぶ。", rb))
     elif hint == HINT_BEFORE and advice is not None:
         session.note_hint_shown()
-        st.html(advice_headline_html(advice, hand, rb, win=tsumo_preview(hand, HUMAN), can_nine=hand.can_nine(HUMAN)))
+        if kan_pick is not None:
+            st.html(kan_headline_html(kan_pick, hand, rb))
+        else:
+            st.html(advice_headline_html(advice, hand, rb, win=tsumo_preview(hand, HUMAN), can_nine=hand.can_nine(HUMAN)))
+    elif hint == HINT_AFTER and last_call is not None:
+        st.html(call_decision_headline_html(last_call, rb, aka=aka))
     elif hint == HINT_AFTER:
         if last is not None:
             st.html(decision_headline_html(last, rb, aka=aka))
@@ -248,28 +312,67 @@ if hand.result is None and my_turn:
         st.html(plain_headline_html("コーチはオフです。下の「設定」で、ヒントを出すように変えられます。", rb))
 
     marks = {}
-    if hint == HINT_BEFORE and advice is not None and not can_tsumo:
+    if hint == HINT_BEFORE and advice is not None and not can_tsumo and kan_pick is None:
         marks[advice.pick] = MARK_PICK
-        if advice.stance is Stance.FREE:
-            for candidate in advice.analysis.best:
-                marks.setdefault(candidate.tile, MARK_EQUAL)
+        # 「○ おすすめと同じ速さ」：おすすめと同じ速さで、鳴いた手なら役の見込みも同じ牌（切っても、評価は ✓ になる）
+        for tile in advice.equal_tiles:
+            marks.setdefault(tile, MARK_EQUAL)
     buttons = []
     if claim:
-        buttons = [HandButton("ron", "ロン"), HandButton("pass", "見送る", "plain")]
+        recommended = call_adv.recommend if call_adv is not None else None
+        if choosing_chi:
+            # チーの組み合わせが 2 つ以上：どの 2 枚でチーするかを選ぶ
+            for index, action in enumerate(calls):
+                if action.move is Move.CHI:
+                    label = ("◎ " if action == recommended else "") + "チー"
+                    buttons.append(HandButton(f"{CALL_KEY}{index}", label, "call", tiles=action.tiles))
+            buttons.append(HandButton("back", "戻る", "plain"))
+        else:
+            if can_ron:
+                buttons.append(HandButton("ron", "ロン"))
+            chis = [a for a in calls if a.move is Move.CHI]
+            for index, action in enumerate(calls):
+                mark_text = "◎ " if action == recommended or (action.move is Move.CHI and len(chis) > 1 and recommended in chis) else ""
+                if action.move is Move.CHI and len(chis) > 1:
+                    if action is chis[0]:
+                        buttons.append(HandButton("chi", mark_text + "チー", "call"))
+                    continue
+                word = {Move.CHI: "チー", Move.PON: "ポン", Move.KAN: "カン"}[action.move]
+                buttons.append(HandButton(f"{CALL_KEY}{index}", mark_text + word, "call", tiles=action.tiles if action.move is Move.CHI else ()))
+            pass_mark = "◎ " if call_adv is not None and recommended is None and not can_ron else ""
+            buttons.append(HandButton("pass", pass_mark + "見送る", "plain"))
     else:
         if can_tsumo:
             buttons.append(HandButton("tsumo", "ツモ（あがる）"))
+        for tile in kan_tiles:
+            mark_text = "◎ " if tile in kan_adv and kan_adv[tile].recommend else ""
+            buttons.append(HandButton(f"{KAN_KEY}{tile}", mark_text + "カン", "call", tiles=(tile,)))
+        if riichi_kan and player.drawn is not None:
+            buttons.append(HandButton("tsumogiri", "ツモ切り", "plain"))
         if hand.can_nine(HUMAN):
             buttons.append(HandButton("nine", "九種九牌", "alert"))
     riichi_ids = () if (claim or can_tsumo) else hand.riichi_tiles(HUMAN)
-    if claim:
+    locked: tuple[int, ...] = ()
+    locked_note = ""
+    if after_call and hand.forbidden:
+        locked = tuple(t for t in player.tiles if kind_of(t) in hand.forbidden)
+        names = "・".join(kind_text(k) for k in hand.forbidden)
+        # 部品の中の文字にはルビを振れないので、読みを〈 〉で添える
+        locked_note = f"鳴いた直後：{names}は切れない（喰い替え〈クイカエ〉）"
+    elif riichi_kan and player.drawn is not None:
+        locked = tuple(t for t in player.tiles if t != player.drawn)
+    if claim and can_ron:
         # 見送ったらどうなるか（フリテン）を、押す前に見せる
-        prompt = "見送ると、この局はもうロンできない" if player.in_riichi else "見送ると、次に自分が切るまでロンできない"
+        prompt = "見送ると、この局はもうロンできない" if player.in_riichi else "見送ると、次に自分がツモるまでロンできない"
+    elif claim:
+        prompt = "チーの組み合わせを選ぶ" if choosing_chi else "鳴くか、見送るかを選ぶ"
     elif tsumo_only:
         prompt = "リーチ中：「ツモ（あがる）」で、あがる"
+    elif after_call:
+        prompt = "鳴いたので、1 枚切る"
     else:
         prompt = "牌をタップして選ぶ"
-    recommend = advice is not None and hint == HINT_BEFORE and advice.recommend_riichi
+    recommend = advice is not None and hint == HINT_BEFORE and advice.recommend_riichi and kan_pick is None
     draw = player.draws[-1] if player.draws else None
     lucky_draw = settings["mark"] and draw is not None and draw.luck.swapped and player.drawn is not None
     tiles = list(player.hand) + ([player.drawn] if player.drawn is not None else [])
@@ -283,24 +386,36 @@ if hand.result is None and my_turn:
         marks=marks,
         riichi_ids=riichi_ids,
         riichi_label=MARK_RIICHI if recommend else "リーチ",
-        drawn_label="ツモ ★" if lucky_draw else "ツモ",
+        # カンの補充で引いた牌（嶺上牌）。部品の中の文字にはルビを振れないので、読みのカタカナで出す
+        drawn_label="リンシャン" if player.rinshan else ("ツモ ★" if lucky_draw else "ツモ"),
         two_rows=True,
         scroll_top=session.take_scroll(),
         actions=buttons,
         on_action=_on_action,
         discard=not claim and not tsumo_only,
         prompt=prompt,
+        melds=[meld_tiles(f, HUMAN) for f in player.furo],
+        meld_labels=[meld_label(f) for f in player.furo],
+        locked_ids=locked,
+        locked_note=locked_note,
     )
     # CPU の打牌（自分が切ったあとの動き）。手牌のすぐ下に、まとめて 1 行で（「1 人ずつ」なら、順番に河と一緒に）
     moves = moves_each_html(hand, mark, rb) if settings["moves"] == MOVES_EACH else moves_html(hand, mark, rb)
-    _html(moves + misses_html(hand, mark, rb) + furiten_note_html(hand, rb))
+    _html(moves + misses_html(hand, mark, rb) + furiten_note_html(hand, rb) + kan_notes_html(hand, session.dora_seen, rb)
+          + "".join(f'<div class="mj-sub">{rb.html(a.reason)}</div>' for a in kan_adv.values()))
     if lucky_draw and draw is not None:
         _html(draw_note_html(draw, rb, aka=aka))
 
-    if hint != HINT_OFF and last is not None and not claim:
+    if hint != HINT_OFF and last_call is not None and not claim:
+        st.html(call_decision_html(last_call, rb, aka=aka))
+    elif hint != HINT_OFF and last is not None and not claim:
         st.html(decision_html(last, rb, detail=level >= LEVEL_NORMAL, aka=aka))
 
     st.html(table_html(hand, mark, rb))
+
+    if call_adv is not None and level >= LEVEL_NORMAL:
+        with st.expander("鳴きの判断（鳴く・鳴かないの比べ方）", expanded=True, key="gm_x_call"):
+            st.html(call_html(call_adv, rb.fork(), aka=aka))
 
     # あがれるときは、あがるのがいちばん（守備やリーチの比べ方は出さない。迷わせないように）
     if advice is not None and hint == HINT_BEFORE and not can_tsumo:
@@ -310,7 +425,8 @@ if hand.result is None and my_turn:
                 st.html(danger_html(advice, inner, detail=level >= LEVEL_FULL))
                 st.html(subhead_html("ベタオリの手順", "", inner) + betaori_html(inner))
         if advice.riichi is not None and advice.stance is not Stance.FOLD and level >= LEVEL_NORMAL:
-            with st.expander("リーチとダマ（聴牌したときの比べ方）", expanded=True, key="gm_x_riichi"):
+            title = "リーチとダマ（聴牌したときの比べ方）" if player.menzen else "聴牌したときの待ちと点数"
+            with st.expander(title, expanded=True, key="gm_x_riichi"):
                 st.html(riichi_html(advice.riichi, rb.fork(), aka=aka))
         if advice.stance is Stance.FREE and level >= LEVEL_NORMAL:
             with st.expander("役の候補", expanded=level == LEVEL_FULL, key=f"gm_x_yaku_{level}"):
@@ -321,7 +437,7 @@ if hand.result is None and my_turn:
                 st.html(shanten_html(advice.analysis, inner) + candidates_html(advice.analysis, inner) + chance_html(advice.analysis, inner, luck_draw=game.config.luck.draw))
             with st.expander("手の分け方（分解図）", expanded=level == LEVEL_FULL, key=f"gm_x_layout_{level}"):
                 st.html(layout_html(advice.analysis, rb.fork(), level=level))
-    if hint == HINT_AFTER and last is not None and level >= LEVEL_NORMAL and not claim:
+    if hint == HINT_AFTER and last is not None and level >= LEVEL_NORMAL and not claim and last_call is None:
         with st.expander("さっきの局面の受け入れ表と危険度（答え合わせ）", expanded=level == LEVEL_FULL, key=f"gm_x_previous_{level}"):
             inner = rb.fork()
             chosen = last.verdict.chosen.kind
@@ -330,6 +446,9 @@ if hand.result is None and my_turn:
                 html += danger_html(last.advice, inner, detail=False, chosen_kind=chosen)
             html += shanten_html(last.advice.analysis, inner) + candidates_html(last.advice.analysis, inner, chosen_kind=chosen)
             st.html(html)
+    if hint == HINT_AFTER and last_call is not None and level >= LEVEL_NORMAL and not claim:
+        with st.expander("さっきの鳴きの判断（答え合わせ）", expanded=level == LEVEL_FULL, key=f"gm_x_prevcall_{level}"):
+            st.html(call_html(last_call.advice, rb.fork(), aka=aka))
 
 elif hand.result is not None:
     # ---- 局が終わったあと
@@ -349,8 +468,19 @@ elif hand.result is not None:
             st.html(summary_section(explanation, inner, indicators=bool(win.ctx.ura_indicators)).html)
             for section in detail_sections(explanation, inner, detail=DETAIL_BY_LEVEL[level]):
                 st.html(section.heading_html + section.html)
-    with st.expander("この局の振り返り（自分が切った牌の評価）", key="gm_x_review"):
-        st.html(review_list_html(session.decisions, rb.fork(), aka=aka))
+    with st.expander("この局の振り返り（自分の判断の評価）", key="gm_x_review"):
+        st.html(review_list_html(session.decisions, rb.fork(), aka=aka, calls=session.calls))
+    # 牌譜：局を 1 手ずつ振り返る（作るのに少し時間がかかるので、開いたときだけ作る）
+    # 折りたたみの名前にはルビを振れないので、読みを（ ）の中に書く
+    with st.expander("牌譜（パイフ。局を 1 手ずつ振り返る）", expanded=bool(ss.get("gm_kifu_on")), key="gm_x_kifu"):
+        if not ss.get("gm_kifu_on"):
+            st.html(note_html("全員の手牌を見ながら、局の最初から 1 手ずつ進められます。自分の判断には、コーチの評価が付きます。", rb.fork()))
+            st.button("牌譜を見る", on_click=_open_kifu, key="gm_b_kifu")
+        else:
+            titles = [hand_title(h) for h in game.hands]
+            picked = st.selectbox("局", list(range(len(game.hands))), index=len(game.hands) - 1,
+                                  format_func=lambda i: titles[i], key=f"gm_w_kifu_{len(game.hands)}")
+            kifu_view(session.kifu(picked), key="gm_kifu", ident=f"{game.config.seed}:{picked}", aka=aka)
     if not game.finished:
         st.button("次の局へ", type="primary", on_click=_next_hand, args=(len(game.hands),), width="stretch", key="gm_b_next_bottom")
 else:
@@ -383,8 +513,9 @@ with st.expander("設定（対局・ツキ補正・コーチ）", key="gm_x_sett
     st.html(
         subhead_html(
             "ルール（雀魂の段位戦が初期値）",
-            "ルールによって異なるところ：2 人以上が同じ牌でロンしたとき（全員のあがりか、頭ハネか）、途中流局（九種九牌・四風連打・四家立直）、"
-            "流し満貫、飛び。くわしくは「ルールの違い」のページ。",
+            "ルールによって異なるところ：2 人以上が同じ牌でロンしたとき（全員のあがりか、頭ハネか）、途中流局（九種九牌・四風連打・四家立直・四槓散了）、"
+            "流し満貫、飛び。くわしくは「ルールの違い」のページ。鳴き（チー・ポン・カン）をオフにすると、全員が門前（鳴かない手）だけで打つ。"
+            "鳴きをオフにした対局は、卒業の目安に数えない。",
             srb,
         )
     )

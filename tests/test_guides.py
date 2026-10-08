@@ -5,7 +5,7 @@ import pytest
 
 from engine import content
 from engine.content import ContentError
-from engine.rules import DEFAULT_RULES
+from engine.rules import DEFAULT_RULES, PRACTICE_SWITCHES
 
 GUIDE = content.table_guide()
 RULES = content.rule_book()
@@ -55,7 +55,8 @@ def test_rule_book_structure():
 
 def test_rule_settings_match_the_app_defaults():
     """ルール設定に関わる項目は、書いてある初期値が実際の初期値と同じ。設定項目は、すべて説明されている"""
-    defaults = DEFAULT_RULES.to_dict()
+    # 練習のための切り替え（鳴きなし）は、流派によるルールの違いではないので、ルールの違いのページには載せない
+    defaults = {k: v for k, v in DEFAULT_RULES.to_dict().items() if k not in PRACTICE_SWITCHES}
     described = {}
     for item in RULES.items:
         if item.setting is not None:

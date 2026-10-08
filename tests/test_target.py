@@ -172,7 +172,9 @@ def test_keys_are_pages_marked_as_practicable():
     for key in tg.TARGET_KEYS:
         tg.spec_of(key, SEAT, ROUND)
     with pytest.raises(KeyError):
-        tg.spec_of("toitoi")
+        tg.spec_of("rinshan")
+    # 対々和は、鳴いた手の役の候補には使うが、役指定練習には入れない（門前では四暗刻になる）
+    assert "toitoi" not in tg.TARGET_KEYS and tg.spec_of("toitoi").shapes
 
 
 def test_examples_of_each_page_are_at_distance_minus_one():
@@ -412,3 +414,54 @@ def test_speed_is_good_enough_for_the_coach():
             tg.target_tiles(counts, key, **WINDS)
             counts[best] += 1
     assert (time.perf_counter() - started) / 36 < 1.0         # 遅い計算機でも 1 局面 1 秒未満（ふつうは 0.1 秒ほど）
+
+
+# ---------------------------------------------------------------- 副露のある手（鳴きの判断・CPU の鳴き）
+
+
+def _open(concealed: str, *melds: str):
+    from engine.melds import chi, pon
+
+    used: set[int] = set()
+
+    def take(text: str) -> list[int]:
+        tiles = parse_tiles(text, used=used)
+        used.update(tiles)
+        return tiles
+
+    built = [(chi if text.startswith("c") else pon)(take(text[1:])) for text in melds]
+    return counts34(take(concealed)), built
+
+
+def test_open_hand_distances_respect_the_melds():
+    counts, melds = _open("234p567s88s45m9p", "p555z")           # 白をポン：残り 11 枚は 9筒 を切れば聴牌
+    assert tg.target_distance(counts, "yakuhai", melds=melds) == 0
+    assert tg.target_distance(counts, "tanyao", melds=melds) == tg.IMPOSSIBLE        # 白の刻子は 2〜8 ではない
+    counts, melds = _open("234p567s88s45m9p", "c123m")
+    assert tg.target_distance(counts, "tanyao", melds=melds) == tg.IMPOSSIBLE        # 123萬 に 1 がある
+    assert tg.target_distance(counts, "toitoi", melds=melds) == tg.IMPOSSIBLE        # 順子を鳴いている
+    assert tg.target_distance(counts, "pinfu", melds=melds) == tg.IMPOSSIBLE         # 鳴いた手では付かない
+    assert tg.target_distance(counts, "chiitoitsu", melds=melds) == tg.IMPOSSIBLE
+
+
+def test_a_complete_open_hand_is_at_minus_one_and_meld_required_blocks_count():
+    counts, melds = _open("234p567s88s345m", "p555z")
+    assert tg.target_distance(counts, "yakuhai", melds=melds) == -1
+    counts, melds = _open("123p123s88s45m9p", "c123m")
+    assert tg.target_distance(counts, "sanshoku", melds=melds) == 0      # 123萬 のチーが、三色同順の 1 つ
+    plan = tg.target_plan(counts, "sanshoku", melds=melds)
+    assert plan.distance == 0 and all(len(b.tiles) <= 3 for b in plan.blocks)
+
+
+def test_open_spec_relaxes_the_closed_hand_limits():
+    # 鳴いていれば、刻子 4 つの形も対々和として数えられる（三色同刻・小三元・混老頭）
+    counts, melds = _open("111p111s99m1z1z", "p111m", "p999p")
+    assert tg.target_distance(counts, "sanshoku_doukou", melds=melds) == -1
+    assert tg.target_distance(counts, "honroutou", melds=melds) == -1
+    assert tg.target_distance(counts, "toitoi", melds=melds) == -1
+
+
+def test_single_value_kind_spec():
+    assert tg.spec_of("yakuhai:31").shapes[0].sets == (31,)
+    with pytest.raises(KeyError):
+        tg.spec_of("yakuhai:0")                                       # 1萬 は役牌ではない

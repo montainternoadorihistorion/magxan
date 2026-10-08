@@ -11,7 +11,7 @@ from engine.game import EndKind, Furiten, GameConfig, GameError, HandStart, Phas
 from engine.luck import LuckSettings
 from engine.rules import Rules
 from engine.tiles import NUM_TILES, kind_of, parse_tiles
-from engine.wall import LIVE_START, shuffled_tiles
+from engine.wall import LIVE_START, RINSHAN_START, shuffled_tiles
 from tests.game_helpers import build_hand, game_of
 
 
@@ -34,9 +34,16 @@ def total_points(hand: g.HandState) -> int:
 
 
 def conserved(hand: g.HandState) -> bool:
-    """手牌・河・まだツモっていない山・王牌を合わせると、136 枚がちょうど 1 枚ずつ"""
-    seen = [t for p in hand.players for t in (*p.tiles, *p.river_tiles)]
-    rest = list(hand.wall_tiles[LIVE_START + hand.live_drawn:])
+    """手牌・河・副露・まだツモっていない山・王牌を合わせると、136 枚がちょうど 1 枚ずつ。
+
+    鳴かれた捨て牌は、鳴いた人の副露として数える。引いた嶺上牌は手牌として数える。
+    加槓を宣言して返事を待っている牌（と、それを槍槓された牌）は、その牌だけ別に数える。
+    """
+    seen = [t for p in hand.players for t in (*p.tiles, *(d.tile for d in p.river if d.called_by is None), *p.meld_tiles)]
+    rest = list(hand.wall_tiles[LIVE_START + hand.live_drawn:RINSHAN_START]) + list(hand.wall_tiles[RINSHAN_START + hand.rinshan_drawn:])
+    claim = hand.claim
+    if claim is not None and claim.kind is g.ClaimKind.KAKAN and not any(claim.tile in p.meld_tiles for p in hand.players):
+        seen.append(claim.tile)
     return sorted(seen + rest) == list(range(NUM_TILES))
 
 
@@ -228,23 +235,24 @@ def test_dealer_in_a_double_ron_keeps_the_seat():
     assert start.dealer == 1 and start.honba == 1 and start.rotation == 0
 
 
-def test_passing_a_win_makes_temporary_furiten_until_own_discard():
+def test_passing_a_win_makes_temporary_furiten_until_own_draw():
     hand = _ron_hand()
     game = g.apply(game_of(hand), g.discard(0, find_tile(hand, 0, "9p")))
     game = g.apply(g.apply(game, g.pass_(1)), g.pass_(2))
     after = game.current
-    assert after.players[1].missed and after.players[2].missed
-    assert after.furiten(1) is Furiten.MISSED
-    # 下家がツモって切ると、同巡内フリテンは解ける
+    assert [(m.seat, m.passed) for m in after.misses] == [(1, True), (2, True)]
+    # 下家はすぐにツモったので、同巡内フリテンは解けている（雀魂：自分の次のツモで解ける）。対面は、まだ
+    assert after.turn == 1 and not after.players[1].missed
+    assert after.players[2].missed and after.furiten(2) is Furiten.MISSED
     game = g.apply(game, g.discard(1, after.players[1].drawn))
-    assert not game.current.players[1].missed
+    assert not game.current.players[2].missed                                 # 対面がツモると解ける
 
 
-def test_temporary_furiten_blocks_the_next_ron_until_own_discard():
-    # 対面（席 2）が 69筒 待ち（役牌の白）。親の 9筒 を見逃す → 下家の 6筒 ではロンできない → 自分が切ったあとの 6筒 ならロンできる
+def test_temporary_furiten_blocks_the_next_ron_until_own_draw():
+    # 対面（席 2）が 69筒 待ち（役牌の白）。親の 9筒 を見逃す → 下家の 6筒 ではロンできない → 自分がツモったあとの 6筒 ならロンできる
     hand = build_hand(
         ["1234m1234p1234s1z", "11z22z33z44z66z77z1m", "555z678m345p78p55s", "258p369s147m3z4z6z7z"],
-        turn=0, drawn="9p", next_draws="6p8s6p",
+        turn=0, drawn="9p", next_draws="6p8s6p", rules=Rules(calls=False),        # 対面は 6筒 をチーできるので、鳴きなしにして確かめる
     )
     game = g.apply(game_of(hand), g.discard(0, find_tile(hand, 0, "9p")))
     assert game.current.pending == (2,)
@@ -253,9 +261,10 @@ def test_temporary_furiten_blocks_the_next_ron_until_own_discard():
     game = g.apply(game, g.discard(1, game.current.players[1].drawn))          # 下家が 6筒 を切る
     after = game.current
     assert after.phase is Phase.DRAW and after.turn == 2                       # 対面はフリテンなのでロンできない
-    assert after.players[2].missed and after.furiten(2) is Furiten.MISSED
-    game = g.apply(game, g.discard(2, after.players[2].drawn))                 # 対面が切る → 同巡内フリテンが解ける
-    assert not game.current.players[2].missed
+    missed = after.misses[-1]
+    assert (missed.seat, missed.passed, missed.check.furiten) == (2, False, Furiten.MISSED)
+    assert not after.players[2].missed                                         # 対面がツモった → 同巡内フリテンが解ける
+    game = g.apply(game, g.discard(2, after.players[2].drawn))
     game = g.apply(game, g.discard(3, game.current.players[3].drawn))          # 上家が 6筒 を切る
     assert game.current.phase is Phase.CLAIM and game.current.pending == (2,)
 
@@ -265,14 +274,14 @@ def test_own_discard_furiten_and_no_yaku_block_ron_and_count_as_missed():
     # 対面：69s 待ちの役なし（刻子 2 つ・順子・カンチャンでない形）
     hand = build_hand(
         ["1234m1234p1234s1z", "234p567p678s99s67m", "111m999p78s234m55p", "11z22z33z44z55z66z7z"],
-        turn=0, drawn="5m", rivers=("", "8m", "", ""), live_drawn=2,
+        turn=0, drawn="5m", rivers=("", "8m", "", ""), live_drawn=2, rules=Rules(calls=False),
     )
     assert hand.furiten(1) is Furiten.RIVER
     check = hand.ron_check(1, find_tile(hand, 0, "5m"))
     assert check.shape and check.furiten is Furiten.RIVER and not check.ok
     game = g.apply(game_of(hand), g.discard(0, find_tile(hand, 0, "5m")))
     assert game.current.phase is Phase.DRAW and game.current.turn == 1      # 誰もロンできない
-    assert game.current.players[1].missed
+    assert [(m.seat, m.passed, m.check.furiten) for m in game.current.misses] == [(1, False, Furiten.RIVER)]
 
 
 def test_no_yaku_wait_cannot_ron():
@@ -581,13 +590,28 @@ def _random_play(seed: int, steps: int = 400) -> g.GameState:
         action = g.auto_action(hand, seat)
         if action is None:
             if hand.phase is Phase.CLAIM:
-                action = g.ron(seat) if rnd.random() < 0.7 else g.pass_(seat)
+                options = hand.call_actions(seat)
+                rons = [a for a in options if a.move is g.Move.RON]
+                calls = [a for a in options if a.move is not g.Move.RON]
+                if rons and rnd.random() < 0.7:
+                    action = rons[0]
+                elif calls and rnd.random() < 0.4:
+                    action = rnd.choice(calls)
+                else:
+                    action = g.pass_(seat)
             elif hand.can_tsumo(seat):
                 action = g.tsumo(seat)
             elif hand.riichi_tiles(seat) and rnd.random() < 0.6:
                 action = g.riichi(seat, rnd.choice(hand.riichi_tiles(seat)))
+            elif (hand.ankan_tiles(seat) or hand.kakan_tiles(seat)) and rnd.random() < 0.5:
+                kans = [g.ankan(seat, t) for t in hand.ankan_tiles(seat)] + [g.kakan(seat, t) for t in hand.kakan_tiles(seat)]
+                action = rnd.choice(kans)
             else:
-                action = g.discard(seat, rnd.choice(hand.players[seat].tiles))
+                player = hand.players[seat]
+                legal = [t for t in player.tiles if kind_of(t) not in hand.forbidden]
+                if player.in_riichi:
+                    legal = [player.drawn]
+                action = g.discard(seat, rnd.choice(legal))
         game = g.apply(game, action)
         assert conserved(game.current) and total_points(game.current) == 100_000
     return game

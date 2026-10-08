@@ -98,13 +98,16 @@ _SINGLE_WIND_PAIR = "valued_pair"
 
 
 def _library_meld(meld: Meld) -> LibraryMeld:
+    # ライブラリは、チーの 3 枚が小さい順に並んでいることを前提にする（並んでいないと、あがりと判定しない）。
+    # Meld は並べて持つが、ここでも念のため並べる
+    tiles = sorted(meld.tiles)
     if meld.type is MeldType.CHI:
-        return LibraryMeld(meld_type=LibraryMeld.CHI, tiles=meld.tiles, opened=True)
+        return LibraryMeld(meld_type=LibraryMeld.CHI, tiles=tiles, opened=True)
     if meld.type is MeldType.PON:
-        return LibraryMeld(meld_type=LibraryMeld.PON, tiles=meld.tiles, opened=True)
+        return LibraryMeld(meld_type=LibraryMeld.PON, tiles=tiles, opened=True)
     if meld.type is MeldType.KAKAN:
-        return LibraryMeld(meld_type=LibraryMeld.SHOUMINKAN, tiles=meld.tiles, opened=True)
-    return LibraryMeld(meld_type=LibraryMeld.KAN, tiles=meld.tiles, opened=meld.type is MeldType.MINKAN)
+        return LibraryMeld(meld_type=LibraryMeld.SHOUMINKAN, tiles=tiles, opened=True)
+    return LibraryMeld(meld_type=LibraryMeld.KAN, tiles=tiles, opened=meld.type is MeldType.MINKAN)
 
 
 def _library_config(ctx: WinContext, rules: Rules, *, yakuman_only: bool = False) -> HandConfig:

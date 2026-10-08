@@ -1,9 +1,10 @@
 """スマホ相当の画面で「CPU と対局」を通しで打つ確認スクリプト（開発用）。
 
 アプリ本体のテスト（pytest）とは別。ブラウザを実際に動かして、東風戦を 1 回、最後まで打つ。
-自分は、コーチのおすすめ（◎）どおりに切る。リーチを勧められたらリーチし、ロン・ツモはあがる。
+自分は、コーチのおすすめ（◎）どおりに切る。リーチを勧められたらリーチし、ロン・ツモはあがる。鳴けるときも ◎ どおり（鳴く・見送る）。
 そのあいだ、手牌とボタンの位置が動かないこと、応答の速さ、画面の例外・はみ出し・ルビの振り忘れを確かめる。
-続けて、決まった局面（ロンの返事・リーチを受けている・局の終わり・対局の終わり）を用意して、それぞれの画面を確かめる。
+続けて、決まった局面（ロンの返事・鳴きの返事と鳴いたあと・暗槓・リーチを受けている・局の終わりと牌譜・対局の終わり）を用意して、
+それぞれの画面を確かめる。
 
 準備:  pip install playwright && playwright install chromium
 実行:  streamlit run app.py --server.port 8501   （別の端末で）
@@ -70,6 +71,14 @@ NOT_PENDING = "() => !document.querySelector('.mj-hand-root.mj-pending')"
 
 def find(kind: str) -> g.GameState:
     """その局面になる対局を探す（自分は、コーチのおすすめどおりに打つ）"""
+    if kind == "ankan":
+        # 親の自分が、配牌（14 枚）で同じ牌を 4 枚持っている対局
+        for seed in (844, *range(5000)):
+            game = g.start_game(GameConfig(seed=seed))
+            hand = game.current
+            if hand.phase is Phase.DRAW and hand.turn == HUMAN and hand.ankan_tiles(HUMAN):
+                return game
+        raise SystemExit("確かめに使う局面が見つかりません: ankan")
     for seed in range(400):
         game = advance(g.start_game(GameConfig(seed=seed)))
         while not game.finished:
@@ -79,7 +88,10 @@ def find(kind: str) -> g.GameState:
                 game = advance(g.next_hand(game))
                 continue
             hand = game.current
-            if kind == "claim" and hand.phase is Phase.CLAIM and HUMAN in hand.pending:
+            if kind == "claim" and hand.phase is Phase.CLAIM and HUMAN in hand.pending and HUMAN in hand.claim.ron:
+                return game
+            if (kind == "call" and hand.phase is Phase.CLAIM and g.waiting_for(hand) == HUMAN and HUMAN not in hand.claim.ron
+                    and any(a.move is g.Move.PON for a in hand.call_actions(HUMAN))):
                 return game
             if (kind == "threat" and hand.phase is Phase.DRAW and threats(hand, HUMAN) and not hand.players[HUMAN].in_riichi
                     and len(hand.players[HUMAN].river) >= 6):
@@ -145,16 +157,29 @@ LAYOUT = """() => {
 }"""
 
 
+def current_hint(page: Page) -> str | None:
+    """ブラウザに保存されている、対局の設定のヒントのタイミング（before・after・off）"""
+    raw = page.evaluate("() => localStorage.getItem('mjdojo:game.settings')")
+    return json.loads(raw).get("hint") if raw else "before"
+
+
 def screen_of(page: Page) -> str:
-    """いまの画面：final（対局の終わり）・hand_end（局の終わり）・claim（ロンの返事）・turn（自分の打牌）・other"""
+    """いまの画面：final（対局の終わり）・hand_end（局の終わり）・claim（ロンの返事）・call（鳴きの返事）・turn（自分の打牌）・other"""
     if page.get_by_role("button", name="新しい対局を始める", exact=True).count():
         return "final"
     if page.get_by_role("button", name="次の局へ", exact=True).count():
         return "hand_end"
     if page.locator(f"{HAND} .mj-tile").count():
         keys = action_keys(page)
-        return "claim" if "ron" in keys else "turn"
+        if "ron" in keys:
+            return "claim"
+        return "call" if ("pass" in keys or "back" in keys) else "turn"
     return "other"
+
+
+def action_labels(page: Page) -> dict[str, str]:
+    """操作のボタンの名前と、ボタンの文字"""
+    return dict(page.locator(f"{HAND} .mj-action").evaluate_all("els => els.map(e => [e.dataset.key, e.innerText.trim()])"))
 
 
 def action_keys(page: Page) -> list[str]:
@@ -194,12 +219,29 @@ def play_turn(page: Page, *, pass_claim: bool = False) -> tuple[str, float]:
     if "ron" in keys:
         key = "pass" if pass_claim else "ron"
         return key, tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="{key}"]'))
+    if "pass" in keys or "back" in keys:
+        # 鳴きの返事：◎ の付いたボタン（無ければ見送る）。チーの組み合わせが 2 つ以上なら、「チー」→ 組み合わせ の 2 回
+        labels = action_labels(page)
+        key = next((k for k, text in labels.items() if text.startswith("◎")), "pass")
+        seconds = tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="{key}"]'))
+        if key == "chi":
+            labels = action_labels(page)
+            key = next((k for k, text in labels.items() if text.startswith("◎") and k.startswith("call:")),
+                       next(k for k in labels if k.startswith("call:")))
+            seconds += tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="{key}"]'))
+        return ("call" if key.startswith("call:") else key), seconds
     if "tsumo" in keys:
         return "tsumo", tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="tsumo"]'))
+    # カンをすすめるとき（◎ カン）は、カンする（打牌の ◎ は出ていない）
+    kan = next((k for k, text in action_labels(page).items() if k.startswith("kan:") and text.startswith("◎")), None)
+    if kan is not None:
+        return "kan", tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="{kan}"]'))
     tiles = page.locator(f"{HAND} .mj-tile")
     index = marked_index(page)
     if index < 0:
-        index = tiles.count() - 1
+        # ◎ が無いとき（リーチ中にカンできる番など）は、切れる牌（暗くない牌）の最後
+        index = tiles.evaluate_all(
+            "els => { for (let i = els.length - 1; i >= 0; i--) if (!els[i].classList.contains('mj-dim')) return i; return els.length - 1; }")
     riichi = page.locator(f"{HAND} .mj-riichi")
     did = "discard"
     if riichi.is_visible() and riichi.inner_text().startswith("◎"):
@@ -276,9 +318,16 @@ def run(base_url: str, out_dir: Path) -> dict:
             expect(not broken, f"{name}: 読めない画像がある: {broken[:3]}")
 
         def check_ruby(page: Page, name: str) -> None:
-            """折りたたみをすべて開いて、初出なのにルビが付いていない用語が無いことを確かめる。終わったら、画面の上に戻す"""
+            """折りたたみをすべて開いて、初出なのにルビが付いていない用語が無いことを確かめる。終わったら、画面の上に戻す。
+            設定の折りたたみは、開く前に閉じていれば閉じ直す（あとの操作が、設定の部品に当たらないように）"""
+            settings = page.locator("details", has=page.locator("summary", has_text="設定（対局")).first
+            settings_closed = settings.count() and not settings.evaluate("e => e.open")
             missing = terms_without_ruby(page)
             settle(page)
+            if settings_closed and settings.evaluate("e => e.open"):
+                settings.locator("summary").first.tap()
+                page.wait_for_timeout(400)
+                settle(page)
             to_top(page)
             result.setdefault("ruby_missing", {})[name] = missing
             expect(not missing, f"{name}: 初出なのにルビが無い用語: {missing}")
@@ -315,9 +364,18 @@ def run(base_url: str, out_dir: Path) -> dict:
         passed_once = False
         reloaded = False
         each_checked = False
+        last_did = "（はじめ）"
         for _step in range(MAX_STEPS):
             screen = screen_of(page)
             if screen == "final":
+                break
+            if screen != "other":
+                seen["other"] = 0                   # 「どれでもない」は、続いた回数だけを数える（画面の切り替わりの途中は数えない）
+            hint_now = current_hint(page)
+            if hint_now != "before":
+                # 打つ前のヒントのまま打つはず。変わったら、どの操作のあとかを残して止める
+                expect(False, f"ヒントの設定が変わった（{hint_now}。{last_did} のあと、{_step} 回目）")
+                shot(page, "hint_changed")
                 break
             if screen == "hand_end":
                 hands_done += 1
@@ -331,6 +389,7 @@ def run(base_url: str, out_dir: Path) -> dict:
                 button.scroll_into_view_if_needed()
                 button.tap()
                 wait_screen(page)
+                last_did = f"次の局へ（{hands_done} 局目のあと）"
                 expect("本場" in text_of(page, ".mj-game-status"), "次の局の状況が出ていない")
                 continue
             if screen == "other":
@@ -358,6 +417,12 @@ def run(base_url: str, out_dir: Path) -> dict:
                 shot(page, "05_claim")
                 expect(not page.locator(f"{HAND} .mj-confirm").is_visible(), "ロンの返事のときに、「この牌を切る」が出ている")
                 check_ruby(page, "ロンの返事")
+            if screen == "call" and "call" not in seen:
+                seen["call"] = 1
+                shot(page, "05_call")
+                expect(not page.locator(f"{HAND} .mj-confirm").is_visible(), "鳴きの返事のときに、「この牌を切る」が出ている")
+                expect("鳴きの判断" in main_text(page), "鳴きの返事のときに、鳴きの判断の表が出ていない")
+                check_ruby(page, "鳴きの返事")
             if not reloaded and screen == "turn" and len(result.get("turns", [])) >= 3:
                 # 再読み込み（＝新しいセッション）で、同じ局面に戻るか
                 reloaded = True
@@ -381,6 +446,7 @@ def run(base_url: str, out_dir: Path) -> dict:
                 did, seconds = play_turn(page)
                 timings.append(seconds)
                 result.setdefault("turns", []).append(did)
+                last_did = f"{did}（「1 人ずつ」の確認）"
                 if screen_of(page) in ("turn", "claim"):
                     expect(page.locator(".mj-steps-each").count() == 1 or not page.locator(".mj-moves").count(),
                            "「1 人ずつ」にしたのに、CPU の打牌が 1 人ずつ出ていない")
@@ -399,6 +465,7 @@ def run(base_url: str, out_dir: Path) -> dict:
             did, seconds = play_turn(page, pass_claim=pass_claim)
             timings.append(seconds)
             result.setdefault("turns", []).append(did)
+            last_did = f"{did}（{screen} の画面）"
             if did == "pass" and screen_of(page) == "turn":
                 expect("フリテン" in main_text(page), "ロンを見送ったあとの番に、フリテンの知らせが出ていない")
         else:
@@ -428,11 +495,12 @@ def run(base_url: str, out_dir: Path) -> dict:
         history = page.evaluate("() => localStorage.getItem('mjdojo:game.history')")
         expect(history is not None and len(json.loads(history)) == 1, "ブラウザに、対局の成績が 1 つ保存されていない")
         button = page.get_by_role("button", name="新しい対局を始める", exact=True)
-        button.scroll_into_view_if_needed()
-        button.tap()
-        wait_screen(page)
-        expect("東 1 局" in text_of(page, ".mj-game-status"), "新しい対局が始まっていない")
-        expect(page.evaluate("() => document.querySelector('[data-testid=stMain]').scrollTop") == 0, "新しい対局を始めても、画面の上に戻らない")
+        if button.count():                          # 対局が終わらなかったとき（上で問題として残してある）は、飛ばして先の確認へ
+            button.scroll_into_view_if_needed()
+            button.tap()
+            wait_screen(page)
+            expect("東 1 局" in text_of(page, ".mj-game-status"), "新しい対局が始まっていない")
+            expect(page.evaluate("() => document.querySelector('[data-testid=stMain]').scrollTop") == 0, "新しい対局を始めても、画面の上に戻らない")
         context.close()
 
         # ---- 3. 決まった局面：ロンの返事 → ロン
@@ -454,6 +522,66 @@ def run(base_url: str, out_dir: Path) -> dict:
         shot(page, "09_ron", full=True)
         context.close()
 
+        # ---- 3b. 決まった局面：鳴きの返事 → ポン → 鳴いた直後に 1 枚切る
+        game = find("call")
+        context = new_context(script=storage_script(game))
+        page = open_page(context)
+        expect(wait_screen(page) == "call", "鳴きの返事の局面が出ない")
+        shot(page, "08b_call_view")
+        labels = action_labels(page)
+        result["call_buttons"] = labels
+        pon = next((k for k, text in labels.items() if text.endswith("ポン")), None)
+        expect(pon is not None and "pass" in labels, f"ポンと見送るのボタンが出ていない: {labels}")
+        bottom = page.locator(f"{HAND} .mj-action").last.evaluate("e => e.getBoundingClientRect().bottom")
+        expect(bottom <= HEIGHT, f"鳴きのボタンが、最初の画面に収まっていない（下端 {bottom:.0f}px）")
+        expect("鳴きの判断" in main_text(page) and "役が" in main_text(page), "鳴きの判断の表（役が残るか）が出ていない")
+        bar_before = page_top(page, f"{HAND} .mj-bar")
+        check_ruby(page, "鳴きの返事（決まった局面）")
+        if pon is not None:
+            tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="{pon}"]'))
+            expect(wait_screen(page) == "turn", "ポンしたあと、1 枚切る番になっていない")
+            melds = page.locator(f"{HAND} .mj-meld").count()
+            count = page.locator(f"{HAND} .mj-tile").count()
+            result["after_pon"] = {"melds": melds, "tiles": count, "status": text_of(page, f"{HAND} .mj-status"),
+                                   "locked": page.locator(f"{HAND} .mj-tile.mj-dim").count()}
+            expect(melds == 1 and count == 11, f"ポンしたあとの手牌が違う（副露 {melds} 組・手牌 {count} 枚）")
+            expect(abs(page_top(page, f"{HAND} .mj-bar") - bar_before) <= 1, "ポンしたあと、手牌の下の段の位置が動いた")
+            expect("鳴き 1" in " ".join(scores(page)), f"点数の欄に、鳴いた数が出ていない: {scores(page)}")
+            shot(page, "08c_after_pon")
+            check_ruby(page, "鳴いた直後")
+            did, _ = play_turn(page)
+            expect(did == "discard", f"鳴いたあとに切れない: {did}")
+            expect(wait_screen(page) != "other", "鳴いて切ったあと、画面が進まない")
+        context.close()
+
+        # ---- 3c. 決まった局面：暗槓 → 嶺上牌（リンシャン）を引き、ドラが 1 枚増える
+        game = find("ankan")
+        context = new_context(script=storage_script(game))
+        page = open_page(context)
+        expect(wait_screen(page) == "turn", "暗槓できる局面が出ない")
+        kan = next((k for k in action_keys(page) if k.startswith("kan:")), None)
+        expect(kan is not None, f"カンのボタンが出ていない: {action_keys(page)}")
+        if kan is not None and action_labels(page).get(kan, "").startswith("◎"):
+            # カンをすすめるときは、案内もカンで、打牌の ◎ は付けない（どちらをすすめているか迷わないように）
+            result["kan_offer"] = text_of(page, ".mj-headline")[:60]
+            expect("カンできます" in result["kan_offer"], f"カンをすすめるのに、案内がカンになっていない: {result['kan_offer']}")
+            expect(marked_index(page) < 0, "カンをすすめるのに、打牌の ◎ も付いている")
+            shot(page, "08d_kan_offer")
+        if kan is not None:
+            bar_before = page_top(page, f"{HAND} .mj-bar")
+            tap_and_wait(page, page.locator(f'{HAND} .mj-action[data-key="{kan}"]'))
+            expect(wait_screen(page) == "turn", "暗槓のあと、自分の番になっていない")
+            backs = page.locator(f"{HAND} .mj-meld .mj-mtile img[src$='back.png']").count()
+            expect(page.locator(f"{HAND} .mj-meld").count() == 1 and backs == 2, f"暗槓が手牌の横に出ていない（裏向き {backs} 枚）")
+            note = page.locator(f"{HAND} .mj-tile.mj-drawn").first.get_attribute("data-note")
+            expect(note == "リンシャン", f"嶺上牌の下の文字が違う: {note}")
+            dora = page.locator(".mj-game-status .mj-chip-tiles").first.get_attribute("title") or ""
+            expect(dora.startswith("ドラ：") and dora.count("・") == 1, f"ドラが 2 枚になっていない: {dora}")
+            expect(abs(page_top(page, f"{HAND} .mj-bar") - bar_before) <= 1, "暗槓のあと、手牌の下の段の位置が動いた")
+            shot(page, "08d_ankan")
+            check_ruby(page, "暗槓のあと")
+        context.close()
+
         # ---- 4. 決まった局面：リーチを受けている（守備の表とベタオリ）を、縦に長い画面で
         game = find("threat")
         context = new_context(height=TALL, script=storage_script(game))
@@ -472,6 +600,43 @@ def run(base_url: str, out_dir: Path) -> dict:
         page = open_page(context)
         expect(wait_screen(page) == "final", "対局の終わりの局面が出ない")
         shot(page, "11_finished")
+        context.close()
+
+        # ---- 5b. 決まった局面：局の終わり → 牌譜を 1 手ずつ見る
+        game = find("hand_end_win")
+        context = new_context(script=storage_script(game))
+        page = open_page(context)
+        expect(wait_screen(page) == "hand_end", "局の終わりの局面が出ない")
+        open_section(page, "牌譜（パイフ")
+        button = page.get_by_role("button", name="牌譜を見る", exact=True)
+        button.scroll_into_view_if_needed()
+        button.tap()
+        settle(page)
+        root = page.locator(".kf-root").first
+        root.wait_for(timeout=30000)
+        root.scroll_into_view_if_needed()
+        head = text_of(page, ".kf-head")
+        expect(re.search(r"手順 0 / \d+", head) is not None, f"牌譜の手順の表示が違う: {head}")
+        shot(page, "11b_kifu_start")
+        page.locator(".kf-btn[data-go=nextMine]").tap()
+        page.wait_for_timeout(200)
+        caption = text_of(page, ".kf-caption")
+        expect(caption.startswith("自分"), f"「次の自分の判断」で、自分の手に進まない: {caption[:40]}")
+        expect(any(mark in caption for mark in ("✓", "△", "✗")), f"自分の手に、評価が付いていない: {caption[:60]}")
+        for _ in range(3):
+            page.locator(".kf-btn[data-go=next]").tap()
+        page.wait_for_timeout(200)
+        shot(page, "11c_kifu_step")
+        page.locator(".kf-btn[data-go=last]").tap()
+        page.wait_for_timeout(200)
+        caption = text_of(page, ".kf-caption")
+        result["kifu"] = {"head": head, "last": caption[:80]}
+        expect(caption.startswith("結果"), f"牌譜の最後に、局の結果が出ていない: {caption[:40]}")
+        expect(root.evaluate("e => e.scrollWidth <= e.clientWidth + 1"), "牌譜が横にはみ出している")
+        nav = page.locator(".kf-nav").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().height))")
+        expect(all(h < 60 for h in nav), f"牌譜のボタンの段が、1 段に収まっていない: {nav}")
+        shot(page, "11d_kifu_last")
+        check_ruby(page, "牌譜")
         context.close()
 
         # ---- 6. ほかの画面幅と、暗い画面

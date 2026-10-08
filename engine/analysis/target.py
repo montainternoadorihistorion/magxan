@@ -28,6 +28,12 @@
 嵌張や辺張の聴牌は、形が 4 面子 1 雀頭に近くても、平和の聴牌とは数えない。
 一人練習は鳴きが無いので、門前の手だけを扱う。
 
+副露（鳴いた面子・暗槓）がある手は、melds に渡す。副露は「もうそろっている組」として、役の形に入るか（入らなければ
+その役は作れない）を確かめ、残りの組だけを門前の牌で作る距離を数える（距離 ＝ 13 − 3n − 共通する枚数。n は副露の数）。
+鳴いた手（暗槓だけでない手）では、門前でしか付かない役（平和・一盃口・二盃口・七対子・国士無双・九蓮宝燈・四暗刻など）は
+作れない。刻子 4 つの形も、鳴いていれば対々和として数えられるので、鳴いた手では三色同刻・小三元・混老頭の
+「順子を 1 つ以上」「七対子の形だけ」の制限を外す（open_spec）。
+
 一人練習のあがりは、門前のツモだけ。だから、刻子が 4 つそろうと、いつも四暗刻（役満）になる。
 役満のときは、ほかの役を数えない。そこで、刻子で作る役は「その役として数えられる形」だけを、役の形とする。
     三色同刻・小三元   残りの面子に、順子を 1 つ以上使う形（刻子 4 つの形は入れない）
@@ -41,6 +47,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 
+from engine.melds import Meld, MeldType
 from engine.scoring.decompose import KOKUSHI_KINDS, Form
 from engine.tiles import CHUN, EAST, HAKU, HATSU, NORTH, NUM_KINDS
 
@@ -121,6 +128,11 @@ def spec_of(key: str, seat_wind: int = EAST, round_wind: int = EAST) -> Spec:
     if key == "yakuhai":
         kinds = sorted({*DRAGONS, seat_wind, round_wind})
         return Spec(tuple(Shape(sets=(k,)) for k in kinds))
+    if key.startswith("yakuhai:"):        # 1 種類の役牌の刻子（例："yakuhai:31" ＝ 白）。鳴きの判断で、どの役牌かを分けて数える
+        kind = int(key.split(":")[1])
+        if kind not in {*DRAGONS, seat_wind, round_wind}:
+            raise KeyError(f"役牌ではありません: {key!r}")
+        return Spec((Shape(sets=(kind,)),))
     if key == "chiitoitsu":
         return Spec(chiitoi=(ALL,))
     if key == "sanankou":
@@ -171,7 +183,33 @@ def spec_of(key: str, seat_wind: int = EAST, round_wind: int = EAST) -> Spec:
         return Spec((Shape(seq_ok=NOTHING, set_ok=TERMINALS, pair_ok=TERMINALS),))
     if key == "chuuren":
         return Spec(chuuren=True)
+    if key == "toitoi":              # 役指定練習には入れない（門前では四暗刻になる）。鳴いた手の役の候補に使う
+        return Spec((Shape(seq_ok=NOTHING),))
     raise KeyError(f"役指定練習で選べない役です: {key!r}")
+
+
+#: 鳴いた手（暗槓だけでない手）でも作れる役（役の候補・鳴きの判断に使う）
+OPEN_KEYS = (
+    "yakuhai", "tanyao", "toitoi", "honitsu", "chinitsu", "ittsu", "sanshoku", "sanshoku_doukou", "chanta", "junchan",
+    "shousangen", "honroutou", "daisangen", "shousuushii", "daisuushii", "tsuuiisou", "ryuuiisou", "chinroutou",
+)
+
+
+@lru_cache(maxsize=256)
+def open_spec(key: str, seat_wind: int = EAST, round_wind: int = EAST) -> Spec:
+    """鳴いた手での役の形（4 面子 1 雀頭の形だけ）。鳴いた手で作れない役は KeyError。
+
+    刻子 4 つの形も対々和として数えられる（四暗刻にならない）ので、門前の手で付けていた制限を外す。
+    """
+    if key not in OPEN_KEYS and not key.startswith("yakuhai:"):
+        raise KeyError(f"鳴いた手では作れない役です: {key!r}")
+    if key == "sanshoku_doukou":
+        return Spec(tuple(Shape(sets=(n, 9 + n, 18 + n)) for n in range(9)))
+    if key == "shousangen":
+        return Spec(tuple(Shape(sets=tuple(d for d in DRAGONS if d != pair), pair=pair) for pair in DRAGONS))
+    if key == "honroutou":
+        return Spec((Shape(seq_ok=NOTHING, set_ok=YAOCHU, pair_ok=YAOCHU),))
+    return Spec(spec_of(key, seat_wind, round_wind).shapes)
 
 
 #: 役指定練習で選べる役（図鑑のページの鍵）
@@ -344,8 +382,11 @@ def _masks(shape: Shape) -> tuple[tuple[int, int, int], ...]:
 _Blocks = tuple[tuple[str, int, bool], ...]       # （印, 種類, 役の条件として必ず要る組か）
 
 
-def _regular(counts: tuple[int, ...], limit: tuple[int, ...], shape: Shape) -> tuple[int, _Blocks] | None:
-    """4 面子 1 雀頭の形 1 通りについて、手牌と共通する枚数の最大と、そのときの組"""
+def _regular(counts: tuple[int, ...], limit: tuple[int, ...], shape: Shape, slots: int = 4) -> tuple[int, _Blocks] | None:
+    """4 面子 1 雀頭の形 1 通りについて、手牌と共通する枚数の最大と、そのときの組。
+
+    slots は、門前の牌で作る面子の数（副露が n 組なら 4 − n）。
+    """
     required = [0] * NUM_KINDS
     for first in shape.sequences:
         for kind in (first, first + 1, first + 2):
@@ -373,8 +414,10 @@ def _regular(counts: tuple[int, ...], limit: tuple[int, ...], shape: Shape) -> t
         *((("p", shape.pair, True),) if shape.pair is not None else ()),
     )
     if shape.ryanmen:
-        return _regular_ryanmen(rest, cap, shape, matched, fixed)
-    free = 4 - len(shape.sequences) - len(shape.sets)
+        return _regular_ryanmen(rest, cap, shape, matched, fixed, slots)
+    free = slots - len(shape.sequences) - len(shape.sets)
+    if free < 0:
+        return None
     pair = 0 if shape.pair is not None else 1
     if free == 0 and pair == 0:
         return matched, fixed
@@ -427,9 +470,13 @@ def _flatten(chain: _Chain) -> _Blocks:
     return tuple(block for part in reversed(parts) for block in part)
 
 
-def _regular_ryanmen(rest: list[int], cap: list[int], shape: Shape, matched: int, fixed: _Blocks) -> tuple[int, _Blocks] | None:
+def _regular_ryanmen(
+    rest: list[int], cap: list[int], shape: Shape, matched: int, fixed: _Blocks, slots: int = 4,
+) -> tuple[int, _Blocks] | None:
     """両面の 2 枚を含む聴牌の形（13 枚）1 通りについて、手牌と共通する枚数の最大と、そのときの組"""
-    free = 4 - len(shape.sequences) - len(shape.sets) - shape.ryanmen
+    free = slots - len(shape.sequences) - len(shape.sets) - shape.ryanmen
+    if free < 0:
+        return None
     pair = 0 if shape.pair is not None else 1
     ryan = shape.ryanmen
     masks = _masks(shape)
@@ -510,7 +557,7 @@ def _chuuren(counts: tuple[int, ...], limit: tuple[int, ...]) -> tuple[int, _Blo
     return best
 
 
-def _upper_bound(counts: tuple[int, ...], limit: tuple[int, ...], shape: Shape, total: int) -> int:
+def _upper_bound(counts: tuple[int, ...], limit: tuple[int, ...], shape: Shape, total: int, slots: int = 4) -> int:
     """その形と手牌が共通する枚数の、上限の見込み（必ず使う組で重なる枚数 ＋ 残りの組に入りうる枚数）。作れない形は −1"""
     required = [0] * NUM_KINDS
     for first in shape.sequences:
@@ -528,24 +575,70 @@ def _upper_bound(counts: tuple[int, ...], limit: tuple[int, ...], shape: Shape, 
             if need > limit[kind]:
                 return -1
             matched += min(counts[kind], need)
-    free = 4 - len(shape.sequences) - len(shape.sets) - shape.ryanmen
+    free = slots - len(shape.sequences) - len(shape.sets) - shape.ryanmen
+    if free < 0:
+        return -1
     room = 3 * free + (0 if shape.pair is not None else 2) + 2 * shape.ryanmen
     return matched + min(total - matched, room)
 
 
+_MeldKey = tuple[tuple[str, int], ...]      # 副露の組（"q" ＝ 順子・"s" ＝ 刻子・槓子, 先頭の牌の種類）と、門前かどうか
+
+
+def _meld_key(melds: Sequence[Meld]) -> tuple[_MeldKey, bool]:
+    blocks = tuple(sorted(("q" if m.type is MeldType.CHI else "s", m.first_kind) for m in melds))
+    return blocks, not any(m.is_open for m in melds)
+
+
+def _reduce(shape: Shape, melds: _MeldKey) -> Shape | None:
+    """副露を、役の形の組に当てはめる。必ず使う組に当たれば、その組はそろったものとして外す。
+    当たらない副露は「残りの面子」になるので、使える組（seq_ok・set_ok）でなければ、その形は作れない（None）"""
+    sequences, sets = list(shape.sequences), list(shape.sets)
+    meld_seqs = meld_sets = 0
+    for mark, kind in melds:
+        if mark == "q":
+            meld_seqs += 1
+            if kind in sequences:
+                sequences.remove(kind)
+            elif kind not in shape.seq_ok:
+                return None
+        else:
+            meld_sets += 1
+            if kind in sets:
+                sets.remove(kind)
+            elif kind not in shape.set_ok:
+                return None
+    return Shape(
+        sequences=tuple(sequences), sets=tuple(sets), pair=shape.pair, seq_ok=shape.seq_ok, set_ok=shape.set_ok,
+        pair_ok=shape.pair_ok, min_sets=max(0, shape.min_sets - meld_sets), min_seqs=max(0, shape.min_seqs - meld_seqs),
+        ryanmen=shape.ryanmen, ryanmen_ok=shape.ryanmen_ok,
+    )
+
+
 @lru_cache(maxsize=4096)
-def _best(counts: tuple[int, ...], key: str, seat_wind: int, round_wind: int, limit: tuple[int, ...]) -> tuple[int, Form | None, _Blocks]:
-    """その役の形のうち、手牌といちばん多く重なるもの →（共通する枚数, 形, 組）"""
-    spec = spec_of(key, seat_wind, round_wind)
+def _best(
+    counts: tuple[int, ...], key: str, seat_wind: int, round_wind: int, limit: tuple[int, ...], melds: _MeldKey = (), menzen: bool = True,
+) -> tuple[int, Form | None, _Blocks]:
+    """その役の形のうち、手牌といちばん多く重なるもの →（共通する枚数, 形, 組）。副露があれば、残りの組だけを作る"""
+    if melds:
+        try:
+            spec = spec_of(key, seat_wind, round_wind) if menzen else open_spec(key, seat_wind, round_wind)
+        except KeyError:
+            return (-1, None, ())
+        shapes = tuple(r for r in (_reduce(shape, melds) for shape in spec.shapes) if r is not None)
+        spec = Spec(shapes)                 # 副露があると、七対子・国士無双・九蓮宝燈の形にはならない
+    else:
+        spec = spec_of(key, seat_wind, round_wind)
+    slots = 4 - len(melds)
     found: list[tuple[int, int, Form, _Blocks]] = []        # （共通する枚数, 同点のときの優先順, 形, 組）
     total = sum(counts)
     best_regular = -1
     for shape in spec.shapes:
         # 見込みの無い形は、表を作る前に飛ばす（二盃口は形が 231 通りある）。同点なら先に見つけた形を選ぶので、
         # 「見込み ≦ いまの最大」の形を飛ばしても、結果は変わらない
-        if _upper_bound(counts, limit, shape, total) <= best_regular:
+        if _upper_bound(counts, limit, shape, total, slots) <= best_regular:
             continue
-        result = _regular(counts, limit, shape)
+        result = _regular(counts, limit, shape, slots)
         if result is not None:
             found.append((result[0], 2, Form.REGULAR, result[1]))
             best_regular = max(best_regular, result[0])
@@ -636,24 +729,28 @@ def _limit(counts: Sequence[int], available: Sequence[int] | None) -> tuple[int,
 
 
 def target_distance(
-    counts: Sequence[int], key: str, *, seat_wind: int = EAST, round_wind: int = EAST, available: Sequence[int] | None = None
+    counts: Sequence[int], key: str, *, seat_wind: int = EAST, round_wind: int = EAST, available: Sequence[int] | None = None,
+    melds: Sequence[Meld] = (),
 ) -> int:
-    """役までの距離（13 枚でも 14 枚でもよい）。
+    """役までの距離（門前の牌は 13 − 3n 枚でも 14 − 3n 枚でもよい。n は副露 melds の数）。
 
     available は、種類ごとの「まだ手に入る枚数」（手牌は含めない）。省略すると、4 枚から手牌を引いた数。
     見えている牌を引いた数を渡せば、「もう作れない」ことが分かる（そのとき IMPOSSIBLE）。
     """
     counts = tuple(counts)
-    matched, form, _ = _best(counts, key, seat_wind, round_wind, _limit(counts, available))
-    return IMPOSSIBLE if form is None else 13 - matched
+    meld_key, menzen = _meld_key(melds)
+    matched, form, _ = _best(counts, key, seat_wind, round_wind, _limit(counts, available), meld_key, menzen)
+    return IMPOSSIBLE if form is None else 13 - 3 * len(melds) - matched
 
 
 def target_plan(
-    counts: Sequence[int], key: str, *, seat_wind: int = EAST, round_wind: int = EAST, available: Sequence[int] | None = None
+    counts: Sequence[int], key: str, *, seat_wind: int = EAST, round_wind: int = EAST, available: Sequence[int] | None = None,
+    melds: Sequence[Meld] = (),
 ) -> Plan:
-    """役までの距離と、めざす形（どの組がそろっていて、何が足りないか）"""
+    """役までの距離と、めざす形（どの組がそろっていて、何が足りないか）。副露があれば、門前の牌で作る組だけを返す"""
     counts = tuple(counts)
-    matched, form, raw = _best(counts, key, seat_wind, round_wind, _limit(counts, available))
+    meld_key, menzen = _meld_key(melds)
+    matched, form, raw = _best(counts, key, seat_wind, round_wind, _limit(counts, available), meld_key, menzen)
     if form is None:
         return Plan(key, IMPOSSIBLE, None, (), (), ())
     wanted = [0] * NUM_KINDS
@@ -681,7 +778,7 @@ def target_plan(
     need = tuple((k, wanted[k] - counts[k]) for k in range(NUM_KINDS) if wanted[k] > counts[k])
     spare = tuple((k, counts[k] - wanted[k]) for k in range(NUM_KINDS) if counts[k] > wanted[k])
     tenpai_form = any(mark == "r" for mark, _, _ in raw)
-    return Plan(key, 13 - matched, form, tuple(blocks), need, spare, tenpai_form)
+    return Plan(key, 13 - 3 * len(melds) - matched, form, tuple(blocks), need, spare, tenpai_form)
 
 
 def is_tenpai_form(key: str, *, seat_wind: int = EAST, round_wind: int = EAST) -> bool:

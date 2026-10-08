@@ -2,8 +2,9 @@
 
 牌の画像そのものを押せるようにし、スマホ縦画面で 7 枚 × 2 段に並べる。
 押し間違いを防ぐため「選ぶ → 確定」の 2 段階にしてある（選んだ牌をもう一度押しても確定できる）。
-牌を切らずにする操作（ツモあがり・ロン・見送る・九種九牌）のボタンも、確定のボタンの横に置ける
+牌を切らずにする操作（ツモあがり・ロン・ポン・チー・カン・見送る・九種九牌）のボタンも、確定のボタンの横に置ける
 （手牌のすぐ下なので、小さい画面でも見える）。
+副露（鳴いた面子）は、手牌の続きの空いたところ（2 段目）に、入りきる大きさで並べる（手牌の段の数は 2 段のまま）。
 """
 from __future__ import annotations
 
@@ -14,11 +15,12 @@ from pathlib import Path
 import streamlit as st
 
 from ui.components._base import registered
-from ui.tile_view import tile_image_url, tile_label, tile_short_label
+from ui.tile_view import TILE_IMAGE_BASE, tile_image_url, tile_label, tile_short_label
 
 _DIR = Path(__file__).parent
-#: 操作のボタンの色：win ＝ あがり（緑）、plain ＝ 枠だけ、alert ＝ 注意（橙）
-BUTTON_STYLES = ("win", "plain", "alert")
+#: 操作のボタンの色：win ＝ あがり（緑）、plain ＝ 枠だけ、alert ＝ 注意（橙）、call ＝ 鳴き（青）
+BUTTON_STYLES = ("win", "plain", "alert", "call")
+BACK_URL = f"{TILE_IMAGE_BASE}/back.png"
 
 
 def _component():
@@ -32,10 +34,15 @@ class HandButton:
     key: str            # 押されたときに届く名前
     label: str          # ボタンの文字
     style: str = "win"
+    tiles: tuple[int, ...] = ()     # ボタンの中に小さく出す牌（チーの組み合わせなど）
 
     def __post_init__(self) -> None:
         if self.style not in BUTTON_STYLES:
             raise ValueError(f"ボタンの色の指定が違います: {self.style!r}")
+
+
+#: 副露 1 組の並び：（牌ID, 横向きか, 裏向きか）の列（engine.melds.display_order で作る）
+MeldTiles = Sequence[tuple[int, bool, bool]]
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,14 @@ def _number(value: object) -> float | None:
 def _int(value: object) -> int | None:
     number = _number(value)
     return None if number is None else int(number)
+
+
+def _button_data(button: HandButton, *, aka: bool) -> dict:
+    """操作のボタン 1 つぶんの、部品に送る形（牌の絵を添えるボタンだけ tiles を付ける）"""
+    data: dict = {"key": button.key, "label": button.label, "style": button.style}
+    if button.tiles:
+        data["tiles"] = [{"src": tile_image_url(t, aka=aka), "label": tile_label(t, aka=aka)} for t in button.tiles]
+    return data
 
 
 def parse_action(payload: object, *, rev: int, keys: Collection[str]) -> str | None:
@@ -116,6 +131,10 @@ def tile_hand(
     discard: bool = True,
     chosen_id: int | None = None,
     chosen_label: str = "選んだ牌",
+    melds: Sequence[MeldTiles] = (),
+    meld_labels: Sequence[str] = (),
+    locked_ids: Collection[int] = (),
+    locked_note: str = "",
 ) -> None:
     """手牌を表示する。牌が確定されたら on_pick(Pick) を呼ぶ。
 
@@ -137,8 +156,13 @@ def tile_hand(
     discard      偽なら、牌を選んで切ることはできない（ロンするかどうかを決めるときなど）。案内文と操作のボタンだけを出す
     chosen_id    表示だけのとき（enabled が偽）に、選ばれた牌として枠を付ける牌ID（ドリルで、答えた牌を見せる）
     chosen_label 選ばれた牌の、読み上げ用の説明
+    melds        副露（鳴いた面子と暗槓）。手牌の右（2 段目）に、小さめに並べる。押せない
+    meld_labels  副露ごとの読み上げ用の説明（例：ポン 白）
+    locked_ids   切れない牌（鳴いた直後の喰い替え）。暗くして、押せないようにする
+    locked_note  切れない牌があるときに、案内文の代わりに出す文
     """
     tile_ids = list(tile_ids)
+    locked = set(locked_ids)
     riichi_ids = [t for t in tile_ids if t in set(riichi_ids)] if discard else []
     marks = marks or {}
     buttons = [b for b in actions if on_action is not None] if enabled else []
@@ -146,7 +170,7 @@ def tile_hand(
     # 「いま画面に出している内容」を覚えておく。確定が届いたとき、それがこの画面からのものか確かめるため
     st.session_state[memo_key] = {
         "rev": rev,
-        "tile_ids": tile_ids if discard else [],
+        "tile_ids": [t for t in tile_ids if t not in locked] if discard else [],
         "riichi_ids": riichi_ids,
         "actions": [b.key for b in buttons],
     }
@@ -190,9 +214,21 @@ def tile_hand(
             "riichiLabel": riichi_label,
             "twoRows": two_rows,
             "scrollTop": scroll_top,
-            "actions": [{"key": b.key, "label": b.label, "style": b.style} for b in buttons],
+            "actions": [_button_data(b, aka=aka) for b in buttons],
             "chosenId": chosen_id if not enabled and chosen_id in tile_ids else None,
             "chosenLabel": chosen_label,
+            "melds": [
+                {
+                    "label": meld_labels[i] if i < len(meld_labels) else "副露",
+                    "tiles": [
+                        {"src": BACK_URL if back else tile_image_url(t, aka=aka), "label": "裏向きの牌" if back else tile_label(t, aka=aka), "side": side}
+                        for t, side, back in meld
+                    ],
+                }
+                for i, meld in enumerate(melds)
+            ],
+            "lockedIds": sorted(locked),
+            "lockedNote": locked_note,
         },
         on_pick_change=_on_pick_change,
     )

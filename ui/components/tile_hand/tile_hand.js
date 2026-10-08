@@ -18,6 +18,10 @@
 //                1 回押せば送る。style は win（緑）・plain（枠だけ）・alert（橙）
 //   chosenId     表示だけのとき、選ばれた牌として枠を付ける牌ID（ドリルで答えた牌。無ければ null）
 //   chosenLabel  選ばれた牌の、読み上げ用の説明
+//   melds        [{ label, tiles: [{ src, label, side }] }] 副露（鳴いた面子と暗槓）。左から並べる順。side は横向き
+//                手牌（ツモ牌の枠を含む）の続きの空いたところに、入りきる大きさで置く。段の数は 2 段のまま
+//   lockedIds    切れない牌（鳴いた直後の喰い替え）。暗くして押せないようにする
+//   lockedNote   切れない牌があるときに、案内文の代わりに出す文
 //
 // 送る値（ここ → Python）: 確定したとき 1 回だけ "pick" を送る
 //   { id, rev, riichi, prevMs, vw, vh, dpr, imgNg }
@@ -32,6 +36,11 @@
 // 画面の要素は呼び出しをまたいで残るので、状態は要素に持たせ、中身は毎回データから作り直す。
 
 const PENDING_TIMEOUT_MS = 8000;
+const COLUMNS = 7;
+const GRID_GAP = 5; // tile_hand.css の .mj-grid の横の間隔（px）
+const MELD_GAP = 6; // 副露どうしの間隔（px）
+const SIDE = 4 / 3; // 横向きの牌の幅（縦向きの牌の幅に対して）
+const MIN_SCALE = 0.8; // 1 段目の残りに副露を置くのは、この大きさ以上で入るときだけ
 
 // 画面のいちばん上までスクロールを戻す。この部品は Shadow DOM の中にあるので、外側へたどりながら、
 // スクロールできる祖先をすべて先頭に戻す（Streamlit の画面は、ページ全体ではなく中の枠がスクロールする）。
@@ -80,7 +89,9 @@ export default function (component) {
   const tiles = Array.isArray(data.tiles) ? data.tiles : [];
   const byId = new Map(tiles.map((t) => [t.id, t]));
   const riichiIds = new Set(Array.isArray(data.riichiIds) ? data.riichiIds : []);
+  const lockedIds = new Set(Array.isArray(data.lockedIds) ? data.lockedIds : []);
   const actions = Array.isArray(data.actions) ? data.actions : [];
+  const melds = Array.isArray(data.melds) ? data.melds : [];
   const canDiscard = data.enabled && data.discard !== false;
   if (!riichiIds.size) state.riichi = false;
 
@@ -92,14 +103,16 @@ export default function (component) {
   }
 
   function selectable(id) {
-    return canDiscard && (!state.riichi || riichiIds.has(id));
+    return canDiscard && !lockedIds.has(id) && (!state.riichi || riichiIds.has(id));
   }
 
   function refresh() {
     grid.querySelectorAll(".mj-tile").forEach((el) => {
       const id = Number(el.dataset.id);
       el.setAttribute("aria-pressed", String(id === state.picked));
-      el.classList.toggle("mj-dim", !selectable(id));
+      // 暗くするのは、切る牌を選べるときの「この牌は選べない」だけ。表示だけのときや、鳴く・ロンするかを決めるときは、
+      // 手牌をよく見て決められるように、明るいままにする
+      el.classList.toggle("mj-dim", canDiscard && !selectable(id));
     });
     const picked = state.picked === null ? null : byId.get(state.picked);
     if (state.pending) {
@@ -112,6 +125,8 @@ export default function (component) {
       status.textContent = data.prompt || "";
     } else if (state.riichi) {
       status.textContent = "リーチ：明るい牌から選ぶ";
+    } else if (lockedIds.size && data.lockedNote) {
+      status.textContent = data.lockedNote;
     } else {
       status.textContent = data.prompt || "";
     }
@@ -173,13 +188,30 @@ export default function (component) {
     setTriggerValue("pick", Object.assign({ action: key, rev: data.rev }, measures()));
   }
 
-  // 操作のボタンを並べ直す
+  // 操作のボタンを並べ直す（チーの組み合わせなど、牌の絵を添えるボタンもある）
   actionBox.replaceChildren();
   for (const a of actions) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "mj-action mj-action-" + (a.style || "win");
-    btn.textContent = a.label || "";
+    const label = document.createElement("span");
+    label.textContent = a.label || "";
+    btn.appendChild(label);
+    const shown = Array.isArray(a.tiles) ? a.tiles : [];
+    if (shown.length) {
+      const box = document.createElement("span");
+      box.className = "mj-action-tiles";
+      box.setAttribute("aria-hidden", "true");
+      for (const t of shown) {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = t.src;
+        img.draggable = false;
+        box.appendChild(img);
+      }
+      btn.appendChild(box);
+      btn.setAttribute("aria-label", (a.label || "") + "（" + shown.map((t) => t.label).join("・") + "）");
+    }
     btn.dataset.key = String(a.key);
     btn.onclick = () => sendAction(String(a.key));
     actionBox.appendChild(btn);
@@ -238,6 +270,84 @@ export default function (component) {
     grid.appendChild(btn);
   }
 
+  renderMelds();
+  if (melds.length && typeof ResizeObserver !== "undefined") {
+    // 画面の幅が変わったら（向きを変えたときなど）、副露の大きさを計算し直す
+    if (!state.observer) {
+      state.observer = new ResizeObserver(() => state.relayout && state.relayout());
+      state.observer.observe(grid);
+    }
+  }
+  state.relayout = renderMelds;
+
+  // 副露を並べる。手牌の続きの空いたところに、1 組 3〜4 枚ぶんの大きさを計算して置く
+  function renderMelds() {
+    grid.querySelectorAll(".mj-melds").forEach((el) => el.remove());
+    if (!melds.length) return;
+    // 置き場所は、ツモ牌の枠も埋まっているものとして決める（14 − 3 × 副露の数）。
+    // ツモったときと、ほかの人の番とで、副露の位置が動かないように（ツモ牌の枠は、空けておく）
+    const count = Math.min(2 * COLUMNS - 1, Math.max(tiles.length, 14 - 3 * melds.length));
+    const width = grid.clientWidth || 343;
+    const cell = (width - (COLUMNS - 1) * GRID_GAP) / COLUMNS;
+    const units = melds.map((m) => (m.tiles || []).reduce((sum, t) => sum + (t.side ? SIDE : 1), 0));
+    // 牌の幅の合計（縮める）と、すきまの合計（縮めない）を分けて数える
+    const body = (indexes) => indexes.reduce((sum, i) => sum + units[i] * cell, 0);
+    const gaps = (indexes) =>
+      indexes.reduce((sum, i) => sum + Math.max(0, (melds[i].tiles || []).length - 1) * 1, 0) + Math.max(0, indexes.length - 1) * MELD_GAP;
+    const span = (n) => n * cell + (n - 1) * GRID_GAP;
+    const all = melds.map((_, i) => i);
+    const strips = [];
+    if (count > COLUMNS) {
+      // 手牌が 2 段目にかかる（副露 1〜2 組）：2 段目の残りに、全部を入りきる大きさで置く（3 段目は作らない）
+      strips.push({ start: count - COLUMNS + 1, cols: 2 * COLUMNS - count, items: all });
+    } else {
+      // 手牌が 1 段に収まる（副露 3〜4 組）：1 段目の残りに、あまり縮めずに入るぶんだけ置き、残りは 2 段目に置く
+      const free = COLUMNS - count;
+      let next = 0;
+      if (free >= 3) {
+        const room = span(free);
+        const taken = [];
+        while (next < melds.length && body([...taken, next]) * MIN_SCALE + gaps([...taken, next]) <= room) taken.push(next++);
+        if (taken.length) strips.push({ start: count + 1, cols: free, items: taken });
+      }
+      if (next < melds.length) strips.push({ start: 1, cols: COLUMNS, items: all.slice(next) });
+    }
+    for (const strip of strips) {
+      const box = document.createElement("div");
+      box.className = "mj-melds";
+      box.style.gridColumn = strip.start + " / span " + strip.cols;
+      // 段の高さは、牌 1 枚の高さのまま（副露が小さくても、確定のボタンの位置が上下しないように）
+      box.style.minHeight = (cell * SIDE).toFixed(1) + "px";
+      box.setAttribute("role", "group");
+      box.setAttribute("aria-label", "副露");
+      const scale = Math.min(1, (span(strip.cols) - gaps(strip.items)) / body(strip.items));
+      const w = Math.floor(cell * scale * 10) / 10;
+      for (const i of strip.items) {
+        const meld = document.createElement("span");
+        meld.className = "mj-meld";
+        meld.setAttribute("aria-label", melds[i].label || "副露");
+        for (const t of melds[i].tiles || []) {
+          const holder = document.createElement("span");
+          holder.className = "mj-mtile" + (t.side ? " mj-side" : "");
+          holder.style.width = (t.side ? w * SIDE : w) + "px";
+          holder.style.height = (t.side ? w : w * SIDE) + "px";
+          const img = document.createElement("img");
+          img.alt = "";
+          img.src = t.src;
+          img.draggable = false;
+          if (t.side) {
+            img.style.width = w + "px";
+            img.style.height = w * SIDE + "px";
+          }
+          holder.appendChild(img);
+          meld.appendChild(holder);
+        }
+        box.appendChild(meld);
+      }
+      grid.appendChild(box);
+    }
+  }
+
   confirm.onclick = send;
   riichi.onclick = () => {
     if (!canDiscard || state.pending || !riichiIds.size) return;
@@ -250,8 +360,12 @@ export default function (component) {
   root.classList.toggle("mj-locked", data.enabled && !canDiscard);
   refresh();
 
-  // 画面から外れるときはタイマーを止める
+  // 画面から外れるときはタイマーと、大きさの見張りを止める
   return () => {
     if (state.timer) clearTimeout(state.timer);
+    if (state.observer) {
+      state.observer.disconnect();
+      state.observer = null;
+    }
   };
 }

@@ -18,11 +18,12 @@ def _code_state() -> dict:
 # コードが更新されていたら、古いまま残っている自作モジュールを捨てる（理由は ui/fresh.py）。
 # 見張り役のモジュール自身が古いと役に立たないので、これだけは毎回読み直す。
 sys.modules.pop("ui.fresh", None)
+_fresh = importlib.import_module("ui.fresh")
 _state = _code_state()
-_changed = importlib.import_module("ui.fresh").drop_stale_modules(
-    Path(__file__).resolve().parent, ("engine", "ui"), _state, data_folders=("data",)
-)
-if _changed:
+_changed = _fresh.drop_stale_modules(Path(__file__).resolve().parent, ("engine", "ui"), _state, data_folders=("data",))
+# Streamlit も、ページ（views/）などが書き換わると、自作モジュールを捨てて読み直させる。そのときも型が作り直される
+_replaced = _fresh.module_replaced(_state, importlib.import_module("engine.tiles"))
+if _changed or _replaced:
     _state["generation"] = _state.get("generation", 0) + 1
 # いま動いているコードの世代。ページは、これが変わったら、セッションに残っている古い型のオブジェクトを作り直す
 st.session_state["mj_generation"] = _state.get("generation", 0)

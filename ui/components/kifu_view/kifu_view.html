@@ -1,0 +1,19 @@
+<div class="kf-root">
+  <div class="kf-head"></div>
+  <div class="kf-caption" aria-live="polite"></div>
+  <div class="kf-controls">
+    <div class="kf-nav">
+      <button type="button" class="kf-btn" data-go="first" aria-label="最初へ">⏮</button>
+      <button type="button" class="kf-btn" data-go="prev" aria-label="1 手戻る">◀</button>
+      <button type="button" class="kf-btn kf-main" data-go="next" aria-label="1 手進む">▶</button>
+      <button type="button" class="kf-btn" data-go="last" aria-label="最後へ">⏭</button>
+    </div>
+    <div class="kf-nav">
+      <button type="button" class="kf-btn kf-mine" data-go="prevMine">◀ 前の自分の判断</button>
+      <button type="button" class="kf-btn kf-mine" data-go="nextMine">次の自分の判断 ▶</button>
+    </div>
+  </div>
+  <input class="kf-slider" type="range" min="0" max="0" step="1" value="0" aria-label="手順の位置" />
+  <div class="kf-board"></div>
+  <div class="kf-legend">薄い牌：ツモ切り。とても薄い牌：鳴かれた牌。オレンジの枠：いちばん最近の捨て牌。横向き：リーチ宣言牌。手牌の右：<ruby>副露<rt>フーロ</rt></ruby>（横向きの牌が鳴いた牌、<ruby>暗槓<rt>アンカン</rt></ruby>は両端が裏向き）。</div>
+</div>

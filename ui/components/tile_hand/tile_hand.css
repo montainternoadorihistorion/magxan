@@ -202,6 +202,67 @@
   background: #b25e00;
 }
 
+/* 鳴き（ポン・チー・カン）。あがり（緑）・切る（赤）と見分けられるように、青にする */
+.mj-action.mj-action-call {
+  background: #2f5f9e;
+}
+
+.mj-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mj-action-tiles {
+  display: inline-flex;
+  gap: 1px;
+}
+
+.mj-action-tiles img {
+  display: block;
+  width: 18px;
+  height: 24px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+
+/* 副露（鳴いた面子と暗槓）。手牌の続きの空いたところに、右に寄せて置く */
+.mj-melds {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mj-meld {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.mj-mtile {
+  position: relative;
+  display: inline-block;
+  flex: none;
+}
+
+.mj-mtile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 横向きの牌：縦向きの牌の画像を 90 度まわして、枠の中に収める */
+.mj-mtile.mj-side img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
 .mj-confirm[hidden] {
   display: none;
 }

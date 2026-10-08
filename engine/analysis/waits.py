@@ -85,7 +85,12 @@ def waits_of(
 
 
 def wait_kinds(hand: Sequence[int]) -> tuple[int, ...]:
-    """聴牌形の待ち牌の種類（形の上での待ち。残り枚数は見ない）"""
+    """聴牌形の待ち牌の種類（形の上での待ち。残り枚数は見ない）。
+
+    手は 13 − 3n 枚（n は副露の数）。鳴いた直後の 14 − 3n 枚の手（まだ切っていない）には、待ちが無いので空を返す。
+    """
+    if len(hand) % 3 != 1:
+        return ()
     result = acceptance(counts34(hand), [4] * 34)
     return tuple(kind for kind, _ in result.tiles) if result.shanten == 0 else ()
 

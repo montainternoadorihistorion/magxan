@@ -166,6 +166,7 @@ img.mj-img.mj-s { display: inline-block; width: 18px; vertical-align: middle; }
 .mj-headline.good, .mj-review.good { border-left-color: #2e9d57; }
 .mj-headline.soso, .mj-review.soso { border-left-color: #e8a400; }
 .mj-headline.bad, .mj-review.bad { border-left-color: #d9534f; }
+.mj-headline.call { border-left-color: #2f5f9e; }
 .mj-stage { font-size: 1.05rem; }
 .mj-dimtext { opacity: 0.7; font-size: 13.5px; }
 .mj-icon { display: inline-block; min-width: 1.3em; text-align: center; font-weight: 700; }
@@ -332,6 +333,7 @@ div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] p { font-weigh
 /* いちばん最近に切った牌（点数の右下）。自分が最後に行動したあとに切られた牌には枠を付ける */
 .mj-seat img.mj-img.mj-seat-tile { position: absolute; right: 4px; bottom: 4px; width: 17px; }
 .mj-seat img.mj-seat-tile.mj-tg { opacity: 0.6; }
+.mj-seat img.mj-seat-tile.mj-called { opacity: 0.28; }
 .mj-seat img.mj-seat-tile.mj-new { outline: 2px solid #e8a400; outline-offset: 0; opacity: 1; }
 /* 幅の狭い画面では、点数（100,000 点を超えることもある）と重なるので、最新の捨て牌は出さない（手牌の下の 1 行と河にある） */
 @media (max-width: 350px) {
@@ -383,6 +385,27 @@ div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] p { font-weigh
 .mj-settle td:first-child { white-space: nowrap; }
 .mj-reveal { border-bottom: 1px solid rgba(128, 128, 128, 0.25); padding: 6px 0 8px; }
 .mj-reveal .mj-hand { margin-top: 2px; }
+/* 鳴いた数（点数の札の右上。リーチの印と同じ場所。鳴いた人はリーチできないので、両方が出ることはない） */
+.mj-seat .mj-seat-naki { position: absolute; right: 3px; top: -7px; padding: 0 5px; border-radius: 999px; background: #2f5f9e; color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1.4; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6); }
+/* 鳴かれた捨て牌（鳴いた人の副露に入った）は、薄くする */
+.mj-river img.mj-called { opacity: 0.28; }
+/* 副露（河の下・局の終わりの手牌の横）。鳴いた牌は横向き、暗槓は両端を裏向き */
+.mj-mfuros { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px 8px; margin-top: 4px; }
+/* 副露の段の見出し（「鳴き」「暗槓」）。河の牌と見分けられるように */
+.mj-mf-label { align-self: center; padding: 0 5px; border-radius: 4px; background: rgba(47, 95, 158, 0.12); color: inherit; font-size: 11px; line-height: 1.6; }
+.mj-mfuro { display: inline-flex; align-items: flex-end; gap: 1px; }
+.mj-mf { display: inline-flex; align-items: flex-end; width: 20px; height: 27px; }
+.mj-mf img.mj-img.mj-s { width: 20px; }
+.mj-mf.mj-mf-side { width: 27px; height: 20px; align-items: center; justify-content: center; }
+.mj-mf.mj-mf-side img.mj-img.mj-s { transform: rotate(-90deg); }
+/* 鳴きの判断の表 */
+.mj-call-table td { vertical-align: top; font-size: 13px; line-height: 1.7; }
+.mj-call-table td:first-child { white-space: nowrap; }
+.mj-call-table img.mj-img.mj-s { width: 20px; }
+.mj-yaku-good { font-weight: 700; color: #23784a; }
+.mj-yaku-soso { font-weight: 700; color: #9a6400; }
+.mj-yaku-bad { font-weight: 700; color: #c0392b; }
 </style>
 """
 

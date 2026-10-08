@@ -25,42 +25,46 @@ MAX_RECORDS = 300
 #: 卒業の目安（docs/DESIGN.md の 9 章）。補正 0・CPU ふつう・ヒントなしの東風戦で数える
 GOAL_GAMES = 30
 GOAL_RANK = 2.5
-GOAL_DEAL_IN = 0.12
+GOAL_DEAL_IN = 0.15
+#: 見落とし・役なしの鳴きは、直近この数の対局で 0 回
 GOAL_MISS_GAMES = 10
 
 
 @dataclass(frozen=True)
 class Tally:
-    """1 対局のあいだに数える、自分の打牌の評価"""
+    """1 対局のあいだに数える、自分の打牌と鳴きの評価"""
 
     decisions: int = 0          # 自分で選んだ打牌の回数
     followed: int = 0           # そのうち、コーチのおすすめと同じ牌を切った回数
     defense: int = 0            # リーチを受けていて、オリるべき局面での打牌の回数
     safe: int = 0               # そのうち、いちばん安全な牌を切れた回数
+    calls: int = 0              # 自分が鳴いた回数（チー・ポン・大明槓）
+    bad_calls: int = 0          # そのうち、役なしの鳴き（鳴いたあとの手に役が見えない）
 
     def add(self, other: Tally) -> Tally:
         return Tally(
-            self.decisions + other.decisions, self.followed + other.followed, self.defense + other.defense, self.safe + other.safe
+            self.decisions + other.decisions, self.followed + other.followed, self.defense + other.defense, self.safe + other.safe,
+            self.calls + other.calls, self.bad_calls + other.bad_calls,
         )
 
     def to_dict(self) -> dict[str, int]:
-        return {"n": self.decisions, "f": self.followed, "d": self.defense, "s": self.safe}
+        return {"n": self.decisions, "f": self.followed, "d": self.defense, "s": self.safe, "c": self.calls, "b": self.bad_calls}
 
     @classmethod
     def from_dict(cls, data: object) -> Tally:
-        """形がおかしければ、0 から数え直す（記録の一部なので、読めないだけで止めない）"""
+        """形がおかしければ、0 から数え直す（記録の一部なので、読めないだけで止めない）。鳴きの数が無い記録（鳴きの無かったころ）は 0"""
         if not isinstance(data, dict):
             return cls()
         values = []
-        for name in ("n", "f", "d", "s"):
+        for name in ("n", "f", "d", "s", "c", "b"):
             value = data.get(name, 0)
             if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 10_000:
                 return cls()
             values.append(value)
-        decisions, followed, defense, safe = values
-        if followed > decisions or safe > defense or defense > decisions:
+        decisions, followed, defense, safe, calls, bad_calls = values
+        if followed > decisions or safe > defense or defense > decisions or bad_calls > calls:
             return cls()
-        return cls(decisions, followed, defense, safe)
+        return cls(decisions, followed, defense, safe, calls, bad_calls)
 
 
 @dataclass(frozen=True)
@@ -93,8 +97,8 @@ class GameRecord:
 
     @property
     def key(self) -> tuple:
-        """集計の条件"""
-        return (self.length, self.cpu_level, self.deal, self.draw, self.cpu_deal, self.cpu_draw, self.hinted)
+        """集計の条件（初期値と違うルールも含める。鳴きなしの対局と、鳴きありの対局を混ぜない）"""
+        return (self.length, self.cpu_level, self.deal, self.draw, self.cpu_deal, self.cpu_draw, self.hinted, self.rules)
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -106,6 +110,7 @@ class GameRecord:
         }
         if self.rules:
             data["rules"] = dict(self.rules)
+        data["naki"] = 1            # 鳴きのある対局を打てるようになってから（Phase 4 から）の記録の印
         return data
 
     @classmethod
@@ -132,7 +137,11 @@ class GameRecord:
         if not isinstance(rules, dict):
             raise ValueError("記録の値がおかしい: rules")
         # 知らないルールや、おかしな値は捨てる（画面に出すのは、知っている項目の違いだけ）
-        kept = tuple(sorted((name, value) for name, value in rules.items() if name in known and type(value) is type(known[name])))
+        kept_rules = {name: value for name, value in rules.items() if name in known and type(value) is type(known[name])}
+        if data.get("naki") != 1:
+            # 鳴きの無かったころ（Phase 3）の記録：鳴きなしのルールで打った対局として数える（卒業の目安には入れない）
+            kept_rules["calls"] = False
+        kept = tuple(sorted((name, value) for name, value in kept_rules.items() if known[name] != value))
         return cls(
             time=number("t", 0, 10**11),
             seed=number("seed", 0, 10**12),
@@ -239,6 +248,7 @@ class Summary:
     misses: int
     score_total: int
     tally: Tally
+    rules: tuple[tuple[str, object], ...] = ()     # 初期値と違うルール（名前, 値）
 
     @property
     def plain(self) -> bool:
@@ -267,7 +277,7 @@ class Summary:
 
 
 def _summary(key: tuple, items: Sequence[GameRecord]) -> Summary:
-    length, level, deal, draw, cpu_deal, cpu_draw, hinted = key
+    length, level, deal, draw, cpu_deal, cpu_draw, hinted, rules = key
     ranks = [0, 0, 0, 0]
     tally = Tally()
     for record in items:
@@ -286,6 +296,7 @@ def _summary(key: tuple, items: Sequence[GameRecord]) -> Summary:
         misses=sum(r.misses for r in items),
         score_total=sum(r.score for r in items),
         tally=tally,
+        rules=rules,
     )
 
 
@@ -295,19 +306,23 @@ def summarize(records: Iterable[GameRecord]) -> list[Summary]:
     for record in records:
         groups.setdefault(record.key, []).append(record)
     result = [_summary(key, items) for key, items in groups.items()]
-    result.sort(key=lambda s: (not s.plain, s.length != Length.EAST.value, s.cpu_level != CpuLevel.NORMAL.value,
-                               s.deal + s.draw, s.cpu_deal + s.cpu_draw, s.hinted, s.deal, s.draw))
+    result.sort(key=lambda s: (not s.plain, bool(s.rules), s.length != Length.EAST.value, s.cpu_level != CpuLevel.NORMAL.value,
+                               s.deal + s.draw, s.cpu_deal + s.cpu_draw, s.hinted, s.deal, s.draw, repr(s.rules)))
     return result
 
 
 @dataclass(frozen=True)
 class Graduation:
-    """卒業の目安の進み具合（補正 0・CPU ふつう・ヒントなしの東風戦の、直近の対局）"""
+    """卒業の目安の進み具合（補正 0・CPU ふつう・ヒントなし・初期のルール（鳴きあり）の東風戦の、直近の対局）"""
 
     games: int                  # 数えた対局数（多くても GOAL_GAMES）
     average_rank: float | None
     deal_in_rate: float | None
     recent_misses: int          # 直近 GOAL_MISS_GAMES 戦の、見落としの回数
+    recent_bad_calls: int = 0   # 直近 GOAL_MISS_GAMES 戦の、役なしの鳴きの回数
+    recent_calls: int = 0       # 直近 GOAL_MISS_GAMES 戦の、鳴いた回数
+    hands: int = 0              # 数えた対局の、局の数の合計（放銃率の分母）
+    deal_ins: int = 0           # そのうち、自分が放銃した局の数
 
     @property
     def enough(self) -> bool:
@@ -326,8 +341,13 @@ class Graduation:
         return self.games >= GOAL_MISS_GAMES and self.recent_misses == 0
 
     @property
+    def calls_ok(self) -> bool:
+        """役なしの鳴きをしない（直近 GOAL_MISS_GAMES 戦で 0 回）"""
+        return self.games >= GOAL_MISS_GAMES and self.recent_bad_calls == 0
+
+    @property
     def passed(self) -> bool:
-        return self.enough and self.rank_ok and self.deal_in_ok and self.misses_ok
+        return self.enough and self.rank_ok and self.deal_in_ok and self.misses_ok and self.calls_ok
 
 
 def graduation(records: Sequence[GameRecord]) -> Graduation:
@@ -338,11 +358,17 @@ def graduation(records: Sequence[GameRecord]) -> Graduation:
     if not eligible:
         return Graduation(0, None, None, 0)
     hands = sum(r.hands for r in eligible)
+    deal_ins = sum(r.deal_ins for r in eligible)
+    recent = eligible[-GOAL_MISS_GAMES:]
     return Graduation(
         games=len(eligible),
         average_rank=sum(r.rank for r in eligible) / len(eligible),
-        deal_in_rate=sum(r.deal_ins for r in eligible) / hands if hands else None,
-        recent_misses=sum(r.misses for r in eligible[-GOAL_MISS_GAMES:]),
+        deal_in_rate=deal_ins / hands if hands else None,
+        recent_misses=sum(r.misses for r in recent),
+        recent_bad_calls=sum(r.tally.bad_calls for r in recent),
+        recent_calls=sum(r.tally.calls for r in recent),
+        hands=hands,
+        deal_ins=deal_ins,
     )
 
 
@@ -401,6 +427,7 @@ def rules_text(rules: Mapping[str, object] | Sequence[tuple[str, object]]) -> st
         "kiriage_mangan": ("切り上げ満貫あり", "切り上げ満貫なし"),
         "double_yakuman": ("ダブル役満あり", "ダブル役満なし"),
         "kazoe_yakuman": ("数え役満あり", "数え役満なし"),
+        "calls": ("鳴きあり", "鳴きなし"),
     }
     items = dict(rules)
     words = []

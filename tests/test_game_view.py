@@ -85,6 +85,28 @@ def test_free_headline_puts_the_acceptance_on_the_second_line():
     assert head_width(head) <= HEAD_CHARS
 
 
+#: 鳴いた手の例（自分は 345萬 をチーしている）のほかの 3 人の手牌
+OPEN_OTHERS = ["147m258p369s1234z", "19m19p19s5z5z6z6z7z7z2s", "258m147p369s6m7m9s1z"]
+
+
+def test_open_hand_headline_says_which_yaku_is_kept():
+    """鳴いた手で、役を残すために、速さだけの牌と違う牌をすすめるときは、下の行に「何を残すか」と「速さだけなら」を書く"""
+    hand = build_hand(["67p234s55s88p9p", *OPEN_OTHERS], melds=["c345m", "", "", ""], turn=0, drawn="4z")
+    head, sub = lines_of(advice_headline_html(turn_advice(hand, HUMAN), hand, rb(), win=None, can_nine=False))
+    assert head == "1 向聴　おすすめ： 9筒 切り" and sub == "断么九を残す（速さだけなら 北 切りで聴牌）"
+    # 聴牌にとるときも：待ちの広い聴牌（6索 切り：1索・4索 待ち）には、役が無い
+    tenpai = build_hand(["234567p1234s", *OPEN_OTHERS], melds=["c345m", "", "", ""], turn=0, drawn="6s")
+    advice = turn_advice(tenpai, HUMAN)
+    assert kind_of(advice.analysis.pick.tile) == k("6s") and kind_of(advice.pick) == k("1s")
+    head, sub = lines_of(advice_headline_html(advice, tenpai, rb(), win=None, can_nine=False))
+    assert head == "聴牌にとれます　 1索 切り" and sub == "待ち 1 種 3 枚・6索 切りは役なし"
+    assert head_width(head) <= HEAD_CHARS
+    # 速さが同じ牌の中から、役を残せる牌を選んだとき（速さだけなら 中 だが、速さは変わらない）
+    same = build_hand(["4789m2789p7s7z", *OPEN_OTHERS], melds=["p444z", "", "", ""], turn=0, drawn="1p")
+    head, sub = lines_of(advice_headline_html(turn_advice(same, HUMAN), same, rb(), win=None, can_nine=False))
+    assert head == "1 向聴　おすすめ： 4萬 切り" and sub == "受け入れ 3 種 10 枚・混全帯么九を残す"
+
+
 def _threat_hand(mine: str, drawn: str, *, two: bool = False) -> g.HandState:
     return build_hand(
         [mine, "234m567m78p345s66s", "222z444z666z1m2m3m8m", "258p369s147m3z6z7z5z"],
@@ -228,8 +250,14 @@ def test_graduation_is_written_in_words():
     from engine.game_records import Graduation
     from ui.game_view import graduation_html
 
-    text = text_of(graduation_html(Graduation(5, 2.2, 0.05, 0), rb()))
+    text = text_of(graduation_html(Graduation(5, 2.2, 0.05, 0, hands=40, deal_ins=2), rb()))
     assert "対局数：5 / 30（あと 25 回）" in text and "平均順位：2.20（目標 2.5 以下：達成）" in text
-    assert "放銃率：5%（目標 12% 以下：達成）" in text and "10 戦そろったら判定" in text and "…" not in text
-    done = text_of(graduation_html(Graduation(30, 2.4, 0.1, 0), rb()))
+    assert "放銃率：5.0%（40 局で 2 回。目標 15% 以下：達成）" in text and "10 戦そろったら判定" in text and "…" not in text
+    assert "初期のルール（鳴きあり）" in text and "鳴きなし・ルールを変えた対局" in text
+    done = text_of(graduation_html(Graduation(30, 2.4, 0.1, 0, hands=170, deal_ins=17), rb()))
     assert "すべての目標を達成した" in done
+    # 目標の境目：151 局で 23 回（15.23%）は「まだ」。丸めた値（15%）と食い違って見えないように、小数 1 桁で書く
+    near = text_of(graduation_html(Graduation(30, 2.4, 23 / 151, 0, hands=151, deal_ins=23), rb()))
+    assert "放銃率：15.2%（151 局で 23 回。目標 15% 以下：まだ）" in near
+    empty = text_of(graduation_html(Graduation(0, None, None, 0), rb()))
+    assert "まだ数えられる対局がありません" in empty and "鳴きの入る前の版で打った対局" in empty
