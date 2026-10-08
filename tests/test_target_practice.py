@@ -18,6 +18,7 @@ from engine.analysis.ukeire import acceptance
 from engine.coach import Position
 from engine.luck import LuckSettings, aim_deal, target_goal
 from engine.practice import TSUMO, PracticeConfig, discard, riichi
+from engine.scoring.context import WinContext
 from engine.scoring.explain import explain
 from engine.scoring.notation import make_context
 from engine.target_coach import TargetGrade, judge_target, target_advice, target_result
@@ -335,3 +336,90 @@ def test_target_result_tells_whether_the_yaku_was_made():
     assert result("menzen_tsumo", "123m456p789s13s44z", "2s").made
     assert not result("riichi", "123m456p789s13s44z", "2s").achieved         # リーチしていない
     assert result("yakuhai", "123m456p789s13s44z", "2s").check is None
+
+
+# ---------------------------------------------------------------- 「聴牌」「あがり」は点数計算で確かめる
+
+
+def _pos(hand: str, *, drawn: str = "", visible: str = "") -> Position:
+    """文字で書いた局面（南家・東場）"""
+    used: set[int] = set()
+
+    def take(text: str) -> tuple[int, ...]:
+        tiles = parse_tiles(text, used=used)
+        used.update(tiles)
+        return tuple(tiles)
+
+    tiles = take(hand)
+    seen = take(visible)
+    drawn_tile = next(t for t in tiles if kind_of(t) == kind_of(parse_tiles(drawn)[0])) if drawn else None
+    return Position(tiles=tiles, visible=seen, dora_indicators=(), drawn=drawn_tile, draws_left=10, can_riichi=True, **WINDS)
+
+
+def _credits(counts13: list[int], kind: int, key: str) -> bool:
+    """13 枚 ＋ その牌のツモで、その役が数えられるか（点数計算そのもので確かめる）"""
+    tiles = [k * 4 + i for k in range(34) for i in range(counts13[k])]
+    win = kind * 4 + counts13[kind]
+    result = explain(WinContext(closed_tiles=(*tiles, win), win_tile=win, is_tsumo=True, **WINDS))
+    return result.best is not None and any(item.key == key for item in result.best.evaluation.yaku)
+
+
+def test_pinfu_tenpai_is_only_claimed_with_a_two_sided_wait():
+    """嵌張待ちの聴牌は、平和の聴牌と言わない（点検で見つかった例：123m234p234s6679s ＋東）"""
+    pos = _pos("123m234p234s6679s1z")
+    advice = target_advice(pos, "pinfu")
+    assert not advice.won and advice.pick is not None
+    assert advice.pick.kind == kind_of(parse_tiles("1z")[0]) and advice.pick.distance == 1     # 東を切っても、あと 2 枚
+    counts = counts34(pos.tiles)
+    for candidate in advice.candidates:
+        if candidate.distance == 0:                       # 「平和の聴牌」と言う切り方は、待ちのどれでも平和が付く
+            counts[candidate.kind] -= 1
+            assert candidate.closer and all(_credits(counts, kind, "pinfu") for kind, _ in candidate.closer)
+            counts[candidate.kind] += 1
+
+
+def test_every_tenpai_claim_of_the_coach_is_true_for_pinfu():
+    """コーチのおすすめどおりに打って、「平和の聴牌」と言った局面は、どれも本当に平和が付く待ち"""
+    claims = 0
+    for seed in range(8):
+        state = practice.start(PracticeConfig(seed=seed, luck=LuckSettings(75, 75), target="pinfu"))
+        while not state.finished and not state.can_tsumo:
+            advice = target_advice(practice.position_of(state), "pinfu")
+            pick = advice.pick
+            if pick is not None and pick.distance == 0:
+                claims += 1
+                counts = counts34(state.tiles)
+                counts[pick.kind] -= 1
+                assert all(_credits(counts, kind, "pinfu") for kind, _ in pick.closer), (seed, state.tiles)
+            state = practice.apply(state, discard(pick.tile if pick else state.drawn))
+    assert claims >= 3
+
+
+def test_a_winning_shape_without_the_yaku_keeps_the_advice():
+    """あがりの形でも狙った役が付かないとき（高点法で三暗刻と読む、など）は、あがっていない扱い。狙い続ける切り方を示す"""
+    from engine.target_coach import approach_tiles, wins_now
+
+    pos = _pos("66m555666777p678s", drawn="8s")             # 567筒 3 組は、555・666・777 とも読める（三暗刻が高い）
+    assert not wins_now(pos, "pinfu")
+    advice = target_advice(pos, "pinfu")
+    assert not advice.won and advice.pick is not None and advice.pick.closer
+    verdict = judge_target(advice, advice.pick.tile, pos)
+    assert verdict is not None and verdict.grade is TargetGrade.BEST
+    # 8索 を切って戻す 13 枚は、形は平和の聴牌でも、どちらであがっても三暗刻の読み方になる：聴牌とは言わない
+    back = counts34(parse_tiles("66m555666777p67s"))
+    assert tg.target_distance(back, "pinfu", **WINDS) == 0 and approach_tiles(back, "pinfu", **WINDS) == ()
+    assert advice.candidate(kind_of(parse_tiles("8s")[0])).distance == 1
+
+
+def test_approach_tiles_at_tenpai_are_the_waits_that_give_the_yaku():
+    from engine.target_coach import approach_tiles
+
+    def kinds(text: str) -> tuple[int, ...]:
+        return tuple(sorted({kind_of(t) for t in parse_tiles(text)}))
+
+    assert approach_tiles(counts34(parse_tiles("123m456p789s23s44z")), "pinfu", **WINDS) == kinds("14s")
+    assert approach_tiles(counts34(parse_tiles("234m234p23s789m44z")), "sanshoku", **WINDS) == kinds("4s")    # 1索 は安目
+    kanchan = counts34(parse_tiles("123m456p789s13s44z"))
+    assert tg.target_distance(kanchan, "pinfu", **WINDS) == 1 and approach_tiles(kanchan, "pinfu", **WINDS)
+    # 手の形を問わない役は、点数計算では確かめない（リーチなどの状況で付く役なので）
+    assert approach_tiles(counts34(parse_tiles("123m456p789s13s44z")), "riichi", **WINDS) == kinds("2s")

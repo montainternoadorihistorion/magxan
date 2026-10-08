@@ -23,7 +23,6 @@ from ui.practice_view import (
     LEVEL_FULL,
     LEVEL_MIN,
     LEVEL_NORMAL,
-    SHAPELESS_TIPS,
     TARGET_GUIDE,
     advice_headline_html,
     candidates_html,
@@ -47,6 +46,7 @@ from ui.practice_view import (
     river_html,
     rounded,
     shanten_html,
+    shapeless_tip,
     stamps_html,
     stats_html,
     status_html,
@@ -56,6 +56,7 @@ from ui.practice_view import (
     target_headline_html,
     target_name,
     target_result_html,
+    target_speed_note_html,
     target_stats_html,
     target_verdict_headline_html,
     target_verdict_html,
@@ -213,11 +214,15 @@ def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()
                 pieces.append((plain_headline_html("自分で考えて切ってください。切ったあとに、答え合わせを表示します。", ruby), 0))
         else:
             pieces.append((plain_headline_html("コーチはオフです。下の「設定」で、ヒントを出すように変えられます。", ruby), 0))
+        aim_on = advice is not None and advice.pick is not None and not (state.can_tsumo and state.draws_left == 0)
+        if aim_on:
+            pieces.append((target_speed_note_html(advice, analysis, ruby), 0))
         if state.last_draw.luck.swapped:
             pieces.append((draw_note_html(state.last_draw, ruby, aka=True), 0))
         pieces.append((river_html(state, ruby), 0))
-        if target in SHAPELESS_TIPS and hint != "off":
-            pieces.append((note_html(f"{target_name(target)}を狙う局：{SHAPELESS_TIPS[target]}", ruby), 0))
+        tip = shapeless_tip(state) if hint != "off" else ""
+        if tip:
+            pieces.append((note_html(tip, ruby), 0))
         if hint != "off" and last is not None:
             if last.target is not None:
                 pieces.append((target_verdict_html(last, ruby, level=level, aka=True), 0))
@@ -234,9 +239,9 @@ def page_pieces(state, decisions, *, hint: str, level: int, history=(), fresh=()
                     lambda r: shanten_html(last.analysis, r) + candidates_html(last.analysis, r, chosen_kind=last.verdict.chosen.kind),
                     "さっきの局面の受け入れ表（答え合わせ）",
                 )
-        if advice is not None and level >= LEVEL_NORMAL:
+        if advice is not None and not advice.won and level >= LEVEL_NORMAL:
             folded(lambda r: plan_html(advice.plan, r), f"めざす形（{advice.name}）")
-            if advice.pick is not None and not state.can_tsumo:
+            if aim_on:
                 folded(lambda r: target_candidates_html(advice, r, aka=True), f"{advice.name}に近い切り方の表")
         if analysis is not None and not analysis.can_win and level >= LEVEL_NORMAL:
             if analysis.waits and not analysis.last_discard and advice is None:
@@ -819,18 +824,23 @@ def test_target_headline_names_the_distance_and_the_discard():
     advice, analysis = target_advice(pos, "sanshoku"), analyze(pos)
     html = target_headline_html(advice, analysis, rb(), can_riichi=True)
     text = text_of(html)
-    assert text.startswith("三色同順の聴牌にとれます　 5索 を切ると、三色同順になる待ちは 1 種 4 枚")
-    assert "速さだけなら  2索 切り（聴牌）。役を狙うぶん、遠回りになる。" in text
+    # 見出しは 1 行ぶんだけ（高さが巡ごとに変わると、手牌の位置が動く）。速さだけのおすすめとの違いは、手牌の下に出す
+    assert text == "三色同順の聴牌にとれます　 5索 を切ると、三色同順になる待ちは 1 種 4 枚"
     check_tile_images(html)
     assert missing_ruby(ruby_parts(html)) == []
+    note = target_speed_note_html(advice, analysis, rb())
+    assert text_of(note) == "速さだけなら  2索 切り（聴牌）。役を狙うぶん、遠回りになる。"
+    check_tile_images(note)
 
     far = position(SANSHOKU_FAR)
-    text = text_of(target_headline_html(target_advice(far, "sanshoku"), analyze(far), rb(), can_riichi=False))
-    assert text.startswith("三色同順まで あと 3 枚　おすすめ： 3筒 切り（近づく牌 5 種 14 枚）") and "速さだけなら  1萬 切り（2 向聴）" in text
+    advice, analysis = target_advice(far, "sanshoku"), analyze(far)
+    assert text_of(target_headline_html(advice, analysis, rb(), can_riichi=False)) == "三色同順まで あと 3 枚　おすすめ： 3筒 切り（近づく牌 5 種 14 枚）"
+    assert text_of(target_speed_note_html(advice, analysis, rb())) == "速さだけなら  1萬 切り（2 向聴）。役を狙うぶん、遠回りになる。"
 
     same = position("19m19p19s1234567z5m", visible="777z")       # 役に近い切り方と、速い切り方が同じとき：比べる行は出さない
-    text = text_of(target_headline_html(target_advice(same, "kokushi"), analyze(same), rb(), can_riichi=False))
-    assert text == "国士無双の聴牌にとれます　 5萬 を切ると、国士無双になる待ちは 12 種 36 枚"
+    advice, analysis = target_advice(same, "kokushi"), analyze(same)
+    assert text_of(target_headline_html(advice, analysis, rb(), can_riichi=False)) == "国士無双の聴牌にとれます　 5萬 を切ると、国士無双になる待ちは 12 種 36 枚"
+    assert target_speed_note_html(advice, analysis, rb()) == ""
 
 
 def test_target_headline_when_the_yaku_can_no_longer_be_made():
@@ -850,8 +860,12 @@ def test_target_headline_on_a_winning_shape():
 
     missed = position("234m234p123s789m44z", drawn="1s")            # 安目であがりの形：三色同順は付かない
     result = won("sanshoku", "234m234p23s789m44z", "1s")
-    html = target_headline_html(target_advice(missed, "sanshoku"), analyze(missed), rb(), can_riichi=False, win=result)
-    assert text_of(html) == "あがりの形ですが、三色同順は付きません「ツモ」であがるか、1 枚切って三色同順を狙い続けるかを、選べます。" and "soso" in html
+    advice = target_advice(missed, "sanshoku")
+    assert not advice.won and advice.pick is not None                # 狙い続けるなら、どれを切るかも示す
+    html = target_headline_html(advice, analyze(missed), rb(), can_riichi=False, win=result)
+    assert text_of(html) == (
+        "あがりの形ですが、三色同順は付きません「ツモ」であがるか、三色同順を狙い続けるか。狙うなら  1索 切り（三色同順まで あと 1 枚）。"
+    ) and "soso" in html
 
     last = position("234m234p123s789m44z", drawn="1s", draws_left=0, can_riichi=False)
     text = text_of(target_headline_html(target_advice(last, "sanshoku"), analyze(last), rb(), can_riichi=False, win=result))
@@ -1029,3 +1043,61 @@ def test_exhausted_summary_tells_how_far_the_target_was():
     assert missing_ruby(ruby_parts(html)) == []
     assert "流局" in text and "狙った国士無双の完成まで、あと " in text
     assert html.index("流局") < html.index("ノーテンは") < html.index("狙った")        # 画面に出る順に作ってある
+
+
+# ---------------------------------------------------------------- 点検で見つかった食い違いの確かめ
+
+
+def test_double_riichi_tip_only_claims_tenpai_when_it_is_true():
+    from dataclasses import replace
+
+    def aimed(state):
+        return replace(state, config=replace(state.config, target="double_riichi"))
+
+    ready = aimed(start_on(crafted_wall(TENPAI_HAND, "9m")))              # 聴牌していて、最初の打牌
+    assert shapeless_tip(ready) == "ダブル立直を狙う局：いま聴牌している。最初の打牌で「リーチ」を押すと、ダブル立直になる。"
+    far = aimed(start_on(crafted_wall("1359m2468p13579s", "1z")))         # 聴牌していない
+    assert shapeless_tip(far).startswith("聴牌していないので、この局ではダブル立直を狙えない。")
+    later = practice.apply(ready, tsumogiri(ready))                        # 2 巡目より後
+    assert shapeless_tip(later) == "ダブル立直は、最初の打牌でリーチしたときだけ付く。この局では、もう狙えない。"
+    assert shapeless_tip(start_on(crafted_wall(TENPAI_HAND, "9m"))) == ""  # 役指定でない局
+    for state in (ready, far, later):
+        assert missing_ruby(ruby_parts(note_html(shapeless_tip(state), rb()))) == []
+
+
+def test_exhausted_summary_counts_only_tiles_still_in_play():
+    """流局したとき「あと N 枚だった」と言うのは、まだ手に入る牌で作れるときだけ"""
+    from dataclasses import replace
+
+    def finish(state):
+        while not state.finished:
+            state = practice.apply(state, tsumogiri(state))
+        return state
+
+    base = start_on(crafted_wall(TENPAI_HAND, "1111z9m5555z6666z7777z2z"))     # 東 4 枚が、ツモ切りで河に出る
+    lost = finish(replace(base, config=replace(base.config, target="kokushi")))
+    assert "狙った国士無双は、必要な牌が河などに見えてしまい、もう作れなかった。" in text_of(exhausted_html(lost, rb()))
+    near = finish(replace(base, config=replace(base.config, target="pinfu")))
+    assert "狙った平和の完成まで、あと 1 枚だった。" in text_of(exhausted_html(near, rb()))
+
+
+def test_candidates_table_explains_tenpai_that_does_not_give_the_yaku():
+    pos = position("123m234p234s6679s1z")
+    advice = target_advice(pos, "pinfu")
+    html = target_candidates_html(advice, rb(), aka=True)
+    assert "聴牌になる切り方でも、平和が付くあがり牌が無いものは、平和の聴牌と数えない。" in text_of(html)
+    assert missing_ruby(ruby_parts(html)) == []
+    headline = text_of(target_headline_html(advice, analyze(pos), rb(), can_riichi=True))
+    assert headline.startswith("平和まで あと 2 枚　おすすめ： 東 切り")                 # 「平和の聴牌にとれます」とは言わない
+
+
+def test_plan_of_a_tenpai_form_shows_the_two_sided_part():
+    from engine.analysis.target import target_plan
+    from engine.tiles import counts34, parse_tiles
+
+    plan = target_plan(counts34(parse_tiles("123m456p789s23s44z")), "pinfu", seat_wind=28, round_wind=27)
+    html = plan_html(plan, rb())
+    text = text_of(html)
+    assert plan.tenpai_form and "両面" in text and "足りない牌は無い（この形で聴牌）。" in text
+    assert "あがっている" not in text
+    assert missing_ruby(ruby_parts(html)) == []

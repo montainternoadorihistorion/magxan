@@ -123,6 +123,15 @@ def _trim(cards: dict[str, Card], keep: str | None = None) -> None:
         del cards[key]
 
 
+def is_text(value: str) -> bool:
+    """UTF-8 で書き出せる文字列か（JSON の「\\ud83c」のような、片方だけのサロゲートが入っていないか）"""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def deck_from_data(data: object) -> Deck:
     """保存した形から作る。全体が壊れていれば空の記録、壊れた 1 件はその 1 件だけ読み飛ばす"""
     if not isinstance(data, dict) or data.get("v") != DECK_VERSION:
@@ -130,7 +139,7 @@ def deck_from_data(data: object) -> Deck:
     cards = {}
     raw = data.get("cards")
     for key, value in (raw.items() if isinstance(raw, dict) else ()):
-        if not isinstance(key, str) or len(key) > 80:
+        if not isinstance(key, str) or len(key) > 80 or not is_text(key):
             continue
         try:
             cards[key] = Card.from_list(value)

@@ -12,6 +12,7 @@ from html import escape
 from engine.analysis.blocks import MENTSU_TYPES, PART_NAMES, TAATSU_TYPES, Part, PartType
 from engine.analysis.shanten import TENPAI, shanten_meaning, shanten_text
 from engine.analysis.target import SHAPELESS_KEYS, BlockKind, Plan, target_plan
+from engine.analysis.ukeire import remaining_counts
 from engine.coach import Analysis, Candidate, Grade
 from engine.content import yaku_page_map
 from engine.luck import PRESETS, deal_candidates, draw_probability, target_goal
@@ -494,9 +495,14 @@ def exhausted_html(state: PracticeState, rb: Rubifier) -> str:
     body = f'<div class="mj-sub">{rb.html(text)}</div>'        # 画面に出る順（結果 → 説明 → 狙った役まであと何枚）に作る
     key = state.config.target
     if key and key not in SHAPELESS_KEYS:
-        plan = target_plan(counts34(state.hand), key, seat_wind=state.seat_wind, round_wind=state.config.round_wind)
+        # 見えている牌（河・ドラ表示牌）は、もう手に入らない。それを考えて、あと何枚だったかを数える
+        available = remaining_counts(state.hand, state.visible)
+        plan = target_plan(counts34(state.hand), key, seat_wind=state.seat_wind, round_wind=state.config.round_wind, available=available)
+        name = target_name(key)
         if plan.possible:
-            body += f'<div class="mj-sub">{rb.html(f"狙った{target_name(key)}の完成まで、あと {plan.distance + 1} 枚だった。")}</div>'
+            body += f'<div class="mj-sub">{rb.html(f"狙った{name}の完成まで、あと {plan.missing} 枚だった。")}</div>'
+        else:
+            body += f'<div class="mj-sub">{rb.html(f"狙った{name}は、必要な牌が河などに見えてしまい、もう作れなかった。")}</div>'
     return f'<div class="mj-card">{verdict}{body}</div><div class="mj-hand">{tiles_fit_html(list(state.hand), aka=aka)}</div>'
 
 
@@ -749,8 +755,25 @@ SHAPELESS_TIPS = {
     "riichi": "聴牌したら「リーチ」を押して、切る牌を選ぶ。",
     "ippatsu": "聴牌したらリーチ。リーチのすぐ次のツモであがると、一発が付く。",
     "menzen_tsumo": "一人練習のあがりは、いつも門前のツモ。どんな形でも、あがれば付く。",
-    "double_riichi": "配牌で聴牌している。最初の打牌で「リーチ」を押すと、ダブル立直になる。",
+    "double_riichi": "いま聴牌している。最初の打牌で「リーチ」を押すと、ダブル立直になる。",
 }
+
+
+def shapeless_tip(state: PracticeState) -> str:
+    """手の形を問わない役を狙う局の、ひとことの案内（そういう局でなければ空）。
+
+    ダブル立直は、最初の打牌でリーチしたときだけ付く。聴牌していない局や、2 巡目より後では、そのことを言う。
+    """
+    target = state.config.target
+    if target not in SHAPELESS_TIPS:
+        return ""
+    name = target_name(target)
+    if target in DEAL_TENPAI_TARGETS:
+        if state.turn > 1:
+            return f"{name}は、最初の打牌でリーチしたときだけ付く。この局では、もう狙えない。"
+        if not state.riichi_discards:
+            return f"聴牌していないので、この局では{name}を狙えない。設定のツキ補正で「配牌の良さ」を上げると、配牌で聴牌するようになる。"
+    return f"{name}を狙う局：{SHAPELESS_TIPS[target]}"
 
 
 #: 役指定練習の効き具合の目安。tools/measure_target.py で、機械的な打ち手（役を狙うコーチのおすすめを切り、狙った役が付く
@@ -786,6 +809,7 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
     """役指定練習の、打つ前のヒント：役の完成まであと何枚かと、役に近い切り方。
 
     win は、いまの 14 枚であがったときに、狙った役が付くかどうか（あがりの形のときだけ渡す）。
+    見出しの高さが巡ごとに変わると手牌の位置が動くので、速さだけのおすすめとの違いは、target_speed_note_html で手牌の下に出す。
     """
     aka = analysis.position.rules.aka_dora
     name = advice.name
@@ -795,11 +819,16 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
             return _headline(f'<b class="mj-stage">あがりの形です。</b>{rb.html(what + "下の「ツモ」を押すと、あがれます。")}', "good")
         if analysis.last_discard:
             return _headline(f'<b class="mj-stage">あがりの形です。</b>{rb.html(f"{name}は付きませんが、最後のツモなので、あがりましょう。")}', "good")
-        return _headline(
-            f'<b class="mj-stage">{rb.html(f"あがりの形ですが、{name}は付きません")}</b>'
-            f'<br><span class="mj-sub">{rb.html(f"「ツモ」であがるか、1 枚切って{name}を狙い続けるかを、選べます。")}</span>',
-            "soso",
+        # 役の付かないあがりの形（嵌張待ちの平和、高点法でほかの読み方になる、など）：あがるか、狙い続けるかを選べる
+        stage = f'<b class="mj-stage">{rb.html(f"あがりの形ですが、{name}は付きません")}</b>'
+        pick = advice.pick
+        if pick is None:
+            return _headline(f'{stage}<br><span class="mj-sub">{rb.html(f"「ツモ」であがるか、1 枚切って{name}を狙い続けるかを、選べます。")}</span>', "soso")
+        choice = (
+            f'{rb.html(f"「ツモ」であがるか、{name}を狙い続けるか。狙うなら")} {_small(pick.tile, aka)} {escape(_name(pick.tile, aka))} '
+            f'{rb.html(f"切り（{name}まで あと {pick.missing} 枚）。")}'
         )
+        return _headline(f'{stage}<br><span class="mj-sub">{choice}</span>', "soso")
     if not advice.possible or advice.pick is None:
         lead = f'<span class="mj-chip mj-chip-luck">{rb.html(f"{name}は、もう作れない")}</span> '
         return advice_headline_html(analysis, rb, can_riichi=can_riichi, lead=lead)
@@ -810,13 +839,19 @@ def target_headline_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier,
         body = f'<b class="mj-stage">{rb.html(f"{name}の聴牌")}にとれます</b>　{what} {rb.html(f"を切ると、{name}になる待ちは {width}")}'
     else:
         body = f'<b class="mj-stage">{rb.html(f"{name}まで あと {pick.missing} 枚")}</b>　おすすめ：{what} {rb.html(f"切り（近づく牌 {width}）")}'
-    if advice.differs_from_speed:
-        speed = analysis.pick
-        body += (
-            f'<br><span class="mj-sub">{rb.html("速さだけなら")} {_small(speed.tile, aka)} {escape(_name(speed.tile, aka))} '
-            f'{rb.html(f"切り（{shanten_text(speed.shanten)}）。役を狙うぶん、遠回りになる。")}</span>'
-        )
     return _headline(body)
+
+
+def target_speed_note_html(advice: TargetAdvice, analysis: Analysis, rb: Rubifier) -> str:
+    """役を狙うおすすめが、速さだけのおすすめと違うとき、そのことを手牌の下に 1 行で出す（同じなら空）"""
+    if analysis.can_win or not advice.differs_from_speed:
+        return ""
+    aka = analysis.position.rules.aka_dora
+    speed = analysis.pick
+    return (
+        f'<div class="mj-sub mj-speed-note">{rb.html("速さだけなら")} {_small(speed.tile, aka)} {escape(_name(speed.tile, aka))} '
+        f'{rb.html(f"切り（{shanten_text(speed.shanten)}）。役を狙うぶん、遠回りになる。")}</div>'
+    )
 
 
 def target_verdict_headline_html(decision: Decision, rb: Rubifier, *, aka: bool) -> str:
@@ -873,7 +908,11 @@ def plan_html(plan: Plan, rb: Rubifier) -> str:
         groups.append(f'<div class="mj-block mj-part {cls}{small}"><div class="mj-block-tiles">{tiles_of(block)}</div>{caption}</div>')
     parts = [f'<div class="mj-blocks{"" if regular else " mj-blocks-tight"}">{"".join(groups)}</div>']
     need = sum(count for _, count in plan.need)
-    legend = "うすい牌が、足りない牌。" if need else "足りない牌は無い（この形であがっている）。"
+    if plan.tenpai_form:
+        legend = "うすい牌が、足りない牌。" if need else "足りない牌は無い（この形で聴牌）。"
+        legend += "「両面」は、両側のどちらを引いてもあがりになる 2 枚。この形は、聴牌したときの形を表している。"
+    else:
+        legend = "うすい牌が、足りない牌。" if need else "足りない牌は無い（この形であがっている）。"
     if regular and any(block.fixed for block in plan.blocks):
         legend += "★ は、この役に必ず要る組。"
     if plan.form is Form.CHIITOI:
@@ -926,6 +965,8 @@ def target_candidates_html(advice: TargetAdvice, rb: Rubifier, *, aka: bool, cho
             cells.append(f'<span class="mj-far{you}">{_small(candidate.tile, aka)}</span>')
         parts.append(f'<div class="mj-subhead">{rb.html(f"切ると、{advice.name}から遠ざかる牌")}</div>')
         parts.append(f'<div class="mj-farrow">{"".join(cells)}</div>')
+    if any(c.shanten == TENPAI and c.distance > 0 for c in advice.candidates):
+        parts.append(f'<div class="mj-sub">{rb.html(f"聴牌になる切り方でも、{advice.name}が付くあがり牌が無いものは、{advice.name}の聴牌と数えない。")}</div>')
     parts.append(
         f'<div class="mj-sub mj-legend">{MARK_PICK[0]} おすすめ　{MARK_EQUAL[0]} おすすめと同じ良さ<br>'
         + rb.html("ここで比べているのは、狙う役への近さだけ。速くあがることだけを考えた切り方は、下の受け入れ表で見られる。")

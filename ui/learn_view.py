@@ -331,7 +331,10 @@ def stamp_html(page: YakuPage, stamp: Stamp | None, target: TargetStat | None, r
     else:
         html = f'<div class="mj-review">{rb.html("スタンプ：この役は、一人練習では成立しない。")}</div>'
     if target is not None and target.tries:
-        html += f'<div class="mj-sub">{rb.html(f"役指定練習：{target.tries} 局のうち、{target.made} 局でこの役が付いた。")}</div>'
+        # 役指定練習の「付いた」は、上位の役（一盃口なら二盃口）が付いた局や、役満のために数えなかった局も含む。
+        # スタンプは、実際に数えた役に押すので、「付いた」と書くとスタンプと食い違って見える
+        line = f"役指定練習：{target.tries} 局のうち、{target.made} 局で、この役の形ができた（上位の役になった局も含む）。"
+        html += f'<div class="mj-sub">{rb.html(line)}</div>'
     return html
 
 

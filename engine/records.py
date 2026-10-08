@@ -19,9 +19,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from engine.analysis.target import TARGET_KEYS
 from engine.practice import Decision, Outcome, PracticeState
 from engine.scoring.explain import explain
 from engine.target_coach import target_result
+from engine.yaku_table import YAKU
 
 HISTORY_VERSION = 1
 #: 残す局数の上限（古いものから捨てる）
@@ -85,9 +87,12 @@ class HandRecord:
         yaku = data.get("yaku", [])
         if not isinstance(yaku, list) or not all(isinstance(key, str) for key in yaku):
             raise ValueError("記録の値がおかしい: yaku")
+        # 知らない役の鍵は捨てる（読み込んだファイルやブラウザの記録には、何が入っているか分からない。
+        # 画面やファイルに書き出せない文字が入っていると、あとで記録のページが開けなくなる）
+        yaku = [key for key in yaku if key in YAKU]
         decisions = number("n", 0, 100, 0)
         target = data.get("target", "")
-        if not isinstance(target, str) or len(target) > 40:
+        if not isinstance(target, str) or (target and target not in TARGET_KEYS):
             raise ValueError("記録の値がおかしい: target")
         return cls(
             target=target,

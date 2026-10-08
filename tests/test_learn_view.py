@@ -200,7 +200,7 @@ def test_stamp_card_variants():
     assert "まだ成立させていない" in text_of(stamp_html(page, None, None, rb()))
     assert "一人練習では成立しない" in text_of(stamp_html(BY_KEY["chankan"], None, None, rb()))
     aimed = text_of(stamp_html(page, None, TargetStat(tries=4, wins=3, made=3), rb()))
-    assert "役指定練習：4 局のうち、3 局でこの役が付いた。" in aimed
+    assert "役指定練習：4 局のうち、3 局で、この役の形ができた（上位の役になった局も含む）。" in aimed
     assert "役指定練習" not in text_of(stamp_html(page, None, TargetStat(), rb()))
     for html in (stamp_html(page, STAMP, TargetStat(tries=4, wins=3, made=3), rb()), stamp_html(BY_KEY["chankan"], None, None, rb())):
         assert_clean(html)

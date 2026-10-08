@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import time
 
 import streamlit as st
@@ -27,6 +28,7 @@ from ui.progress_store import (
     read_decks,
     read_history,
     read_stamps,
+    store_signature,
     summary_of_export,
     summary_of_store,
 )
@@ -37,6 +39,8 @@ from ui.version import APP_VERSION
 ss = st.session_state
 store = BrowserStore()
 MERGE, REPLACE = "いまの記録と合わせる", "ファイルの中身で置き換える"
+#: 読み込めるファイルの大きさの上限（MB）。書き出したファイルは、多くても 1 MB ほど
+MAX_FILE_MB = 5
 
 
 def _forget_pages() -> None:
@@ -51,7 +55,36 @@ def _tell(kind: str, text: str) -> None:
     ss["rc_told"] = ss.get("rc_told", 0) + 1
 
 
-def _import(text: str, merge: bool) -> None:
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _incoming(round_: int) -> tuple[str | None, str]:
+    """選んだファイルか、貼り付けた文字 →（中身, 読めなかったときの理由）。どちらも無ければ（None, ""）"""
+    uploaded = ss.get(f"rc_w_file_{round_}")
+    if uploaded is not None:
+        if uploaded.size > MAX_FILE_MB * 1024 * 1024:
+            return None, "ファイルが大きすぎます。このアプリが保存したファイルを選んでください。"
+        try:
+            return uploaded.getvalue().decode("utf-8-sig"), ""
+        except UnicodeDecodeError:
+            return None, "このファイルは読めませんでした（文字の形式が違います）。このアプリが保存したファイルを選んでください。"
+    pasted = ss.get(f"rc_w_paste_{round_}")
+    if isinstance(pasted, str) and pasted.strip():
+        return pasted, ""
+    return None, ""
+
+
+def _import(round_: int, shown: str) -> None:
+    """「読み込む」を押したとき。ボタンを描いたときの値ではなく、押した時点の選択と中身を使う。
+
+    shown は、画面で確かめてもらった中身のしるし。そのあとで中身が変わっていたら、読み込まない（確かめ直してもらう）。
+    """
+    text, _ = _incoming(round_)
+    if text is None or _digest(text) != shown:
+        _tell("error", "読み込む中身が、確かめたときから変わりました。表示された内容を確かめてから、もう一度押してください。")
+        return
+    merge = ss.get(f"rc_w_how_{round_}", MERGE) != REPLACE
     try:
         data = parse_export(text)
     except ValueError as error:
@@ -112,32 +145,41 @@ st.html(subhead("ドリル", rb) + f'<table class="mj-table">{"".join(rows)}</ta
 
 # ---------------------------------------------------------------- ファイルに保存
 st.html(subhead("ファイルに保存する", rb))
-text = export_text(store, time=now, app_version=APP_VERSION)
+# 記録が変わらないあいだは、作った文字を使い回す（画面を描き直すたびに、大きな文字を送り直さない）
+signature = store_signature(store)
+cached = ss.get("rc_export")
+if cached is None or cached[0] != signature:
+    cached = (signature, export_text(store, time=now, app_version=APP_VERSION), now)
+    ss["rc_export"] = cached
+_, text, made_at = cached
 size = summary_of_store(store)
-st.download_button(
-    "進み具合をファイルに保存する", data=text, file_name=f"mjdojo-{file_stamp(now)}.json", mime="application/json",
-    on_click="ignore", type="primary", width="stretch", key="rc_b_download",
-)
+try:
+    st.download_button(
+        "進み具合をファイルに保存する", data=text, file_name=f"mjdojo-{file_stamp(made_at)}.json", mime="application/json",
+        on_click="ignore", type="primary", width="stretch", key="rc_b_download",
+    )
+except UnicodeEncodeError:        # 念のため：書き出せない文字が残っていても、下の「読み込む」「消す」は使えるようにする
+    st.error("記録の中に、ファイルに書き出せない文字がありました。下の「ファイルから読み込む」で置き換えるか、「すべて消す」で消してください。")
 st.html(f'<div class="mj-sub">{rb.html(f"入るもの：成績 {size.hands} 局・スタンプ {size.stamps} 役・ドリル {size.answers} 回ぶんの記録と、一人練習の設定。打っている途中の局は入らない。")}</div>')
 with st.expander("ファイルに保存できないとき（文字としてコピーする）", key="rc_x_copy"):
     st.caption("下のボタンで、記録の文字をコピーできます。メモ帳やメールに貼り付けて、残しておいてください。")
-    copy_button(text, key="rc_copy", label="記録の文字をコピーする")
+    copy_button(
+        text, key="rc_copy", label="記録の文字をコピーする",
+        fail_text="コピーできませんでした。上の「進み具合をファイルに保存する」で保存してください。",
+    )
 
 # ---------------------------------------------------------------- ファイルから読み込む
 st.html(subhead("ファイルから読み込む", rb))
 round_ = ss.get("rc_upload", 0)
-uploaded = st.file_uploader("保存したファイル（.json）を選ぶ", type=["json", "txt"], key=f"rc_w_file_{round_}")
+st.file_uploader(
+    "保存したファイル（.json）を選ぶ", type=["json", "txt"], key=f"rc_w_file_{round_}", max_upload_size=MAX_FILE_MB,
+)
 with st.expander("ファイルを選べないとき（文字を貼り付ける）", key="rc_x_paste"):
-    pasted = st.text_area("コピーしておいた記録の文字", key=f"rc_w_paste_{round_}", height=120, placeholder='{"app": "mjdojo", …')
+    st.text_area("コピーしておいた記録の文字", key=f"rc_w_paste_{round_}", height=120, placeholder='{"app": "mjdojo", …')
 
-incoming = None
-if uploaded is not None:
-    try:
-        incoming = uploaded.getvalue().decode("utf-8-sig")
-    except UnicodeDecodeError:
-        st.error("このファイルは読めませんでした（文字の形式が違います）。このアプリが保存したファイルを選んでください。")
-elif pasted and pasted.strip():
-    incoming = pasted
+incoming, problem = _incoming(round_)
+if problem:
+    st.error(problem)
 
 if incoming is not None:
     try:
@@ -156,7 +198,7 @@ if incoming is not None:
             st.caption("同じ局は 1 つにまとめます。スタンプとドリルの回数は、多いほうを採ります（足しません）。設定は、いまのままです。")
         else:
             st.caption(f"いまの記録（成績 {size.hands} 局・スタンプ {size.stamps} 役・ドリル {size.answers} 回）は消えて、ファイルの中身になります。設定も置き換えます。")
-        st.button("読み込む", type="primary", on_click=_import, args=(incoming, how == MERGE), key=f"rc_b_import_{round_}")
+        st.button("読み込む", type="primary", on_click=_import, args=(round_, _digest(incoming)), key=f"rc_b_import_{round_}")
 
 # ---------------------------------------------------------------- 消す
 st.html(subhead("記録を消す", rb))

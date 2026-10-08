@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -95,6 +96,16 @@ def read_decks(store: Store) -> dict[str, Deck]:
 
 
 # ---------------------------------------------------------------- ファイルへの書き出し・読み込み
+
+
+def store_signature(store: Store) -> str:
+    """書き出しに入る記録（成績・スタンプ・ドリル・設定）の、いまの中身のしるし。中身が変わると、しるしも変わる"""
+    names = [HISTORY_NAME, STAMPS_NAME, SETTINGS_NAME, *(DRILL_PREFIX + kind for kind in KINDS)]
+    digest = hashlib.sha256()
+    for name in names:
+        value = store.get(name)
+        digest.update(name.encode() + b"\0" + (b"-" if value is None else value.encode("utf-8", "surrogatepass")) + b"\0")
+    return digest.hexdigest()
 
 
 def export_text(store: Store, *, time: int, app_version: str) -> str:

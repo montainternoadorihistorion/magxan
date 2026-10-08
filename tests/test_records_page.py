@@ -222,3 +222,78 @@ def test_clear_removes_progress_but_keeps_the_hand_and_settings():
     saved = known(at)
     assert set(saved) == {SETTINGS_NAME, HAND_NAME} and "dr_item" not in at.session_state
     assert "入るもの：成績 0 局・スタンプ 0 役・ドリル 0 回ぶんの記録" in page_text(at)
+
+
+# ---------------------------------------------------------------- 壊れた文字・押すまでの変化
+
+
+def _lone_surrogate_export() -> str:
+    """片方だけのサロゲート（JSON の「\\ud83c」）が、あちこちに入ったファイル。json.dumps の既定どおり、中身は ASCII だけ"""
+    data = json.loads(exported(open_records(filled())))
+    data["app_version"] = "\ud83c"
+    data["practice"]["history"]["hands"][0]["yaku"].append("x\ud83c")                    # 知らない役の鍵
+    data["practice"]["history"]["hands"].append({**data["practice"]["history"]["hands"][0], "t": NOW + 900, "seed": 9, "target": "x\ud83c"})
+    data["drills"]["table"]["cards"]["1\ud83c"] = [0, NOW, 1, 0, NOW]
+    return json.dumps(data)
+
+
+def test_lone_surrogates_in_a_file_never_break_the_page():
+    """片方だけのサロゲートが入ったファイルを読み込んでも、ページは落ちず、書き出せない文字はブラウザに残らない"""
+    at = paste(open_records(filled()), _lone_surrogate_export())
+    text = page_text(at)
+    assert "アプリの版 不明" in text and "読めなかった成績が 1 件あった" in text      # 書き出せない文字は、見せずに捨てる
+    click(at, "読み込む")
+    assert any("読み込みました" in s.value for s in at.success)
+    saved = known(at)
+    for value in saved.values():
+        value.encode("utf-8")                                    # 書き出せない文字が、ブラウザに書かれていない
+    assert load_history(saved[HISTORY_NAME])[0].yaku == ("riichi",)
+    assert set(load_deck(saved[DRILL_PREFIX + "table"]).cards) == {"cr:30:1"}
+    exported(at).encode("utf-8")                                 # 書き出しも、ちゃんと作れる
+    assert len(at.get("download_button")) == 1
+
+
+def test_lone_surrogates_already_in_browser_storage_are_dropped():
+    """前の版で、書き出せない文字がブラウザに残ってしまっていても、ページは開けて、書き出せる"""
+    poisoned = filled()
+    rows = json.loads(poisoned[HISTORY_NAME])
+    rows[0]["yaku"] = ["riichi", "\ud83c"]
+    poisoned[HISTORY_NAME] = json.dumps(rows)
+    deck = json.loads(poisoned[DRILL_PREFIX + "table"])
+    deck["cards"]["\ud83c"] = [0, NOW, 1, 0, NOW]
+    poisoned[DRILL_PREFIX + "table"] = json.dumps(deck)
+    at = open_records(poisoned)
+    data = parse_export(exported(at))
+    assert [r.yaku for r in data.history][0] == ("riichi",) and set(data.drills["table"]["cards"]) == {"cr:30:1"}
+
+
+def test_import_uses_the_choice_made_right_before_pressing():
+    """「置き換える」で表示したあと、「合わせる」に戻してすぐ押したら、合わせる（描いたときの選択を使わない）"""
+    theirs = open_records({HISTORY_NAME: history_text([record(NOW + 500, 3, yaku=("pinfu",))])})
+    at = paste(open_records(filled()), exported(theirs))
+    at.radio[0].set_value(REPLACE).run()
+    at.radio[0].set_value(MERGE)
+    click(at, "読み込む")                                         # 選び直しと「読み込む」が、同じ 1 回の描き直しで届く
+    assert any("いまの記録と合わせた" in s.value for s in at.success)
+    assert [r.seed for r in load_history(known(at)[HISTORY_NAME])] == [1, 2, 3]
+
+
+def test_import_refuses_content_that_changed_after_the_preview():
+    """確かめた中身と、押したときの中身が違えば、読み込まない"""
+    first = open_records({HISTORY_NAME: history_text([record(NOW + 500, 3)])})
+    second = open_records({HISTORY_NAME: history_text([record(NOW + 900, 4)])})
+    at = paste(open_records(filled()), exported(first))
+    next(area for area in at.text_area if area.label == "コピーしておいた記録の文字").set_value(exported(second))
+    click(at, "読み込む")
+    assert any("確かめたときから変わりました" in e.value for e in at.error)
+    assert known(at)[HISTORY_NAME] == filled()[HISTORY_NAME]
+
+
+def test_export_text_is_reused_while_the_records_do_not_change():
+    """記録が変わらないあいだは、描き直しても同じ文字（大きな文字を、毎回送り直さない）"""
+    at = open_records(filled())
+    first = exported(at)
+    at.run()
+    assert exported(at) == first
+    click(at, "すべて消す")
+    assert exported(at) != first and parse_export(exported(at)).history == []

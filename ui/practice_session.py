@@ -242,8 +242,8 @@ class PracticeSession:
         if not isinstance(data, dict) or data.get("v") != SAVE_VERSION:
             return False
         try:
-            state = practice.from_save(data.get("save"))
-            decisions = list(practice.decisions_of(state.config, state.actions))
+            state, assessed = practice.from_save_assessed(data.get("save"))       # 作り直しと評価を、1 回のたどりで
+            decisions = list(assessed)
         except Exception:  # どんな壊れ方でも「記録なし」として扱う
             return False
         self._s["pr_state"] = state

@@ -26,7 +26,7 @@ from enum import StrEnum
 from typing import Any
 
 from engine.analysis.shanten import TENPAI, shanten_of
-from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS, target_distance, target_tiles
+from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS, target_distance
 from engine.analysis.ukeire import acceptance, remaining_counts
 from engine.analysis.waits import is_win_shape, wait_kinds
 from engine.coach import Analysis, Position, Verdict, analyze, judge_discard
@@ -43,7 +43,7 @@ from engine.luck import (
 from engine.rng import Rng
 from engine.rules import DEFAULT_RULES, Rules
 from engine.scoring.context import WinContext
-from engine.target_coach import TargetAdvice, TargetVerdict, judge_target, target_advice
+from engine.target_coach import TargetAdvice, TargetVerdict, approach_tiles, judge_target, target_advice
 from engine.tiles import EAST, NORTH, NUM_TILES, SOUTH, WEST, counts34, kind_of, sort_tiles
 from engine.wall import DORA_START, HAND_SIZE, LIVE_START, URA_START, Wall
 
@@ -308,11 +308,16 @@ def _next_draw(
         if target is not None and target not in SHAPELESS_KEYS:
             winds = {"seat_wind": state.seat_wind, "round_wind": state.config.round_wind}
             in_wall = counts34(wall.tiles[wall.next_live_position:wall.live_end])       # これからツモる山に残っている牌
+            distance = target_distance(counts, target, available=in_wall, **winds)
             # リーチのあとは手を変えられない。その役の聴牌になっているときだけ、役の付くあがり牌を引き寄せる
-            if not riichi or target_distance(counts, target, available=in_wall, **winds) == TENPAI:
-                closer = target_tiles(counts, target, available=in_wall, **winds)
+            if not riichi or distance == TENPAI:
+                closer = approach_tiles(counts, target, rules=state.config.rules, available=in_wall, **winds)
                 if closer:
                     return list(closer)
+                if distance == TENPAI and not riichi:
+                    # 形は聴牌でも、役が付くあがり牌が無い（嵌張待ちの平和など）。あがり牌を引き寄せると、
+                    # 役の付かないあがりを手伝うことになるので、この巡は補正しない
+                    return []
         return [kind for kind, _ in acceptance(counts, remaining_counts(hand, visible)).tiles]
 
     report = improve_draw(wall, probability, wanted, Rng(state.config.seed, f"luck:draw:{turn}"))
@@ -489,8 +494,11 @@ def target_advice_of(state: PracticeState) -> TargetAdvice | None:
     return target_advice(position_of(state), key)
 
 
-def decisions_of(config: PracticeConfig, actions: Sequence[Action]) -> tuple[Decision, ...]:
-    """行動の列を最初からたどり、自分で選んだ打牌をすべて評価する（続きから再開したときに使う）"""
+def replay_assessed(config: PracticeConfig, actions: Sequence[Action]) -> tuple[PracticeState, tuple[Decision, ...]]:
+    """行動の列を最初からたどり、局を作り直しながら、自分で選んだ打牌をすべて評価する（続きから再開したときに使う）。
+
+    作り直し（replay）と評価（decisions_of）を 1 回のたどりで済ませる（ツモの補正の計算を 2 回しない）。
+    """
     state = start(config)
     found = []
     for action in actions:
@@ -498,7 +506,12 @@ def decisions_of(config: PracticeConfig, actions: Sequence[Action]) -> tuple[Dec
         if decision is not None:
             found.append(decision)
         state = apply(state, action)
-    return tuple(found)
+    return state, tuple(found)
+
+
+def decisions_of(config: PracticeConfig, actions: Sequence[Action]) -> tuple[Decision, ...]:
+    """行動の列を最初からたどり、自分で選んだ打牌をすべて評価する"""
+    return replay_assessed(config, actions)[1]
 
 
 # ---------------------------------------------------------------- 保存
@@ -515,6 +528,11 @@ def from_save(data: dict[str, Any]) -> PracticeState:
     記録はブラウザに置いてあるので、壊れていたり、書き換えられていたりすることがある。
     どんな中身でも、ValueError 以外の例外を出さないようにする（開くたびにエラーで止まるのを防ぐ）。
     """
+    return from_save_assessed(data, assess_moves=False)[0]
+
+
+def from_save_assessed(data: dict[str, Any], *, assess_moves: bool = True) -> tuple[PracticeState, tuple[Decision, ...]]:
+    """記録から状態を作り直し、自分で選んだ打牌の評価もいっしょに作る（from_save と同じく、壊れた記録は ValueError）"""
     if not isinstance(data, dict) or data.get("v") != SAVE_VERSION:
         raise ValueError("記録の形が違います")
     items = data.get("actions")
@@ -524,7 +542,9 @@ def from_save(data: dict[str, Any]) -> PracticeState:
     try:
         config = PracticeConfig.from_dict(data.get("config"))
         actions = [Action.from_list(item) for item in items]
-        return replay(config, actions)
+        if not assess_moves:
+            return replay(config, actions), ()
+        return replay_assessed(config, actions)
     except ValueError:
         raise
     except (KeyError, TypeError, IndexError, AttributeError, ArithmeticError) as error:

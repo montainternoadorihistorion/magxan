@@ -341,6 +341,18 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
                 review = page.locator(".mj-review").first.evaluate(TEXT_WITHOUT_RUBY)
                 result["target_review"] = review
                 expect("三色同順" in review and "✓" in review, f"おすすめを切ったのに、評価が違う: {review}")
+            # 何巡打っても、手牌の位置が動かない（案内の長さが変わっても、見出しの高さは同じ）
+            hand_tops = []
+            for _ in range(8):
+                if page.locator(".mj-hand-root .mj-tile").count() != 14 or page.get_by_role("button", name="ツモ（あがる）").count():
+                    break
+                hand_tops.append(round(page.locator(".mj-hand-root .mj-tile").first.evaluate("e => e.getBoundingClientRect().top"), 1))
+                marked = page.locator(".mj-hand-root .mj-tile", has=page.locator(".mj-mark"))
+                (marked.first if marked.count() else page.locator(".mj-hand-root .mj-tile").last).tap()
+                page.wait_for_timeout(200)
+                tap_and_wait(page, page.locator(".mj-hand-root .mj-confirm"))
+            result["target_hand_tops"] = hand_tops
+            expect(len(hand_tops) >= 3 and max(hand_tops) - min(hand_tops) <= 1, f"役指定練習で、巡目によって手牌の位置が動く: {hand_tops}")
             context.close()
 
             context = new_context()
@@ -373,7 +385,7 @@ def run(base_url: str, out_dir: Path, only: Collection[str] = ()) -> dict:
             page.locator(".mj-yaku-head").wait_for(timeout=20000)
             settle(page, 800)
             expect("スタンプ：1 回 成立させた" in main_text(page), "役のページに、スタンプが出ていない")
-            expect("役指定練習：1 局のうち、1 局でこの役が付いた。" in main_text(page), "役のページに、役指定練習の成績が出ていない")
+            expect("役指定練習：1 局のうち、1 局で、この役の形ができた" in main_text(page), "役のページに、役指定練習の成績が出ていない")
             link(page, "一覧へ").first.tap()
             page.locator(f"{MAIN} h1", has_text="役図鑑").wait_for(timeout=20000)
             settle(page, 800)

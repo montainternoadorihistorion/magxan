@@ -531,9 +531,11 @@ def _yaku_why(result: Explanation, key: str) -> tuple[bool, str]:
         note = f"（{check.note}）" if check.note else ""
         han = "役満" if check.is_yakuman else f"{check.han} 翻"
         return (True, f"{han}{note}")
+    if check.note:          # 別の読み方なら成立する役：条件の 1 つを挙げるより、そのことを言うほうが正しい
+        return (False, check.note)
     failed = next((c for c in check.checks if not c.ok), None)
     if failed is None:
-        return (False, check.note)
+        return (False, "")
     return (False, f"「{failed.text}」を満たさない" + (f"（{failed.detail}）" if failed.detail else ""))
 
 
@@ -545,7 +547,8 @@ def _yaku_question(item: str) -> Question:
     assert best is not None
     correct = [y.key for y in best.evaluation.yaku]
     rng = Rng(item, "drill:yaku")
-    wanted = min(8, max(6, len(correct) + 3))
+    # 選択肢は 6 つ以上。はずれも必ず 2 つ以上入れる（全部選べば正解、にならないように）
+    wanted = max(6, len(correct) + 2)
     pool = [y.key for y in best.near] + _shuffled(rng, _COMMON_YAKU)
     keys = list(correct)
     for key in pool:

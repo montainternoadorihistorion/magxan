@@ -276,11 +276,20 @@ def _compare(best: Candidate | None, has_shape: bool, verdict: Judgement) -> tup
     return tuple(f"{name}: 自前 {mine!r} ／ ライブラリ {theirs!r}" for name, mine, theirs in pairs if mine != theirs)
 
 
+def ranked_candidates(ctx: WinContext, rules: Rules = DEFAULT_RULES) -> tuple[Candidate, ...]:
+    """読み方ごとの計算結果を、採用する順（高点法）に並べる。ライブラリとの突き合わせはしない（そのぶん速い）。
+
+    画面に出す解説には explain を使う。これは、コーチが「この牌であがると、その役が付くか」を確かめるときに使う。
+    """
+    dora = count_dora(ctx, rules)
+    readings = interpretations(ctx.closed_tiles, ctx.melds, ctx.win_kind, is_tsumo=ctx.is_tsumo)
+    return tuple(sorted((_candidate(r, ctx, rules, dora) for r in readings), key=lambda c: c.rank_key, reverse=True))
+
+
 def explain(ctx: WinContext, rules: Rules = DEFAULT_RULES) -> Explanation:
     """和了の状況から、解説に必要な事実をすべて計算する"""
     dora = count_dora(ctx, rules)
-    readings = interpretations(ctx.closed_tiles, ctx.melds, ctx.win_kind, is_tsumo=ctx.is_tsumo)
-    candidates = sorted((_candidate(r, ctx, rules, dora) for r in readings), key=lambda c: c.rank_key, reverse=True)
+    candidates = list(ranked_candidates(ctx, rules))
 
     if not candidates:
         status = Status.NOT_WINNING

@@ -16,6 +16,7 @@ from typing import Any
 
 from engine.content import page_of_yaku, yaku_pages
 from engine.records import HISTORY_VERSION, MAX_RECORDS, HandRecord
+from engine.srs import is_text
 
 APP_ID = "mjdojo"
 EXPORT_KIND = "progress"
@@ -207,7 +208,11 @@ def build_export(
         "stamps": stamps_to_data(stamps),
         "drills": dict(drills) if drills is not None else None,
     }
-    return json.dumps(data, ensure_ascii=False, indent=1)
+    text = json.dumps(data, ensure_ascii=False, indent=1)
+    if not is_text(text):
+        # 書き出せない文字（片方だけのサロゲート）がどこかに残っていても、ファイルは作れるようにする（\\u の形で書く）
+        text = json.dumps(data, ensure_ascii=True, indent=1)
+    return text
 
 
 def parse_export(text: str) -> Export:
@@ -259,7 +264,7 @@ def parse_export(text: str) -> Export:
     )
     return Export(
         exported=exported,
-        app_version=app_version if isinstance(app_version, str) else "",
+        app_version=app_version if isinstance(app_version, str) and len(app_version) <= 40 and is_text(app_version) else "",
         settings=settings,
         history=history[-MAX_RECORDS:],
         stamps=stamps_from_data(data.get("stamps")),

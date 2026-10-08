@@ -34,7 +34,6 @@ from ui.practice_view import (
     LEVEL_NORMAL,
     MARK_EQUAL,
     MARK_PICK,
-    SHAPELESS_TIPS,
     advice_headline_html,
     candidates_html,
     chance_html,
@@ -53,6 +52,7 @@ from ui.practice_view import (
     riichi_draws_html,
     river_html,
     shanten_html,
+    shapeless_tip,
     stamps_html,
     stats_html,
     status_html,
@@ -62,6 +62,7 @@ from ui.practice_view import (
     target_headline_html,
     target_name,
     target_result_html,
+    target_speed_note_html,
     target_stats_html,
     target_verdict_headline_html,
     target_verdict_html,
@@ -276,8 +277,10 @@ if not state.finished:
     else:
         st.html(plain_headline_html("コーチはオフです。下の「設定」で、ヒントを出すように変えられます。", rb))
 
+    # 役指定練習で、役を狙い続ける切り方を示すか（役の付くあがりの形なら、ツモを勧めるので示さない。最後のツモでも示さない）
+    aim_on = advice is not None and advice.pick is not None and not (state.can_tsumo and state.draws_left == 0)
     marks = {}
-    if advice is not None and advice.pick is not None and not state.can_tsumo:
+    if aim_on:
         marks = {c.tile: (MARK_PICK if c.is_pick else MARK_EQUAL) for c in advice.best}
     elif analysis is not None and not analysis.can_win and (not analysis.last_discard or analysis.can_end_tenpai):
         marks = {c.tile: (MARK_PICK if c.is_pick else MARK_EQUAL) for c in analysis.best}
@@ -298,11 +301,16 @@ if not state.finished:
     )
     if state.can_tsumo:
         st.button("ツモ（あがる）", type="primary", on_click=_on_tsumo, width="stretch")
+    if aim_on:
+        speed_note = target_speed_note_html(advice, analysis, rb)
+        if speed_note:
+            st.html(speed_note)
     if lucky_draw:
         st.html(draw_note_html(draw, rb, aka=aka))
     st.html(river_html(state, rb))
-    if target in SHAPELESS_TIPS and hint != HINT_OFF:
-        st.html(note_html(f"{target_name(target)}を狙う局：{SHAPELESS_TIPS[target]}", rb))
+    tip = shapeless_tip(state) if hint != HINT_OFF else ""
+    if tip:
+        st.html(note_html(tip, rb))
     if aiming and state.config.luck.is_off:
         # 補正なしだと、配牌もツモも役に近づかない（ふつうの麻雀と同じ難しさ）。役指定練習のつもりで開いた人が、とまどわないように
         st.html(note_html(f"ツキ補正が「なし」なので、配牌もツモも、ふつうの麻雀と同じです。{target_name(target)}を作りやすくするには、下の「設定」でツキ補正を上げてください。", rb))
@@ -322,11 +330,11 @@ if not state.finished:
                 inner = rb.fork()
                 st.html(shanten_html(last.analysis, inner) + candidates_html(last.analysis, inner, chosen_kind=last.verdict.chosen.kind))
 
-    if advice is not None and level >= LEVEL_NORMAL:
+    if advice is not None and not advice.won and level >= LEVEL_NORMAL:
         name = advice.name
         with st.expander(f"めざす形（{name}）", expanded=True, key="pr_x_plan"):
             st.html(plan_html(advice.plan, rb.fork()))
-        if advice.pick is not None and not state.can_tsumo:
+        if aim_on:
             with st.expander(f"{name}に近い切り方の表", expanded=level == LEVEL_FULL, key=f"pr_x_ttable_{level}"):
                 st.html(target_candidates_html(advice, rb.fork(), aka=aka))
 

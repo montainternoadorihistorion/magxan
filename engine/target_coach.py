@@ -3,17 +3,25 @@
     advice = target_advice(position, "sanshoku")     いまの 14 枚で、どれを切ると役に近いか
     judge_target(advice, tile)                       実際に切った牌を、おすすめと比べる
     target_result(explanation, "sanshoku")           あがったとき、狙った役が付いたか
+    approach_tiles(counts, "sanshoku", …)            13 枚の手で、引くと役に近づく牌（聴牌なら、役が付くあがり牌）
 
 牌効率のコーチ（engine/coach.py）が「速さ」だけを見るのに対して、こちらは「狙った役までの距離」を見る。
 距離の計算は engine/analysis/target.py。見えている牌（河・ドラ表示牌）は「もう手に入らない」として数える。
+
+距離の計算は牌の組み合わせだけを見るので、「聴牌」「あがり」と言う前に、点数計算で確かめる。
+    聴牌（距離 0）   役が付くあがり牌が 1 つも無ければ、その役の聴牌とは言わない（距離 1 として扱う）
+    あがり           いまツモったとして点数計算をし、その役が付くときだけ「あがり」とする
+高点法でほかの読み方が選ばれて、その役が付かないことがある（111222333 を三暗刻と読む、など）。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import lru_cache
 
 from engine.analysis.advice import tile_for_discard
+from engine.analysis.shanten import shanten_of
 from engine.analysis.target import (
     IMPOSSIBLE,
     SHAPELESS_KEYS,
@@ -27,7 +35,9 @@ from engine.analysis.target import (
 from engine.analysis.ukeire import remaining_counts
 from engine.coach import Position, analyze
 from engine.content import yaku_page_map
-from engine.scoring.explain import Explanation, Status
+from engine.rules import DEFAULT_RULES, Rules
+from engine.scoring.context import WinContext
+from engine.scoring.explain import Explanation, Status, ranked_candidates
 from engine.scoring.texts import kind_text, kinds_text
 from engine.scoring.yaku_eval import YakuResult
 from engine.tiles import counts34, is_red, kind_of
@@ -44,7 +54,7 @@ UPGRADES: dict[str, tuple[str, ...]] = {
     "shousuushii": ("daisuushii",),
     "chinitsu": ("chuuren",),
 }
-BLOCK_NAMES = {BlockKind.SEQUENCE: "順子", BlockKind.SET: "刻子", BlockKind.PAIR: "雀頭", BlockKind.SINGLE: "1 枚"}
+BLOCK_NAMES = {BlockKind.SEQUENCE: "順子", BlockKind.SET: "刻子", BlockKind.PAIR: "雀頭", BlockKind.SINGLE: "1 枚", BlockKind.RYANMEN: "両面"}
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,102 @@ class TargetAdvice:
         return next((c for c in self.candidates if c.kind == kind), None)
 
 
+# ---------------------------------------------------------------- 点数計算で確かめる
+
+
+def _achievement(key: str, counted: set[str], ignored: set[str]) -> tuple[bool, str, bool]:
+    """あがった手の役から、狙った役の扱いを決める →（その役が付いた, 代わりに付いた上位の役の名前, 役満があるので数えないだけか）
+
+    counted は数えた役、ignored は役満があるために数えなかった役（どちらも役の表の鍵）。
+    """
+    pages = yaku_page_map()
+    page = pages[key]
+    made = any(yaku in counted for yaku in page.yaku)
+    upgraded = ""
+    if not made:
+        for other in UPGRADES.get(key, ()):
+            if any(yaku in counted for yaku in pages[other].yaku):
+                upgraded = pages[other].name
+                break
+    superseded = not made and not upgraded and any(yaku in ignored for yaku in page.yaku)
+    return made, upgraded, superseded
+
+
+def _tiles_of(counts: Sequence[int]) -> tuple[int, ...]:
+    """種類ごとの枚数を、牌の番号の並びにする（どの番号の牌かは、役に関係しない）"""
+    return tuple(kind * 4 + i for kind in range(len(counts)) for i in range(counts[kind]))
+
+
+def _credited(tiles: tuple[int, ...], win_tile: int, key: str, seat_wind: int, round_wind: int, rules: Rules) -> bool:
+    """門前のツモで win_tile であがったとき、狙った役（か上位の役）が付くか。役満で数えないだけのときも「付く」とする"""
+    ctx = WinContext(closed_tiles=tiles, win_tile=win_tile, is_tsumo=True, seat_wind=seat_wind, round_wind=round_wind)
+    ranked = ranked_candidates(ctx, replace(rules, aka_dora=False))      # 赤ドラは役に関係しないので数えない
+    if not ranked or not ranked[0].has_yaku:
+        return False
+    best = ranked[0].evaluation
+    made, upgraded, superseded = _achievement(key, {y.key for y in best.yaku}, {y.key for y in best.ignored})
+    return made or bool(upgraded) or superseded
+
+
+@lru_cache(maxsize=4096)
+def _winning_kinds(counts: tuple[int, ...], key: str, seat_wind: int, round_wind: int, rules: Rules, available: tuple[int, ...] | None) -> tuple[int, ...]:
+    tiles = _tiles_of(counts)
+    found = []
+    for kind in range(len(counts)):
+        if counts[kind] >= 4 or (available is not None and available[kind] <= 0):
+            continue
+        grown = list(counts)
+        grown[kind] += 1
+        if shanten_of(grown) != -1:
+            continue
+        if _credited((*tiles, kind * 4 + counts[kind]), kind * 4 + counts[kind], key, seat_wind, round_wind, rules):
+            found.append(kind)
+    return tuple(found)
+
+
+def winning_kinds(
+    counts: Sequence[int], key: str, *, seat_wind: int, round_wind: int, rules: Rules = DEFAULT_RULES,
+    available: Sequence[int] | None = None,
+) -> tuple[int, ...]:
+    """13 枚の手で、ツモると狙った役（か上位の役）が付く牌（種類）。available を渡したときは、手に入る牌だけ"""
+    return _winning_kinds(tuple(counts), key, seat_wind, round_wind, rules, None if available is None else tuple(available))
+
+
+def approach_tiles(
+    counts: Sequence[int], key: str, *, seat_wind: int, round_wind: int, rules: Rules = DEFAULT_RULES,
+    available: Sequence[int] | None = None,
+) -> tuple[int, ...]:
+    """13 枚の手で、引くと狙った役に近づく牌（種類）。
+
+    その役の聴牌（距離 0）なら、ツモると役が付くあがり牌（点数計算で確かめる）。役が付くあがり牌が無ければ空。
+    まだ聴牌でなければ、引くと距離が縮む牌（engine.analysis.target.target_tiles）。
+    手の形を問わない役（立直など）は、リーチなどの状況で付く役なので、点数計算では確かめない（あがり牌をそのまま返す）。
+    """
+    base = target_distance(counts, key, seat_wind=seat_wind, round_wind=round_wind, available=available)
+    if base >= IMPOSSIBLE or base < 0:
+        return ()
+    if base == 0 and key not in SHAPELESS_KEYS:
+        return winning_kinds(counts, key, seat_wind=seat_wind, round_wind=round_wind, rules=rules, available=available)
+    return target_tiles(counts, key, seat_wind=seat_wind, round_wind=round_wind, available=available)
+
+
+def wins_now(position: Position, key: str) -> bool:
+    """いまの 14 枚でツモあがりすると、狙った役（か上位の役）が付くか（ツモった牌を、あがり牌とする）。
+
+    手の形を問わない役（立直など）は、あがりの形になっていれば True（リーチなどの状況は、ここでは見ない）。
+    """
+    tiles = position.tiles
+    if shanten_of(counts34(tiles)) != -1:
+        return False
+    if key in SHAPELESS_KEYS:
+        return True
+    win_tile = position.drawn if position.drawn is not None else tiles[-1]
+    return _credited(tuple(tiles), win_tile, key, position.seat_wind, position.round_wind, position.rules)
+
+
+# ---------------------------------------------------------------- 打つ前の局面
+
+
 @lru_cache(maxsize=512)
 def target_advice(position: Position, key: str) -> TargetAdvice:
     """狙う役について、いまの局面（打牌の前の 14 枚）を調べる"""
@@ -116,7 +222,7 @@ def target_advice(position: Position, key: str) -> TargetAdvice:
     before = target_plan(counts, key, available=available, **winds)
     shapeless = key in SHAPELESS_KEYS
     common = {"key": key, "name": name, "shapeless": shapeless, "before": before, "speed_kind": speed.pick.kind}
-    if before.distance == -1:
+    if wins_now(position, key):
         return TargetAdvice(possible=True, won=True, candidates=(), pick=None, plan=before, **common)
 
     rows = []
@@ -124,14 +230,28 @@ def target_advice(position: Position, key: str) -> TargetAdvice:
         counts[candidate.kind] -= 1
         rows.append((candidate, target_distance(counts, key, available=available, **winds)))
         counts[candidate.kind] += 1
-    nearest = min(distance for _, distance in rows)
-    if nearest >= IMPOSSIBLE:
+    if min(distance for _, distance in rows) >= IMPOSSIBLE:
         return TargetAdvice(possible=False, won=False, candidates=(), pick=None, plan=before, **common)
 
-    found = []
+    # 聴牌（距離 0）になる切り方は、役が付くあがり牌があるかを、点数計算で確かめる。
+    # 1 つも無ければ、形は聴牌でも、その役の聴牌ではない。距離 1 として扱う（近づく牌は示さない）
+    closer_of: dict[int, tuple[tuple[int, int], ...]] = {}
+    adjusted = []
     for candidate, distance in rows:
-        closer: tuple[tuple[int, int], ...] = ()
-        if distance == nearest:
+        if distance == 0 and not shapeless:
+            counts[candidate.kind] -= 1
+            waits = winning_kinds(counts, key, rules=position.rules, available=available, **winds)
+            counts[candidate.kind] += 1
+            closer_of[candidate.kind] = tuple((kind, available[kind]) for kind in waits)
+            if not waits:
+                distance = 1
+        adjusted.append((candidate, distance))
+    nearest = min(distance for _, distance in adjusted)
+
+    found = []
+    for candidate, distance in adjusted:
+        closer = closer_of.get(candidate.kind, ())
+        if distance == nearest and candidate.kind not in closer_of:      # 聴牌を確かめた切り方は、上で決めてある
             counts[candidate.kind] -= 1
             closer = tuple((kind, available[kind]) for kind in target_tiles(counts, key, available=available, **winds))
             counts[candidate.kind] += 1
@@ -249,23 +369,13 @@ class TargetResult:
 
 def target_result(explanation: Explanation, key: str) -> TargetResult:
     """あがった手に、狙った役が付いたかを調べる"""
-    pages = yaku_page_map()
-    page = pages[key]
-    counted = {item.key: item for item in explanation.best.evaluation.yaku} if explanation.status is Status.WIN else {}
-    made = any(yaku in counted for yaku in page.yaku)
-    upgraded = ""
-    if not made:
-        for other in UPGRADES.get(key, ()):
-            hit = next((counted[yaku] for yaku in pages[other].yaku if yaku in counted), None)
-            if hit is not None:
-                upgraded = pages[other].name
-                break
-    superseded = ""
-    if not made and not upgraded and explanation.status is Status.WIN:
-        best = explanation.best
-        # 役満があるときは、ふつうの役を数えない。条件を満たしていれば、狙った形はできている
-        if any(item.key in page.yaku for item in best.evaluation.ignored):
-            superseded = "・".join(item.name for item in best.evaluation.yaku)
+    page = yaku_page_map()[key]
+    best = explanation.best.evaluation if explanation.status is Status.WIN else None
+    counted = {item.key for item in best.yaku} if best is not None else set()
+    ignored = {item.key for item in best.ignored} if best is not None else set()
+    made, upgraded, superseded_flag = _achievement(key, counted, ignored)
+    # 役満があるときは、ふつうの役を数えない。条件を満たしていれば、狙った形はできている
+    superseded = "・".join(item.name for item in best.yaku) if superseded_flag and best is not None else ""
     check = None
     if not made and not superseded and len(page.yaku) == 1 and explanation.candidates:
         check = explanation.yaku_check(page.yaku[0])

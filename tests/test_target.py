@@ -3,6 +3,7 @@
 確かめること
     * 手の形を問わない役（立直など）の距離は、判定ライブラリの向聴数と同じ
     * 距離 −1（その役の形であがっている）と、点数計算が「その役が付く」と言うことが、一致する
+    * 平和（聴牌の形で表す役）では、距離 0 が「平和の付くあがり牌がある聴牌」と一致する（嵌張・辺張・単騎は 0 にならない）
     * 1 枚引くと距離はちょうど 1 縮められる（縮む牌が必ずあり、2 以上は縮まない）
     * めざす形（plan）の足りない牌を足し、要らない牌を除くと、本当にその役のあがりになる
 """
@@ -24,6 +25,9 @@ from engine.tiles import EAST, SOUTH, counts34, parse_tiles
 SEAT, ROUND = SOUTH, EAST
 WINDS = {"seat_wind": SEAT, "round_wind": ROUND}
 STRUCTURAL = [key for key in tg.TARGET_KEYS if key not in tg.SHAPELESS_KEYS]
+#: 役の形を、あがりの形（14 枚）ではなく、役が付く聴牌の形（13 枚）で表す役
+TENPAI_FORM = [key for key in STRUCTURAL if tg.is_tenpai_form(key, **WINDS)]
+COMPLETE_FORM = [key for key in STRUCTURAL if key not in TENPAI_FORM]
 PAGE_OF = content.page_of_yaku()
 #: 距離の計算が「その役の形」に含めている、上位の役
 UPGRADES = {
@@ -68,6 +72,24 @@ def _near_hand(rnd: random.Random, size: int) -> list[int]:
     return counts
 
 
+def _sequence_hand(rnd: random.Random) -> list[int]:
+    """順子 4 つと雀頭の 14 枚から 1 枚抜いた手（ときどき、もう 1 枚入れ替える）。待ちの形がいろいろな聴牌になる"""
+    while True:
+        counts = [0] * 34
+        for _ in range(4):
+            first = rnd.choice(sorted(tg.SEQUENCE_STARTS))
+            for kind in (first, first + 1, first + 2):
+                counts[kind] += 1
+        counts[rnd.choice([*range(27), 29, 30])] += 2           # 雀頭（数牌か、南家・東場で客風の西・北）
+        if max(counts) <= 4:
+            break
+    counts[rnd.choice([k for k in range(34) if counts[k]])] -= 1
+    if rnd.random() < 0.3:
+        counts[rnd.choice([k for k in range(34) if counts[k]])] -= 1
+        counts[rnd.choice([k for k in range(34) if counts[k] < 4])] += 1
+    return counts
+
+
 def _tiles(counts: list[int]) -> list[int]:
     return [kind * 4 + i for kind in range(34) for i in range(counts[kind])]
 
@@ -101,6 +123,22 @@ def _has(counts: list[int], key: str) -> bool:
 
 def _distance(counts: list[int], key: str, **kw) -> int:
     return tg.target_distance(counts, key, **WINDS, **kw)
+
+
+def _wins_with(counts13: list[int], kind: int, key: str) -> bool:
+    """13 枚の手が、その牌のツモであがりになり、採用される読み方に、その役が付くか"""
+    grown = list(counts13)
+    grown[kind] += 1
+    if grown[kind] > 4 or shanten_of(grown) != -1:
+        return False
+    tiles = _tiles(grown)
+    result = explain(WinContext(closed_tiles=tuple(tiles), win_tile=kind * 4 + grown[kind] - 1, is_tsumo=True, **WINDS))
+    return result.best is not None and key in {PAGE_OF[item.key] for item in result.best.evaluation.yaku}
+
+
+def _triple_sequence(counts: list[int]) -> bool:
+    """同じ順子 3 組（111222333 のように、刻子 3 つとも読める形）を含むか"""
+    return any(k % 9 <= 6 and min(counts[k], counts[k + 1], counts[k + 2]) >= 3 for k in range(27))
 
 
 # ---------------------------------------------------------------- 向聴数との一致
@@ -148,8 +186,14 @@ def test_examples_of_each_page_are_at_distance_minus_one():
             if ctx.melds:
                 continue
             counts = counts34(ctx.closed_tiles)
-            distance = tg.target_distance(counts, page.key, seat_wind=ctx.seat_wind, round_wind=ctx.round_wind)
-            assert distance == -1, (page.key, hand.title)
+            winds = {"seat_wind": ctx.seat_wind, "round_wind": ctx.round_wind}
+            distance = tg.target_distance(counts, page.key, **winds)
+            if tg.is_tenpai_form(page.key, **winds):
+                # 聴牌の形で表す役（平和）：あがる前の 13 枚が、その役の聴牌（距離 0）。14 枚でも 0 のまま（−1 にはならない）
+                counts[ctx.win_kind] -= 1
+                assert distance == 0 and tg.target_distance(counts, page.key, **winds) == 0, (page.key, hand.title)
+            else:
+                assert distance == -1, (page.key, hand.title)
             checked += 1
     assert checked >= 45
 
@@ -162,6 +206,7 @@ def test_completed_plan_really_has_the_yaku(key):
         counts = _near_hand(rnd, 13 + index % 2) if index % 2 else _random_counts(rnd, 13 + index % 2)
         plan = tg.target_plan(counts, key, **WINDS)
         assert plan.possible and plan.form is not None
+        assert plan.tenpai_form == (key in TENPAI_FORM)
         size = sum(counts)
         assert plan.distance == plan.missing - 1                     # あがりまでに要る枚数 ＝ 距離 ＋ 1
         assert sum(n for _, n in plan.spare) == size - (13 - plan.distance)
@@ -170,19 +215,30 @@ def test_completed_plan_really_has_the_yaku(key):
             done[kind] -= n
         for kind, n in plan.need:
             done[kind] += n
-        assert sum(done) == 14 and 0 <= min(done) and max(done) <= 4
-        assert sum(len(block.tiles) for block in plan.blocks) == 14
+        goal = 13 if plan.tenpai_form else 14                         # 聴牌の形（平和）は 13 枚、あがりの形は 14 枚
+        assert sum(done) == goal and 0 <= min(done) and max(done) <= 4
+        assert sum(len(block.tiles) for block in plan.blocks) == goal
         assert sorted(k for block in plan.blocks for k in block.tiles) == sorted(k for k in range(34) for _ in range(done[k]))
         assert sorted(k for block in plan.blocks for k in block.need) == sorted(k for k, n in plan.need for _ in range(n))
-        assert _distance(done, key) == -1
-        assert _has(done, key), (key, done)
+        if not plan.tenpai_form:
+            assert _distance(done, key) == -1
+            assert _has(done, key), (key, done)
+            continue
+        # 聴牌の形：両面の 2 枚の、どちら側が来ても、その役が付く（同じ順子 3 組を刻子 3 つと読む、高点法の例外を除く）
+        assert _distance(done, key) == 0
+        ryanmen = [block for block in plan.blocks if block.kind is tg.BlockKind.RYANMEN]
+        assert len(ryanmen) == 1
+        low, high = ryanmen[0].tiles
+        for wait in (low - 1, high + 1):
+            if done[wait] < 4:
+                assert _wins_with(done, wait, key) or _triple_sequence([n + (k == wait) for k, n in enumerate(done)]), (key, done, wait)
 
 
 def test_distance_minus_one_matches_the_scoring_engine():
     """いろいろなあがり形について、「距離 −1」と「点数計算でその役が付く」が、どの役でも一致する"""
     rnd = random.Random(99)
     hands: list[list[int]] = [_complete_hand(rnd) for _ in range(60)]
-    for key in STRUCTURAL:                                  # それぞれの役のあがり形も混ぜる（まれな役を試すため）
+    for key in COMPLETE_FORM:                               # それぞれの役のあがり形も混ぜる（まれな役を試すため）
         for _ in range(4):
             start = _near_hand(rnd, 14)
             plan = tg.target_plan(start, key, **WINDS)
@@ -193,8 +249,34 @@ def test_distance_minus_one_matches_the_scoring_engine():
                 done[kind] += n
             hands.append(done)
     for counts in hands:
-        for key in STRUCTURAL:
+        for key in COMPLETE_FORM:
             assert (_distance(counts, key) == -1) == _has(counts, key), (key, counts)
+
+
+@pytest.mark.parametrize("key", TENPAI_FORM)
+def test_tenpai_form_distance_zero_matches_the_scoring_engine(key):
+    """聴牌の形で表す役（平和）：13 枚の手で「距離 0」と「ツモるとその役が付くあがり牌がある」が一致する。
+
+    嵌張・辺張・単騎・双碰の聴牌は、形が 4 面子 1 雀頭に近くても、距離 0 にならない。
+    例外は、同じ順子 3 組（111222333）を含む手：高点法で刻子 3 つの読み方（三暗刻）が選ばれ、その役が付かないことがある。
+    """
+    rnd = random.Random(f"tenpai:{key}")
+    zeros = credited_hands = 0
+    for index in range(500):
+        counts = _near_hand(rnd, 13) if index % 4 == 0 else _sequence_hand(rnd)
+        credited = [k for k in range(34) if _wins_with(counts, k, key)]
+        distance = _distance(counts, key)
+        if credited:
+            credited_hands += 1
+            assert distance == 0, (counts, credited)
+        elif distance == 0:
+            assert _triple_sequence(counts), counts
+        zeros += distance == 0
+    assert zeros >= 20 and credited_hands >= 20
+    # 嵌張・辺張・単騎の聴牌は、平和の聴牌ではない（あと 1 枚、両面に変える牌が要る）
+    for text in ("123m456p789s13s44z", "123m456p789s12s44z", "123m456p789s234s4z", "123m234p234s66s79s"):
+        hand = counts34(parse_tiles(text))
+        assert shanten_of(hand) == 0 and _distance(hand, key) == 1, text
 
 
 # ---------------------------------------------------------------- 距離の性質
@@ -213,9 +295,13 @@ def test_one_draw_changes_the_distance_by_exactly_one(key):
                 counts[kind] += 1
                 after.append(_distance(counts, key))
                 counts[kind] -= 1
-        assert min(after) == base - 1 and max(after) <= base, (key, counts)
         closer = tg.target_tiles(counts, key, **WINDS)
-        assert len(closer) == after.count(base - 1) > 0
+        if base == 0 and key in TENPAI_FORM:
+            # 聴牌の形で表す役は、聴牌（距離 0）より先が無い。あがり牌は、点数計算で確かめる（target_coach）
+            assert set(after) == {0} and closer == ()
+        else:
+            assert min(after) == base - 1 and max(after) <= base, (key, counts)
+            assert len(closer) == after.count(base - 1) > 0
         # 14 枚から 1 枚切る：いちばん良い切り方をすれば、距離は変わらない
         counts[rnd.choice([k for k in range(34) if counts[k] < 4])] += 1
         full = _distance(counts, key)

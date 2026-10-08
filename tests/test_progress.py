@@ -248,3 +248,26 @@ def test_history_can_also_be_a_plain_list_and_unknown_versions_are_ignored():
     assert parsed.history == [] and "history" not in parsed.parts
     data["practice"] = None
     assert parse_export(json.dumps(data)).history == []
+
+
+def test_lone_surrogates_are_never_passed_on():
+    """片方だけのサロゲート（JSON の「\\ud83c」）は、UTF-8 で書き出せない。読み込みで捨て、書き出しでも落ちないようにする"""
+    data = json.loads(export_text())
+    data["app_version"] = "0.4\ud83c"
+    data["practice"]["history"]["hands"][0]["yaku"].append("\ud83c")          # 知らない役の鍵：その鍵だけ捨てる
+    data["practice"]["history"]["hands"][1]["target"] = "\ud83c"               # 知らない狙った役：その局を捨てる
+    parsed = parse_export(json.dumps(data))
+    assert parsed.app_version == "" and parsed.skipped == 1
+    assert parsed.history[0].yaku == ("riichi", "pinfu")
+    # 書き出す側：もし書き出せない文字が残っていても、\u の形で書いて、ファイルは作れる
+    text = build_export(settings={"memo": "\ud83c"}, history=[], stamps={}, drills=None, time=NOW, app_version="x")
+    text.encode("utf-8")
+    assert json.loads(text)["practice"]["settings"]["memo"] == "\ud83c"
+
+
+def test_records_with_unknown_yaku_or_targets():
+    row = record(target="sanshoku", made=True).to_dict()
+    assert HandRecord.from_dict({**row, "yaku": ["riichi", "no_such_yaku"]}).yaku == ("riichi",)
+    with pytest.raises(ValueError):
+        HandRecord.from_dict({**row, "target": "no_such_target"})
+    assert HandRecord.from_dict({**row, "target": ""}).target == ""
