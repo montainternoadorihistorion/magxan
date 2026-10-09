@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,10 +16,14 @@ from html_helpers import page_html, page_parts
 from streamlit.testing.v1 import AppTest
 from test_game_page import find, first_turn, open_game, saved
 
+from engine import practice
+from engine.luck import LuckSettings
+from engine.practice import PracticeConfig
 from narration.client import AiError, Reply
 from ui.ai_access import MAX_FAILURES, REMEMBER_SECONDS, TEST_CLIENT, UNLOCK_NAME, token_valid, unlock_token
 from ui.components.browser_store import initial_state
 from ui.game_session import GAME_NAME
+from ui.progress_store import HAND_NAME
 from ui.ruby import missing_ruby
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +43,12 @@ class FakeAi:
         if isinstance(reply, Exception):
             raise reply
         return Reply(reply, settings.model, 900, 120)
+
+
+def saved_hand(seed: int) -> dict[str, str]:
+    """番号を決めた一人練習の局（ブラウザ内保存の形）。局面で答えが変わるテストは、これで局を決めておく"""
+    state = practice.start(PracticeConfig(seed=seed, luck=LuckSettings(75, 75)))
+    return {HAND_NAME: json.dumps({"v": 1, "save": practice.to_save(state), "counted": True, "hinted": False})}
 
 
 def open_practice(client: FakeAi | None = None, *, secrets: dict | None = None, known: dict | None = None) -> AppTest:
@@ -134,8 +145,10 @@ def test_ai_failure_falls_back_to_the_template_and_can_be_retried():
 
 
 def test_made_up_numbers_are_masked_in_free_answers():
+    # 局を決めておく（でたらめな局だと、聴牌の点数として 5,200 点が事実に入っていることがあり、伏せられない）
     ai = FakeAi(["5200 点になります。", "やはり 5200 点です。"])
-    at = open_practice(ai)
+    at = open_practice(ai, known=saved_hand(1))
+    assert at.session_state["pr_state"].config.seed == 1
     at.text_input(key="pr_why_text").input("あがったら何点？")
     submit(at, "AI に聞く")
     body = text(at)
