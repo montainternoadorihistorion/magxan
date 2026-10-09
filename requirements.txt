@@ -2,3 +2,5 @@
 streamlit==1.65.0
 mahjong==2.0.0
 PyYAML==6.0.3
+# AI による解説と質問（キーが無ければ使わない。Phase 5）
+anthropic==1.8.0

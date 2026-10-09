@@ -12,6 +12,7 @@ import streamlit as st
 
 from engine.coach import analyze
 from engine.content import glossary, yaku_page_map
+from engine.curriculum import step_of
 from engine.drills import DONE, GROUPS, KINDS, LEARNED_BOX, early_item, grade, grade_danger, grade_discard, progress_of
 from engine.scoring.explain import Status, explain
 from engine.srs import INTERVALS
@@ -19,6 +20,7 @@ from ui.components.browser_store import BrowserStore
 from ui.components.choices import Option, choice_buttons
 from ui.components.scroll_top import scroll_top
 from ui.components.tile_hand import Pick, tile_hand
+from ui.curriculum_view import test_result_html
 from ui.drill_session import DrillSession
 from ui.drill_view import (
     answer_lines_html,
@@ -76,6 +78,12 @@ def _on_discard(pick: Pick) -> None:
 
 def _menu(rb: Rubifier) -> None:
     now = _now()
+    done = session.test_done
+    if done is not None:
+        st.html(test_result_html(done, rb))
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.page_link("views/curriculum.py", label="カリキュラムへ", icon=":material/school:")
+            st.button("閉じる", on_click=session.clear_test_done, key="dr_b_test_close")
     decks = read_decks(store)
     progress = {kind: progress_of(kind, decks[kind], now) for kind in KINDS}
     due = sum(p.due for p in progress.values())
@@ -146,11 +154,37 @@ def _options(q, rb: Rubifier) -> list[Option]:
     return options
 
 
+def _next_label() -> str:
+    """「次の問題」のボタンの文字（確認テストの最後の問題では「結果を見る」）"""
+    test = session.test
+    return "結果を見る" if test is not None and test["index"] + 1 >= len(test["items"]) else "次の問題"
+
+
+#: 確認テストを途中でやめたときの知らせ（カリキュラムのページに出す）
+QUIT_NOTE = "確認テストをやめました（途中までの答えは、合否に数えていません。また、いつでも受けられます）。"
+
+
+def _quit_test() -> None:
+    """確認テストをやめて、カリキュラムのページへ戻る（ページの移動は、コールバックの中ではできないので、印だけ付ける）"""
+    session.leave()
+    ss["cu_message"] = QUIT_NOTE
+    ss["dr_to_curriculum"] = True
+
+
+def _test_header() -> tuple[int, int, str] | None:
+    test = session.test
+    if test is None:
+        return None
+    step = step_of(test["step"])
+    return (test["index"] + 1, len(test["items"]), step.title if step is not None else "")
+
+
 def _actions(rev: int) -> None:
     """答えたあとのボタン。正解・不正解の帯のすぐ下に置く（解説を読まずに次へ進みたいとき、画面を送らなくてよいように）"""
     with st.container(horizontal=True, key=ACTIONS_KEY):
-        st.button("次の問題", type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_{rev}")
-        st.button("種類の一覧へ", on_click=session.leave, width="stretch", key=f"dr_b_leave_{rev}")
+        st.button(_next_label(), type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_{rev}")
+        if session.test is None:
+            st.button("種類の一覧へ", on_click=session.leave, width="stretch", key=f"dr_b_leave_{rev}")
 
 
 def _quiz(kind: str, rb: Rubifier) -> bool:
@@ -177,7 +211,7 @@ def _quiz(kind: str, rb: Rubifier) -> bool:
     hidden = kind == "reading" and not answered
     qrb = Rubifier(enabled=False) if hidden else rb
 
-    head = header_html(kind, session.reason, session.count, session.right, qrb) + prompt_html(q, qrb, asked=hidden)
+    head = header_html(kind, session.reason, session.count, session.right, qrb, test=_test_header()) + prompt_html(q, qrb, asked=hidden)
     if q.danger is not None and q.position is not None:
         head += danger_setup_html(q, qrb)        # 河は問題文と同じ塊に入れる（部品のあいだの余白を減らし、手牌を最初の画面に入れる）
     st.html(head)
@@ -255,7 +289,10 @@ def _quiz(kind: str, rb: Rubifier) -> bool:
         review = choices_review_html(q, graded, qrb) + answer_lines_html(q, qrb)
 
     if not answered:
-        st.button("やめて、種類の一覧へ", on_click=session.leave, key=f"dr_b_quit_{rev}")
+        if session.test is not None:
+            st.button("確認テストをやめる", on_click=_quit_test, key=f"dr_b_quit_{rev}")
+        else:
+            st.button("やめて、種類の一覧へ", on_click=session.leave, key=f"dr_b_quit_{rev}")
         return False
     # その場で作った問題に正解したときは、いつ出すかの説明を出さない（覚えておかないので）
     st.html(review + srs_note_html(kind, session.card, state["correct"], session.answered_at or now, qrb))
@@ -269,7 +306,7 @@ def _quiz(kind: str, rb: Rubifier) -> bool:
         st.page_link("views/yaku_book.py", label=f"役図鑑で「{name}」を見る", icon=":material/menu_book:", query_params={"y": q.page})
     if q.term and glossary().find(q.term) is not None:
         st.page_link("views/glossary.py", label=f"用語辞典で「{q.term}」を見る", icon=":material/dictionary:", query_params={"t": q.term})
-    st.button("次の問題", type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_end_{rev}")
+    st.button(_next_label(), type="primary", on_click=session.next, width="stretch", key=f"dr_b_next_end_{rev}")
     return True
 
 
@@ -284,10 +321,16 @@ if not store.ready:
     st.button("保存を使わずに始める", on_click=store.skip)
     st.stop()
 
+if ss.pop("dr_to_curriculum", False):
+    st.switch_page("views/curriculum.py")
+
 wanted = st.query_params.get("k")
 if wanted is not None:
     del st.query_params["k"]                 # 1 回だけ使う
     if wanted in KINDS:
+        if session.test is not None:
+            # 確認テストの途中で、ほかの種類を選んできた（カリキュラムの「ドリル：…」など）。テストは、黙って消さずに知らせる
+            st.toast(QUIT_NOTE, icon=":material/info:", duration="long")
         session.start(wanted)
 
 rb = Rubifier()

@@ -87,6 +87,19 @@ class Rubifier:
             out.append(("".join(plain), ""))
         return out
 
+    def inline(self, text: str) -> str:
+        """ルビを振れない場所（ボタン・リンクの名前など）の文字に、初出の用語の読みを〈 〉で添える（HTML にはしない）。
+
+        例：「点数計算ラボ：C-1 暗刻（中張牌）」→「点数計算ラボ：C-1 暗刻〈アンコー〉（中張牌〈チュンチャンパイ〉）」
+        """
+        out: list[str] = []
+        for piece, is_term in self._pieces(text):
+            out.append(piece)
+            if is_term and self._enabled and piece not in self._seen:
+                self._seen.add(piece)
+                out.append(f"〈{self._readings[piece]}〉")
+        return "".join(out)
+
     def rich(self, text: str) -> str:
         """html() と同じだが、**…** で囲んだ部分を太字にする（説明文で、要点を目立たせるため）"""
         return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", self.html(text))

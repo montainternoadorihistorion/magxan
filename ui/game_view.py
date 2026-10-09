@@ -115,8 +115,8 @@ def hand_title(hand: HandState) -> str:
 # ---------------------------------------------------------------- 上の札と点数
 
 
-def status_html(game: GameState, rb: Rubifier) -> str:
-    """場（東 1 局など）・本場・供託・山の残り・ドラ・ツキ補正"""
+def status_html(game: GameState, rb: Rubifier, *, auto: bool = False) -> str:
+    """場（東 1 局など）・本場・供託・山の残り・ドラ・ツキ補正。auto は、自分の補正が、おまかせで決まったものか"""
     hand = game.current
     config = game.config
     aka = config.rules.aka_dora
@@ -146,25 +146,26 @@ def status_html(game: GameState, rb: Rubifier) -> str:
         names = "・".join(kind_text(dora_kind_of(kind_of(t))) for t in indicators)
         html += f'<span class="mj-chip mj-chip-tiles" title="{escape("ドラ：" + names)}"><span>ドラ {doras}</span></span>'
     if compact:
-        mine = "なし" if luck.is_off else f"{luck.deal}・{luck.draw}"
+        mine = ("なし" if luck.is_off else f"{luck.deal}・{luck.draw}") + ("（おまかせ）" if auto else "")
         text = f"ツキ補正：自分 {mine}／CPU {cpu.deal}・{cpu.draw}"
         html += f'<span class="mj-chip mj-chip-luck"><span>{rb.html(text)}</span></span>'
     else:
         off = " mj-chip-plain" if luck.is_off else " mj-chip-luck"
-        html += f'<span class="mj-chip{off}"><span>{rb.html(luck_text(luck.deal, luck.draw))}</span></span>'
+        html += f'<span class="mj-chip{off}"><span>{rb.html(luck_text(luck.deal, luck.draw, auto=auto))}</span></span>'
     return f'<div class="mj-chips mj-statusbar mj-status-fixed mj-game-status">{html}</div>'
 
 
-def scores_html(game: GameState, rb: Rubifier, *, mark: int = 0) -> str:
+def scores_html(game: GameState, rb: Rubifier, *, mark: int = 0, settled: bool = True) -> str:
     """4 人の点数（自分・下家・対面・上家の順）と、それぞれがいちばん最近に切った牌。
 
     手番の人と、リーチしている人に印を付ける。自分が最後に行動したあと（mark のあと）に切られた牌には、枠を付ける
     （CPU 3 人の動きが、手牌より上の、最初の画面の中で分かるように）。
+    settled が偽なら、局が終わっていても、精算の前の持ち点を出す（あがった点を申告してもらうあいだ、答えを見せないため）。
     """
     hand = game.current
     aka = hand.rules.aka_dora
     active = None if hand.result is not None else hand.turn
-    shown = hand.scores if hand.result is None else hand.result.scores      # 局が終わったら、精算のあとの持ち点
+    shown = hand.scores if hand.result is None or not settled else hand.result.scores      # 局が終わったら、精算のあとの持ち点
     new_from = discards_before(hand, mark) if mark else 10**9
     cells = []
     for seat in range(NUM_PLAYERS):
@@ -349,8 +350,8 @@ def _decision_mark(decision: TurnDecision) -> tuple[str, str]:
     return GRADE_CLASS[grade], GRADE_ICONS[grade]
 
 
-def claim_headline_html(hand: HandState, explanation: Explanation | None, rb: Rubifier, *, bumped: bool) -> str:
-    """ロンできる牌が出たとき（捨て牌・加槓の牌）"""
+def claim_headline_html(hand: HandState, explanation: Explanation | None, rb: Rubifier, *, bumped: bool, points: bool = True) -> str:
+    """ロンできる牌が出たとき（捨て牌・加槓の牌）。points が偽なら、点数は書かない（点数の申告の練習のため。役だけ書く）"""
     aka = hand.rules.aka_dora
     claim = hand.claim
     assert claim is not None
@@ -359,6 +360,8 @@ def claim_headline_html(hand: HandState, explanation: Explanation | None, rb: Ru
     head = f'<b class="mj-stage">{rb.html(word)}</b>　{escape(SEAT_NAMES[seat])}の {_small(tile, aka)} <b>{escape(_name(tile, aka))}</b>'
     if bumped:
         sub = "頭ハネ：先の順番の人だけがあがる（ロンしても無効）"
+    elif explanation is not None and explanation.best is not None and explanation.best.points is not None and not points:
+        sub = f"役：{'・'.join(explanation.spoken_yaku)}（点数は、あがったあとに申告する）"
     elif explanation is not None and explanation.best is not None and explanation.best.points is not None:
         sub = f"ロンすると {_pts(explanation.best.points.total)} 点（{'・'.join(explanation.spoken_yaku)}）"
     else:
@@ -1245,6 +1248,25 @@ def graduation_html(grad: Graduation, rb: Rubifier) -> str:
     return f'<div class="mj-lesson"><b>{rb.html(head)}</b><ul class="mj-rules">{body}</ul><div class="mj-sub">{rb.html(note)}</div></div>'
 
 
+def graduation_text(game: GameState, *, hinted: bool, counted: bool) -> str:
+    """いまの対局を、卒業判定（CPU 戦の条件）に数えるか。数えないなら、その理由も（画面のいちばん下に出す）"""
+    config = game.config
+    reasons = []
+    if not counted:
+        reasons.append("番号を指定した対局")
+    if not config.luck.is_off or not config.cpu_luck.is_off:
+        reasons.append("ツキ補正あり")
+    if config.cpu_level.value != "normal":
+        reasons.append("CPU が弱い")
+    if config.length.value != "east":
+        reasons.append("半荘戦")
+    if config.rules != Rules():
+        reasons.append("ルールを変えた")
+    if hinted:
+        reasons.append("打つ前のヒントを見た")
+    return "この対局は、卒業判定に数える" if not reasons else f"この対局は、卒業判定に数えない（{'・'.join(reasons)}）"
+
+
 def config_text(game: GameState) -> str:
     """いまの対局の条件（画面のいちばん下に出す）。初期値と違うルールがあれば、それも書く"""
     config = game.config
@@ -1278,6 +1300,12 @@ HELP_ITEMS = (
     ("守備", "誰かがリーチすると、手牌の危険度と根拠（現物・スジ・壁・字牌の見えている枚数）の表が出る。聴牌していなければ、コーチはオリ（ベタオリ）をすすめる。"),
     ("リーチ判断", "聴牌にとれるとき、リーチとダマ（リーチしない）を、役の有無・待ちの形と残り枚数・点数で比べた表が出る。"),
     ("局の終わり", "全員の手牌と待ちを公開する。あがった手は、点数計算の全過程を見られる。牌譜で、局を 1 手ずつ振り返れる（自分の判断の評価つき）。"),
+    ("なぜ？", "「なぜ？」を開くと、よくある質問のボタンが出る。押すと、アプリの計算をもとにした説明が出る"
+     "（AI のキーが設定してあれば、AI が分かりやすく言い直す。数・牌・役は、アプリの計算と照らし合わせる）。"),
+    ("点数の申告", "あがったら、解説の前に、点数を選ぶ（卓では、あがった人が自分で点数を言う）。"
+     "打つ前のヒントを見ずに打った局の申告だけを、卒業判定に数える。設定で切れる。"),
+    ("おまかせ", "設定の「おまかせ」を入れると、ヒントを見ずに打った局の評価とドリルの正答率から、ツキ補正を 1 段階ずつ自動で上げ下げする。"
+     "いまの段階と、変えた理由は、設定のツキ補正のところに出る。"),
     ("対局の終わり", "東風戦（東 1〜4 局）か半荘戦。最後まで打った対局だけを成績に入れる。決まりは雀魂の段位戦に合わせてある（雀魂で確かめられなかった細かい点と、ほかのルールとの違いは、ルールの違いのページに書いた）。"),
 )
 

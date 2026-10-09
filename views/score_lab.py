@@ -16,7 +16,11 @@ from engine.scoring.explain import Status, explain
 from engine.scoring.notation import MELD_WORDS, make_context, parse_meld, to_notation
 from engine.scoring.random_hand import KINDS, random_win
 from engine.tiles import EAST, NORTH, SOUTH, WEST, TileError, format_tiles, parse_tiles
+from narration.facts import win_facts
+from ui.ai_access import AiAccess
+from ui.components.browser_store import BrowserStore
 from ui.ruby import Rubifier
+from ui.why_view import why_box
 from ui.win_view import (
     DETAIL_FULL,
     DETAIL_LABELS,
@@ -28,6 +32,9 @@ from ui.win_view import (
 )
 
 ss = st.session_state
+# ブラウザ内保存は、「なぜ？」の合言葉を、この端末で覚えておくためだけに使う（このページは、ほかの記録を読み書きしない。
+# 記録の届くのを待たずに描く。届いたら描き直されて、覚えた合言葉が効く）
+store = BrowserStore()
 
 MODE_EXAMPLE, MODE_RANDOM, MODE_CUSTOM = "例題で学ぶ", "ランダムに出す", "自分で入力"
 MODES = [MODE_EXAMPLE, MODE_RANDOM, MODE_CUSTOM]
@@ -379,6 +386,10 @@ with st.container(horizontal=True, vertical_alignment="center"):
 # ---- 解説の本体
 for section in sections:
     st.html(section.heading_html + section.html)
+if result is not None and sections:
+    why_box(win_facts(result), key="lab_why", access=AiAccess(store=store), rb=rb, title="なぜ？（この手の点数について質問する）")
 
 if result is not None and result.status is Status.WIN and not result.consistent:
     st.warning("解説の計算が判定ライブラリと食い違いました。お手数ですが、この画面の手牌と状況を開発者に知らせてください。")
+
+store.mount()

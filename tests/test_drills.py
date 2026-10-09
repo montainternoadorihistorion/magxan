@@ -57,8 +57,8 @@ def all_questions(kind: str) -> list[Question]:
 
 
 def test_kinds_are_listed_in_learning_order():
-    assert list(KINDS) == ["reading", "han", "valid", "yaku", "win", "wait", "fu", "table", "score", "discard", "danger"]
-    assert sorted(FINITE) == ["han", "reading", "table", "valid"]
+    assert list(KINDS) == ["reading", "han", "valid", "yaku", "win", "wait", "fu", "table", "score", "discard", "danger", "manners"]
+    assert sorted(FINITE) == ["han", "manners", "reading", "table", "valid"]
     for kind in KINDS.values():
         assert kind.name and kind.short and kind.group in drills.GROUPS
     # 仕様の 7-3 にある種類（危険牌の判断は、CPU との対局と一緒に入れた）
@@ -118,7 +118,7 @@ def test_items_of_and_new_item():
         assert is_item(kind, item) and item.isdigit()
     for kind in FINITE:
         items = items_of(kind)
-        assert len(items) == len(set(items)) > 30
+        assert len(items) == len(set(items)) > (15 if kind == "manners" else 30)
         assert all(is_item(kind, item) for item in items)
         with pytest.raises(ValueError):
             new_item(kind, 1)
@@ -691,3 +691,31 @@ def test_danger_questions_have_a_clear_safest_tile(item):
 def test_danger_drill_is_listed_with_the_play_drills():
     assert drills.KINDS["danger"].group == "play" and not drills.KINDS["danger"].finite
     assert drills.is_item("danger", "42") and not drills.is_item("danger", "x")
+
+
+# ---------------------------------------------------------------- 発声と作法
+
+
+def test_manners_questions_come_from_the_glossary_and_the_table_guide():
+    items = items_of("manners")
+    assert {"say:ron", "say:tsumo", "say:pon", "say:chi", "say:kan", "say:riichi", "order:call", "order:riichi", "order:win"} <= set(items)
+    ron = question("manners", "say:ron")
+    assert ron.prompt == "ほかの人の捨て牌であがるとき、何と言う？" and ron.correct == {"ロン"} and len(ron.choices) == 4
+    assert ron.answer[0].startswith("栄和（ロンホー）：") and ron.answer[1].startswith("発声：")
+    order = question("manners", "order:riichi")
+    assert order.correct == {"「リーチ」と言う → 牌を横向きに捨てる → 1000 点棒を出す"} and len({c.key for c in order.choices}) == 4
+    term = question("manners", "term:先ヅモ")
+    assert "先ヅモ" not in term.prompt and term.correct == {"先ヅモ"} and term.answer[0].startswith("先ヅモ（サキヅモ）：")
+    for item in items:
+        q = question("manners", item)
+        assert len({c.key for c in q.choices}) == 4 and len(q.correct) == 1 and q.correct <= {c.key for c in q.choices}
+        if item.startswith("term:"):
+            assert item[5:] not in q.prompt                          # 説明の中に答えの言葉を出さない
+
+
+def test_call_order_question_does_not_mark_an_accepted_order_wrong():
+    """鳴きの「捨て牌を取る」と「1 枚捨てる」の順は、卓によって違う。入れ替えた順は、はずれの選択肢にしない"""
+    q = question("manners", "order:call")
+    swapped = "声を出す → 手牌から使う牌を見せる → 1 枚捨てる → 捨て牌を取る"
+    assert swapped not in [c.key for c in q.choices] and len(q.choices) == 4
+    assert any("卓によって違う" in line for line in q.answer)

@@ -146,6 +146,7 @@ st.html(subhead("一人練習の成績", rb) + stats_html(summarize(history), rb
 
 games = read_games(store)
 st.html(subhead("CPU との対局の成績", rb) + game_stats_html(summarize_games(games), graduation(games), rb))
+st.page_link("views/graduation.py", label="卒業判定（ドリル・点数の申告も合わせた、6 つの条件）", icon=":material/emoji_events:")
 
 rows = ['<tr class="mj-dim"><td>ドリル</td><td>進み具合</td></tr>']
 for kind, info in KINDS.items():

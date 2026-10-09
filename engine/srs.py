@@ -10,6 +10,7 @@
     はじめて出た問題に正解したら、箱 2 から始める（もう知っている問題を、何度も出さないため）。
 
 問題の集まり（Deck）は、ドリルの種類ごとに 1 つ。文字と数だけでできているので、そのまま JSON にして残せる。
+直近の答えの正誤（recent。新しいものが右。"1" ＝ 正解）も残す。卒業の目安で「直近の正答率」を見るため（Phase 5）。
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ DECK_VERSION = 1
 MAX_CARDS = 400
 _MAX_TIME = 10**11
 _MAX_COUNT = 10**6
+#: 覚えておく、直近の答えの数
+RECENT_SIZE = 50
 
 
 @dataclass(frozen=True)
@@ -59,11 +62,17 @@ class Deck:
     cards: Mapping[str, Card] = field(default_factory=dict)
     answered: int = 0       # 答えた回数（忘れた問題のぶんも含む）
     right: int = 0          # 正解した回数
+    recent: str = ""        # 直近の答えの正誤（"1" ＝ 正解、"0" ＝ まちがい。新しいものが右。RECENT_SIZE まで）
 
     @property
     def accuracy(self) -> float | None:
         """正答率（まだ 1 問も答えていなければ None）"""
         return self.right / self.answered if self.answered else None
+
+    def recent_accuracy(self, count: int) -> tuple[int, int]:
+        """直近 count 回の（正解の数, 答えた数）。答えた数が count に足りなければ、答えたぶんだけ"""
+        tail = self.recent[-count:] if count > 0 else ""
+        return tail.count("1"), len(tail)
 
     def due(self, now: int, skip: Collection[str] = ()) -> list[str]:
         """出す時刻になっている問題。間違えたばかりのもの（箱の小さいもの）→ 待たせているもの、の順。
@@ -99,13 +108,15 @@ class Deck:
         else:
             cards[item] = Card(box, now + INTERVALS[box], seen, right, now)
         _trim(cards, keep=item)
-        return Deck(cards, self.answered + 1, self.right + (1 if correct else 0))
+        recent = (self.recent + ("1" if correct else "0"))[-RECENT_SIZE:]
+        return Deck(cards, self.answered + 1, self.right + (1 if correct else 0), recent)
 
     def to_data(self) -> dict:
         return {
             "v": DECK_VERSION,
             "n": self.answered,
             "right": self.right,
+            "recent": self.recent,
             "cards": {key: card.to_list() for key, card in self.cards.items()},
         }
 
@@ -153,7 +164,10 @@ def deck_from_data(data: object) -> Deck:
         return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MAX_COUNT else 0
 
     answered = count("n")
-    return Deck(cards, answered, min(count("right"), answered))
+    recent = data.get("recent", "")          # 無いのは、Phase 5 より前の記録
+    if not isinstance(recent, str) or len(recent) > RECENT_SIZE or set(recent) - {"0", "1"} or len(recent) > answered:
+        recent = ""
+    return Deck(cards, answered, min(count("right"), answered), recent)
 
 
 def dump_deck(deck: Deck) -> str:
@@ -170,7 +184,10 @@ def load_deck(text: str | None) -> Deck:
 
 
 def merge_decks(mine: Deck, theirs: Deck) -> Deck:
-    """2 つの記録を合わせる。同じ問題は、あとで答えたほうの状態を採る。回数は多いほうを採る（足さない）"""
+    """2 つの記録を合わせる。同じ問題は、あとで答えたほうの状態を採る。回数は多いほうを採る（足さない）。
+
+    直近の正誤も、答えた回数の多いほうを採る（同じなら mine）。時刻の無い正誤の並びは、つなげられないため。
+    """
     cards = dict(mine.cards)
     for key, other in theirs.cards.items():
         old = cards.get(key)
@@ -178,4 +195,5 @@ def merge_decks(mine: Deck, theirs: Deck) -> Deck:
             cards[key] = other
     _trim(cards)
     answered = max(mine.answered, theirs.answered)
-    return Deck(cards, answered, min(max(mine.right, theirs.right), answered))
+    recent = theirs.recent if theirs.answered > mine.answered else mine.recent
+    return Deck(cards, answered, min(max(mine.right, theirs.right), answered), recent)

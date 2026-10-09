@@ -6,6 +6,8 @@
     practice.history    一人練習の成績（記録の配列）
     progress.stamps     スタンプ（成立させた役）
     drill.<種類>        ドリルの記録（種類ごとに 1 つ）
+    drill.declare       あがったときの点数の申告の記録（ドリルと同じ形。Phase 5）
+    progress.curriculum カリキュラムの進み具合（段階ごとの確認テストの結果。Phase 5）
     game.current        CPU との対局（打っている対局）
     game.settings       CPU との対局の設定
     game.history        CPU との対局の成績（記録の配列）
@@ -19,6 +21,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from engine.curriculum import Progress, dump_progress, load_progress, merge_progress, progress_from_data
 from engine.drills import KINDS
 from engine.game_records import GameRecord, dump_record
 from engine.game_records import load_history as load_games
@@ -44,6 +47,10 @@ DRILL_PREFIX = "drill."
 GAME_NAME = "game.current"
 GAME_SETTINGS_NAME = "game.settings"
 GAME_HISTORY_NAME = "game.history"
+CURRICULUM_NAME = "progress.curriculum"
+#: あがったときの点数の申告の記録（ドリルの記録と同じ形で、drill.declare に置く。書き出しでも、ドリルと一緒に扱う）
+DECLARE = "declare"
+DECK_KEYS = (*KINDS, DECLARE)
 
 
 class Store(Protocol):
@@ -113,8 +120,25 @@ def write_deck(store: Store, kind: str, deck: Deck) -> None:
     store.set(DRILL_PREFIX + kind, dump_deck(deck))
 
 
+def read_curriculum(store: Store) -> Progress:
+    return load_progress(store.get(CURRICULUM_NAME))
+
+
+def write_curriculum(store: Store, progress: Progress) -> None:
+    if progress.steps:
+        store.set(CURRICULUM_NAME, dump_progress(progress))
+    else:
+        store.remove(CURRICULUM_NAME)
+
+
 def read_decks(store: Store) -> dict[str, Deck]:
-    return {kind: read_deck(store, kind) for kind in KINDS}
+    """ドリルの記録（種類ごと）と、点数の申告の記録（DECLARE）"""
+    return {kind: read_deck(store, kind) for kind in DECK_KEYS}
+
+
+def drill_answers(decks: dict[str, Deck]) -> int:
+    """ドリルに答えた回数（点数の申告は数えない）"""
+    return sum(deck.answered for kind, deck in decks.items() if kind in KINDS)
 
 
 # ---------------------------------------------------------------- ファイルへの書き出し・読み込み
@@ -122,7 +146,8 @@ def read_decks(store: Store) -> dict[str, Deck]:
 
 def store_signature(store: Store) -> str:
     """書き出しに入る記録（成績・スタンプ・ドリル・設定）の、いまの中身のしるし。中身が変わると、しるしも変わる"""
-    names = [HISTORY_NAME, STAMPS_NAME, SETTINGS_NAME, GAME_HISTORY_NAME, GAME_SETTINGS_NAME, *(DRILL_PREFIX + kind for kind in KINDS)]
+    names = [HISTORY_NAME, STAMPS_NAME, SETTINGS_NAME, GAME_HISTORY_NAME, GAME_SETTINGS_NAME, CURRICULUM_NAME,
+             *(DRILL_PREFIX + kind for kind in DECK_KEYS)]
     digest = hashlib.sha256()
     for name in names:
         value = store.get(name)
@@ -144,6 +169,7 @@ def export_text(store: Store, *, time: int, app_version: str) -> str:
         app_version=app_version,
         games=read_games(store),
         game_settings=game_settings if isinstance(game_settings, dict) else None,
+        curriculum=read_curriculum(store).to_data() if read_curriculum(store).steps else None,
     )
 
 
@@ -155,23 +181,24 @@ class Summary:
     stamps: int         # スタンプのある役の数
     answers: int        # ドリルに答えた回数（全種類の合計）
     games: int = 0      # CPU との対局の成績の対局数
+    declares: int = 0   # あがったときに点数を申告した回数
 
     def text(self) -> str:
         """画面に出す短いまとめ"""
-        return f"一人練習 {self.hands} 局・CPU との対局 {self.games} 回・スタンプ {self.stamps} 役・ドリル {self.answers} 回"
+        return (f"一人練習 {self.hands} 局・CPU との対局 {self.games} 回・スタンプ {self.stamps} 役・ドリル {self.answers} 回"
+                f"・点数の申告 {self.declares} 回")
 
 
 def summary_of_store(store: Store) -> Summary:
-    return Summary(
-        len(read_history(store)), len(read_stamps(store)), sum(deck.answered for deck in read_decks(store).values()), len(read_games(store)),
-    )
+    decks = read_decks(store)
+    return Summary(len(read_history(store)), len(read_stamps(store)), drill_answers(decks), len(read_games(store)), decks[DECLARE].answered)
 
 
 def summary_of_export(data: Export) -> Summary:
-    decks = data.drills or {}
+    raw = data.drills or {}
+    decks = {kind: deck_from_data(raw.get(kind)) for kind in DECK_KEYS}
     stamps = data.stamps if "stamps" in data.parts else stamps_from_history(data.history)
-    answers = sum(deck_from_data(decks.get(kind)).answered for kind in KINDS)
-    return Summary(len(data.history), len(stamps), answers, len(data.games))
+    return Summary(len(data.history), len(stamps), drill_answers(decks), len(data.games), decks[DECLARE].answered)
 
 
 def apply_import(
@@ -185,17 +212,20 @@ def apply_import(
     CPU との対局の成績は空になる。
     """
     theirs_stamps = data.stamps if "stamps" in data.parts else stamps_from_history(data.history)
-    theirs_decks = {kind: deck_from_data((data.drills or {}).get(kind)) for kind in KINDS}
+    theirs_decks = {kind: deck_from_data((data.drills or {}).get(kind)) for kind in DECK_KEYS}
+    theirs_curriculum = progress_from_data(data.curriculum)
     if merge:
         history = merge_history(read_history(store), data.history)
         games = merge_games(read_games(store), data.games)
         stamps = merge_stamps(read_stamps(store), theirs_stamps)
-        decks = {kind: merge_decks(read_deck(store, kind), theirs_decks[kind]) for kind in KINDS}
+        decks = {kind: merge_decks(read_deck(store, kind), theirs_decks[kind]) for kind in DECK_KEYS}
+        curriculum = merge_progress(read_curriculum(store), theirs_curriculum)
     else:
         history = merge_history([], data.history)          # 古い順に並べ、上限に収める
         games = merge_games([], data.games)
         stamps = dict(theirs_stamps)
         decks = theirs_decks
+        curriculum = theirs_curriculum
         if data.settings is not None and clean_settings is not None:
             store.set(SETTINGS_NAME, json.dumps(clean_settings(data.settings)))
         if data.game_settings is not None and clean_game_settings is not None:
@@ -203,12 +233,13 @@ def apply_import(
     write_history(store, history)
     write_games(store, games)
     write_stamps(store, stamps)
+    write_curriculum(store, curriculum)
     for kind, deck in decks.items():
         if deck.answered or deck.cards:
             write_deck(store, kind, deck)
         else:
             store.remove(DRILL_PREFIX + kind)
-    return Summary(len(history), len(stamps), sum(deck.answered for deck in decks.values()), len(games))
+    return Summary(len(history), len(stamps), drill_answers(decks), len(games), decks[DECLARE].answered)
 
 
 def clear_all(store: Store) -> None:
@@ -216,5 +247,6 @@ def clear_all(store: Store) -> None:
     store.remove(HISTORY_NAME)
     store.remove(GAME_HISTORY_NAME)
     store.remove(STAMPS_NAME)
-    for kind in KINDS:
+    store.remove(CURRICULUM_NAME)
+    for kind in DECK_KEYS:
         store.remove(DRILL_PREFIX + kind)

@@ -18,13 +18,16 @@ from streamlit.testing.v1 import AppTest
 
 from engine import practice
 from engine.coach import analyze
+from engine.declare import declare_quiz
 from engine.luck import LuckSettings
 from engine.practice import Outcome, PracticeConfig
 from engine.records import HandRecord, dump_record, load_history
 from engine.scoring.explain import explain
+from engine.srs import load_deck
 from engine.target_coach import target_result
 from ui.components.browser_store import initial_state
 from ui.practice_session import DEFAULT_SETTINGS, HAND_NAME, HISTORY_NAME, SETTINGS_NAME, PracticeSession
+from ui.practice_view import HINT_AFTER
 from ui.ruby import missing_ruby
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -263,7 +266,8 @@ def test_hint_off_and_minimum_level_show_less():
     assert "コーチはオフです" in text and "巡目の打牌" not in text and TABLE not in labels(off)
     minimum = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(level=1)})
     assert "おすすめ：" in page_text(minimum) and "3 巡目の打牌" in page_text(minimum)
-    assert labels(minimum) == ["設定（ツキ補正・役指定・コーチ）", "成績", "このページの使い方"]
+    # 表示の量が「少なめ」でも、「なぜ？」（閉じた折りたたみ 1 行）は出す
+    assert labels(minimum) == ["なぜ？（この局面について質問する）", "設定（ツキ補正・役指定・コーチ）", "成績", "このページの使い方"]
 
 
 def test_last_draw_explains_that_only_tenpai_matters():
@@ -291,7 +295,16 @@ def test_tsumo_button_shows_the_full_explanation_and_records_the_hand():
     press_action(at)
     won = at.session_state["pr_state"]
     assert won.finished and won.result.outcome is Outcome.TSUMO
+    # 解説の前に、点数を申告する（答えるまで、点数は見せない）
+    quiz = declare_quiz(explain(won.result.win, won.config.rules), f"{won.config.seed}:{len(won.actions)}")
     text = page_text(at)
+    assert "あがり！ 何点？" in text and steps(at) == [] and "「ツモ。" not in text
+    assert [o["key"] for o in component_data(at, "mjdojo_choices", "pr_declare")["options"]] == list(quiz.choices)
+    assert missing_ruby(page_parts(at)) == []
+    choose(at, [quiz.answer], key="pr_declare")
+    assert stored(at, "drill.declare") is None          # 打つ前のヒント（聴牌したときの点数の表）を見た局の申告は、記録に入れない
+    text = page_text(at)
+    assert "○ 申告：正解" in text and quiz.why in text and "この申告は、記録に入れていない" in text
     assert "ツモあがり" in text and f"{won.result.turn} 巡目で終了" in text
     assert steps(at) == ALL_STEPS
     assert "配牌：候補 64 個から" in text and "「ツモ。" in text
@@ -313,6 +326,34 @@ def test_tsumo_button_shows_the_full_explanation_and_records_the_hand():
     assert at.session_state["pr_state"].config.seed != won.config.seed and at.session_state["pr_counted"] is True
 
 
+def test_declaration_is_recorded_only_for_counted_hands_without_hints():
+    state = find(LuckSettings(75, 75), lambda s: s.can_tsumo)
+    at = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(hint=HINT_AFTER)})
+    press_action(at)
+    won = at.session_state["pr_state"]
+    quiz = declare_quiz(explain(won.result.win, won.config.rules), f"{won.config.seed}:{len(won.actions)}")
+    wrong = next(c for c in quiz.choices if c != quiz.answer)
+    choose(at, [wrong], key="pr_declare")
+    deck = load_deck(stored(at, "drill.declare"))
+    assert (deck.answered, deck.right, deck.recent) == (1, 0, "0") and quiz.item in deck.cards
+    assert "記録に入れていない" not in page_text(at)
+    # やり直し・番号を指定した局（成績に入れない局）は、記録に入れない
+    again = open_practice({HAND_NAME: hand_json(state, counted=False), SETTINGS_NAME: settings_json(hint=HINT_AFTER)})
+    press_action(again)
+    choose(again, [quiz.answer], key="pr_declare")
+    assert stored(again, "drill.declare") is None and "記録に入れていない" in page_text(again)
+
+
+def test_turning_declare_on_after_seeing_the_result_asks_nothing():
+    state = find(LuckSettings(75, 75), lambda s: s.can_tsumo)
+    at = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(hint=HINT_AFTER, declare=False)})
+    press_action(at)
+    assert "あがり！ 何点？" not in page_text(at) and steps(at) == ALL_STEPS          # 申告しない設定：すぐ解説
+    at.toggle(key="pr_w_declare").set_value(True).run()
+    assert "あがり！ 何点？" not in page_text(at) and steps(at) == ALL_STEPS          # 点数を見たあとでは、聞かない
+    assert stored(at, "drill.declare") is None
+
+
 def test_riichi_hand_shows_which_draws_were_brought_by_luck():
     """リーチのあとは自動でツモ切りになる。そのあいだに補正で引き寄せた牌にも、印を付けて見せる"""
     for seed in range(300):
@@ -324,12 +365,12 @@ def test_riichi_hand_shows_which_draws_were_brought_by_luck():
             break
     else:
         raise AssertionError("局面が見つからない")
-    at = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(deal=100, draw=100, tenpai_deal=True)})
+    at = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(deal=100, draw=100, tenpai_deal=True, declare=False)})
     text = page_text(at)
     assert "リーチのあとのツモ" in text and "★ は、ツキ補正で引き寄せた牌" in text and 'class="mj-star"' in page_html(at)
     assert "裏ドラ表示牌" in text                                     # リーチしてあがった局は、手牌の下に裏ドラ表示牌も出す
     assert "あがり牌も、補正で引き寄せた牌。" in text
-    plain = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(deal=100, draw=100, tenpai_deal=True, mark=False)})
+    plain = open_practice({HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(deal=100, draw=100, tenpai_deal=True, mark=False, declare=False)})
     assert 'class="mj-star"' not in page_html(plain)                   # 印を付けない設定
 
 
@@ -516,6 +557,9 @@ def test_playing_through_the_session_object_updates_the_page():
         steps += 1
         assert steps < 40
     assert len(at.session_state["pr_history"]) == 1 and at.session_state["pr_history"][0].hinted is False
+    if at.session_state["pr_state"].result.outcome is Outcome.TSUMO:
+        click(at, "申告しないで結果を見る")
+        assert stored(at, "drill.declare") is None                          # 申告しなかったときは、記録しない
     assert "次の局へ" in [b.label for b in at.button]
 
 
@@ -565,8 +609,10 @@ def wins_with(key: str):
     return check
 
 
-def components(at: AppTest, name: str) -> list[dict]:
-    return [json.loads(c.proto.json) for c in at.get("bidi_component") if c.proto.component_name == name]
+def components(at: AppTest, name: str, *, why: bool = False) -> list[dict]:
+    """その部品の中身（why が False なら、「なぜ？」のよくある質問の選択肢は除く）"""
+    return [json.loads(c.proto.json) for c in at.get("bidi_component")
+            if c.proto.component_name == name and (why or not c.proto.id.endswith("_why_choices"))]
 
 
 def test_target_link_starts_a_hand_aimed_at_that_yaku():
@@ -576,7 +622,7 @@ def test_target_link_starts_a_hand_aimed_at_that_yaku():
     assert json.loads(stored(at, SETTINGS_NAME))["target"] == "sanshoku"
     text = page_text(at)
     assert "役指定：三色同順" in text and "三色同順まで あと" in text
-    assert labels(at)[:4] == ["めざす形（三色同順）", "三色同順に近い切り方の表", "受け入れ表（速さだけで見たとき）", LAYOUT]
+    assert labels(at)[:5] == ["なぜ？（この局面について質問する）", "めざす形（三色同順）", "三色同順に近い切り方の表", "受け入れ表（速さだけで見たとき）", LAYOUT]
     assert "聴牌したときの待ちと点数" not in labels(at)
     assert missing_ruby(page_parts(at)) == []
     # 手牌の印は、役に近い切り方（速さのおすすめではなく）
@@ -635,6 +681,7 @@ def test_winning_with_the_target_gives_a_stamp_and_a_record():
     at = open_target(None, {HAND_NAME: hand_json(state), SETTINGS_NAME: settings_json(target="tanyao")})
     assert "あがりの形です。断么九が付きます。" in page_text(at)
     press_action(at)
+    click(at, "申告しないで結果を見る")
     text = page_text(at)
     assert "狙った断么九が付いた。" in text and "はじめて成立させた役" in text and "役図鑑に、スタンプを押しました。" in text
     # スタンプの案内は、「次の局へ」の下に出す（上に置くと、ボタンが最初の画面から押し出される）
@@ -653,6 +700,7 @@ def test_winning_with_the_target_gives_a_stamp_and_a_record():
     # もう 1 回あがっても「はじめて」とは言わない
     again = open_target(None, {**at.session_state[STORE_STATE]["known"], HAND_NAME: hand_json(state)})
     press_action(again)
+    click(again, "申告しないで結果を見る")
     assert "狙った断么九が付いた。" in page_text(again) and "はじめて成立させた役" not in page_text(again)
     assert json.loads(stored(again, "progress.stamps"))["tanyao"]["n"] == 2
 

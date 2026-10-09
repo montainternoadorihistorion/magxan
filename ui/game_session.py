@@ -16,6 +16,8 @@ call:N は、鳴ける牌への返事のうち N 番目の鳴き（HandState.cal
 kan:牌ID は、自分の番の暗槓・加槓。
 
 CPU の手番は、自分の行動のあとに、まとめて進める（engine.cpu.advance）。自分が行動を決める番になるか、局が終わるまで。
+おまかせ補正：設定の auto を入れておくと、新しい対局（成績に入れる対局）を始めるたびに、自分のツキ補正の段階を
+成績から決め直す（engine/auto_luck.py・ui/auto_state.py。CPU の補正は変えない）。
 画面の部品（Streamlit）には触れない。画面なしでテストできる。
 """
 from __future__ import annotations
@@ -27,8 +29,10 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from engine import game as g
+from engine.auto_luck import MIN_GAMES, AutoDecision, decision_data, decision_from_data, game_play
 from engine.call_coach import CallDecision
 from engine.cpu import advance, human_turn
+from engine.declare import DeclareQuiz
 from engine.game import HUMAN, CpuLevel, GameConfig, GameState, Length, Move
 from engine.game_coach import TurnDecision
 from engine.game_records import (
@@ -46,6 +50,8 @@ from engine.progress import add_stamps
 from engine.review import human_decisions, judge_action
 from engine.rules import Rules
 from engine.scoring.explain import explain
+from ui.auto_state import AUTO_DEFAULTS, clean_auto, judge, step_values, turn_on
+from ui.declare_state import clean_declared, declared_state, record_declaration, skipped_state
 from ui.game_view import kifu_notes
 from ui.practice_view import HINT_AFTER, HINT_BEFORE, HINT_OFF, LEVEL_FULL, LEVEL_MIN, LEVEL_NORMAL
 from ui.progress_store import GAME_HISTORY_NAME, GAME_NAME, GAME_SETTINGS_NAME, Store, read_stamps, write_stamps
@@ -74,6 +80,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "mark": True,
     "moves": MOVES_TOGETHER,
     "rules": {name: True for name in GAME_RULES},
+    "declare": True,         # あがったら、解説の前に点数を申告する（Phase 5）
+    **AUTO_DEFAULTS,         # おまかせ補正（Phase 5。ui/auto_state.py）
 }
 
 
@@ -94,8 +102,9 @@ def clean_settings(data: object, base: dict[str, Any] | None = None) -> dict[str
         result["hint"] = data["hint"]
     if data.get("level") in (LEVEL_MIN, LEVEL_NORMAL, LEVEL_FULL) and not isinstance(data.get("level"), bool):
         result["level"] = data["level"]
-    if isinstance(data.get("mark"), bool):
-        result["mark"] = data["mark"]
+    for name in ("mark", "declare"):
+        if isinstance(data.get(name), bool):
+            result[name] = data[name]
     if data.get("moves") in (MOVES_TOGETHER, MOVES_EACH):
         result["moves"] = data["moves"]
     rules = data.get("rules")
@@ -103,6 +112,7 @@ def clean_settings(data: object, base: dict[str, Any] | None = None) -> dict[str
         for name in GAME_RULES:
             if isinstance(rules.get(name), bool):
                 result["rules"][name] = rules[name]
+    clean_auto(data, result)
     return result
 
 
@@ -138,8 +148,20 @@ def decisions_of(game: GameState) -> tuple[list[TurnDecision], list[CallDecision
     return turns, calls
 
 
+def _folding(decision: TurnDecision) -> bool:
+    """リーチを受けていて、オリるべき局面での打牌か"""
+    return decision.safety is not None and decision.advice.stance.value == "fold"
+
+
+def good_turn(decision: TurnDecision) -> bool:
+    """コーチの評価がいちばん良い打牌か（engine.game_records.Tally.good を参照）"""
+    if _folding(decision):
+        return decision.safety is not None and decision.safety.grade.value == "safe"
+    return decision.verdict.is_best and not decision.lost_yaku and not decision.yaku_detour
+
+
 def tally_of(decisions: list[TurnDecision], calls: list[CallDecision] | None = None) -> Tally:
-    defense = [d for d in decisions if d.safety is not None and d.advice.stance.value == "fold"]
+    defense = [d for d in decisions if _folding(d)]
     made = [c for c in (calls or []) if c.called]
     return Tally(
         decisions=len(decisions),
@@ -148,6 +170,7 @@ def tally_of(decisions: list[TurnDecision], calls: list[CallDecision] | None = N
         safe=sum(1 for d in defense if d.safety is not None and d.safety.grade.value == "safe"),
         calls=len(made),
         bad_calls=sum(1 for c in made if c.no_yaku),
+        good=sum(1 for d in decisions if good_turn(d)),
     )
 
 
@@ -241,9 +264,86 @@ class GameSession:
         return self._s.get("gm_fresh", [])
 
     @property
+    def declared(self) -> dict[str, Any] | None:
+        """いまの局で、点数を申告した（または申告しないことにした）記録。まだなら None。
+        {"hand": 局の番号, "picked": 選んだ点（申告しなかったら None）, "answer": 正しい点, "why": 理由}"""
+        state = self._s.get("gm_declared")
+        if isinstance(state, dict) and state.get("hand") == self.game.current.start.number:
+            return state
+        return None
+
+    @property
+    def declare_fair(self) -> bool:
+        """この局の申告を、記録に入れるか（成績に入れる対局で、打つ前のヒントを見ていない。ui/declare_state.py）"""
+        return self.counted and not self.hinted
+
+    @property
+    def declared_rev(self) -> int:
+        """申告するか、申告しないことにするたびに増える番号（答え合わせを、画面の上から見せる合図）"""
+        return int(self._s.get("gm_declared_rev", 0))
+
+    def declare(self, quiz: DeclareQuiz, picked: str) -> bool:
+        """あがった手の点数を申告する（いまの局で 1 回だけ）。→ 正解したか。記録に入れるのは declare_fair のときだけ"""
+        if self.declared is not None or picked not in quiz.choices:
+            self._bump()
+            return False
+        fair = self.declare_fair
+        correct = record_declaration(self._store, quiz, picked, now=self._now()) if fair else quiz.correct(picked)
+        self._s["gm_declared"] = declared_state(self.game.current.start.number, quiz, picked, recorded=fair)
+        self._s["gm_declared_rev"] = self.declared_rev + 1
+        self._bump()
+        self._save()
+        return correct
+
+    def skip_declare(self) -> None:
+        """申告しないで、結果を見る（記録には残さない）"""
+        if self.declared is None:
+            self._s["gm_declared"] = skipped_state(self.game.current.start.number)
+            self._s["gm_declared_rev"] = self.declared_rev + 1
+        self._bump()
+        self._save()
+
+    def result_shown(self) -> None:
+        """あがりの結果（点数）を、申告の問題を出さずに見せた。あとで申告の設定を入れても、この局では問題を出さない"""
+        if self.declared is None and self.game.current.result is not None:
+            self._s["gm_declared"] = skipped_state(self.game.current.start.number)
+            self._save()
+
+    @property
     def config_changed(self) -> bool:
         """いまの対局の設定（長さ・CPU・補正・ルール）が、設定と違うか"""
         return config_of(self.settings, self.game.config.seed) != self.game.config
+
+    # ------------------------------------------------------------ おまかせ補正
+
+    @property
+    def auto(self) -> bool:
+        """おまかせ補正にしているか"""
+        return self.settings.get("auto") is True
+
+    def set_auto(self, on: bool) -> None:
+        """おまかせ補正を入れる・切る（ui/practice_session.py と同じ）"""
+        if on == self.auto:
+            return
+        self.update_settings(turn_on(self.settings, int(self._now())) if on else {"auto": False})
+
+    def auto_preview(self) -> AutoDecision:
+        """いまの成績で判断すると、どうなるか（次に新しい対局を始めるとき、こう判断する）"""
+        return judge(self.settings, lambda since, level: game_play(self.history, since, level), MIN_GAMES, self._store, int(self._now()))
+
+    def take_auto_news(self) -> AutoDecision | None:
+        """新しい対局を始めたときに、おまかせが段階を変えていれば、その判断（1 回だけ）"""
+        found = decision_from_data(self._s.pop("gm_auto_news", None))
+        return found[0] if found is not None else None
+
+    def _auto_step(self) -> None:
+        now = int(self._now())
+        decision = self.auto_preview()
+        values = step_values(self.settings, decision, now)
+        if values is not None:
+            self.update_settings(values)
+        if decision.changed:
+            self._s["gm_auto_news"] = decision_data(decision, now)
 
     # ------------------------------------------------------------ 始める
 
@@ -258,8 +358,11 @@ class GameSession:
             self.begin()
 
     def begin(self, seed: int | None = None) -> None:
-        """新しい対局を始める。番号を指定した対局は、成績に入れない"""
+        """新しい対局を始める。番号を指定した対局は、成績に入れない。
+        おまかせ補正なら、成績に入れる対局を始める前に、自分の補正の段階を決め直す"""
         counted = seed is None
+        if counted and self.auto:
+            self._auto_step()
         config = config_of(self.settings, self._new_seed() if seed is None else seed)
         game = advance(g.start_game(config))
         self._s["gm_game"] = game
@@ -275,6 +378,7 @@ class GameSession:
         self._s["gm_fresh"] = []
         self._s["gm_mark"] = 0
         self._s["gm_scroll"] = True
+        self._s.pop("gm_declared", None)
         self._s.pop("gm_stamped", None)          # 同じ番号の対局を打ち直しても、あがりにスタンプを押せるように
         self._bump()
         self._after(game)
@@ -310,6 +414,7 @@ class GameSession:
         self._s["gm_counted"] = data.get("counted") is True
         self._s["gm_hinted"] = data.get("hinted") is True
         self._s["gm_recorded"] = data.get("recorded") is True
+        self._s["gm_declared"] = clean_declared(data.get("declared"))
         self._s["gm_resumed"] = resumed
         self._s.setdefault("gm_fresh", [])
         mark = data.get("mark")
@@ -523,6 +628,7 @@ class GameSession:
             "recorded": bool(self._s.get("gm_recorded")),
             "tally": self._s.get("gm_tally", Tally()).to_dict(),
             "mark": self.mark,
+            "declared": self._s.get("gm_declared"),
         }
 
     def _save(self) -> None:

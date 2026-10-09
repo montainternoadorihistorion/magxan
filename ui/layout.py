@@ -251,6 +251,21 @@ div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] {
   background: rgba(128, 128, 128, 0.07);
 }
 div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] p { font-weight: 700; }
+/* カリキュラム・卒業判定のリンク（ui/links.py）：枠のあるボタンの形。名前が長ければ折り返す（右が切れないように） */
+div[class*="st-key-mj_link_"] a[data-testid="stPageLink-NavLink"] {
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.07);
+  height: auto;
+}
+div[class*="st-key-mj_link_"] a[data-testid="stPageLink-NavLink"] p,
+div[class*="st-key-mj_link_"] a[data-testid="stPageLink-NavLink"] span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
 .mj-topgap { height: 2px; }
 .mj-yaku-head { margin-top: 2px; }
 .mj-reading-big { font-size: 14px; }
@@ -406,6 +421,25 @@ div[class*="st-key-hm_link_"] a[data-testid="stPageLink-NavLink"] p { font-weigh
 .mj-yaku-good { font-weight: 700; color: #23784a; }
 .mj-yaku-soso { font-weight: 700; color: #9a6400; }
 .mj-yaku-bad { font-weight: 700; color: #c0392b; }
+/* 「なぜ？」の答え（アプリの計算・AI の説明） */
+.mj-qa { margin: 8px 0 6px; }
+.mj-qa-ai { border-color: rgba(74, 144, 217, 0.6); background: rgba(74, 144, 217, 0.06); }
+.mj-qa-template { background: rgba(128, 128, 128, 0.05); }
+.mj-qa-error { border-color: #d9534f; }
+.mj-qa-label { font-size: 12px; font-weight: 700; opacity: 0.8; margin-bottom: 4px; }
+.mj-nw { white-space: nowrap; }      /* 牌の名前（5萬）や「残り 3 枚」の途中で行を変えない */
+/* 卒業判定の、目標ごとの印（✓ 満たした・✗ まだ・… 記録が足りない） */
+.mj-checklist { list-style: none; padding-left: 0 !important; margin: 4px 0 8px !important; }
+.mj-checklist li { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+.mj-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 22px; height: 22px;
+  border-radius: 999px; font-size: 13px; font-weight: 700; line-height: 1; }
+.mj-mark-ok { background: rgba(46, 157, 87, 0.22); color: #23784a; }
+.mj-mark-ng { background: rgba(217, 83, 79, 0.18); color: #c0392b; }
+.mj-mark-wait { background: rgba(128, 128, 128, 0.18); }
+.mj-qa-model { font-weight: 400; margin-left: 6px; opacity: 0.75; }
+.mj-qa-line { font-size: 14px; line-height: 1.8; }
+.mj-qa-gap { height: 6px; }
+.mj-qa-note { margin-top: 6px; }
 </style>
 """
 

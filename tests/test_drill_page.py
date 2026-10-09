@@ -27,7 +27,7 @@ STORE_STATE = "mjdojo_store::state"
 #: 種類ごとに、確かめる問題を 1 つ
 SAMPLES = {
     "reading": "t:和了", "han": "h:sanshoku", "valid": "tanyao:e0", "yaku": "12345", "win": "12345", "wait": "12345",
-    "fu": "777", "table": "cr:30:3", "score": "777", "discard": "777", "danger": "777",
+    "fu": "777", "table": "cr:30:3", "score": "777", "discard": "777", "danger": "777", "manners": "order:call",
 }
 DETAILED = {"fu", "yaku", "valid", "score", "win"}
 

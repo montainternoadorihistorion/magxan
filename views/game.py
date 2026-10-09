@@ -11,6 +11,7 @@ import streamlit as st
 
 from engine.call_coach import call_advice
 from engine.cpu import human_turn
+from engine.declare import declare_quiz
 from engine.game import HUMAN, SEAT_NAMES, GameState, Move, Phase
 from engine.game_coach import Stance, kan_advice, ron_ahead, ron_preview, tsumo_preview, turn_advice
 from engine.game_records import graduation, summarize
@@ -18,10 +19,16 @@ from engine.luck import PRESETS
 from engine.scoring.explain import explain
 from engine.scoring.texts import kind_text
 from engine.tiles import kind_of
+from narration.facts import call_facts, call_review_facts, turn_facts, turn_review_facts, win_facts
+from ui.ai_access import AiAccess
+from ui.auto_state import last_change
+from ui.auto_view import GAME, auto_html, news_text
 from ui.components.browser_store import BrowserStore
 from ui.components.kifu_view import kifu_view
+from ui.components.scroll_top import scroll_top
 from ui.components.tile_hand import HandButton, Pick, tile_hand
-from ui.game_session import CALL_KEY, GAME_RULES, KAN_KEY, MAX_SEED, MOVES_EACH, MOVES_TOGETHER, GameSession
+from ui.declare_view import declare_quiz_view, declare_result_html
+from ui.game_session import CALL_KEY, GAME_RULES, KAN_KEY, MAX_SEED, MOVES_EACH, MOVES_TOGETHER, GameSession, config_of
 from ui.game_view import (
     MARK_RIICHI,
     advice_headline_html,
@@ -37,6 +44,7 @@ from ui.game_view import (
     decision_html,
     final_html,
     furiten_note_html,
+    graduation_text,
     hand_title,
     help_html,
     kan_headline_html,
@@ -46,6 +54,7 @@ from ui.game_view import (
     misses_html,
     moves_each_html,
     moves_html,
+    pao_text,
     passed_html,
     phase_text,
     plain_headline_html,
@@ -82,6 +91,7 @@ from ui.practice_view import (
     subhead_html,
 )
 from ui.ruby import Rubifier
+from ui.why_view import why_box
 from ui.win_view import DETAIL_BRIEF, DETAIL_FULL, DETAIL_NORMAL, detail_sections, summary_section
 
 ss = st.session_state
@@ -111,11 +121,16 @@ SEED_HINT = f"番号は、0〜{MAX_SEED} の数字で入れてください。"
 
 def _sync_widgets() -> None:
     settings = session.settings
+    ss.setdefault("gm_w_auto", settings["auto"])
+    if settings["auto"]:
+        # おまかせのあいだは、自分の補正は成績で決まる（スライダーは動かせない）。決まった値を、いつも入力欄に写す
+        ss["gm_w_deal"], ss["gm_w_draw"] = settings["deal"], settings["draw"]
     ss.setdefault("gm_w_deal", round(settings["deal"] / SLIDER_STEP) * SLIDER_STEP)
     ss.setdefault("gm_w_draw", round(settings["draw"] / SLIDER_STEP) * SLIDER_STEP)
     ss.setdefault("gm_w_cpu_deal", round(settings["cpu_deal"] / SLIDER_STEP) * SLIDER_STEP)
     ss.setdefault("gm_w_cpu_draw", round(settings["cpu_draw"] / SLIDER_STEP) * SLIDER_STEP)
     ss.setdefault("gm_w_mark", settings["mark"])
+    ss.setdefault("gm_w_declare", settings["declare"])
     for name in GAME_RULES:
         ss.setdefault(f"gm_w_rule_{name}", settings["rules"][name])
     if ss.get("gm_w_hint") not in HINTS:
@@ -139,6 +154,7 @@ def _read_widgets() -> None:
             "cpu_deal": ss["gm_w_cpu_deal"],
             "cpu_draw": ss["gm_w_cpu_draw"],
             "mark": ss["gm_w_mark"],
+            "declare": ss["gm_w_declare"],
             "hint": HINTS[ss["gm_w_hint"]],
             "level": LEVELS[ss["gm_w_level"]],
             "length": LENGTHS[ss["gm_w_length"]],
@@ -153,6 +169,11 @@ def _on_preset() -> None:
     level = PRESET_LEVELS.get(ss.get("gm_w_preset"))
     if level is not None:
         ss["gm_w_deal"] = ss["gm_w_draw"] = level
+
+
+def _on_auto() -> None:
+    """おまかせを入れた・切った（入れたときは、いまの補正にいちばん近い段階から始める）"""
+    session.set_auto(bool(ss.get("gm_w_auto")))
 
 
 # ---------------------------------------------------------------- 操作
@@ -213,6 +234,24 @@ def _clear_history() -> None:
     session.clear_history()
 
 
+#: 卒業判定に数える対局の設定（補正 0・CPU ふつう・東風戦・初期のルール・打つ前のヒントなし）
+GRADUATION_SETTINGS = {"length": "east", "cpu_level": "normal", "deal": 0, "draw": 0, "cpu_deal": 0, "cpu_draw": 0, "auto": False,
+                       "rules": {name: True for name in GAME_RULES}}
+
+
+def _use_graduation_settings() -> None:
+    """設定を、卒業判定に数える条件にそろえる。打つ前のヒントは、答え合わせに変える。いまの対局が終わっていれば、新しい対局を始める"""
+    hint = session.settings["hint"]
+    session.update_settings({**GRADUATION_SETTINGS, "hint": HINT_AFTER if hint == HINT_BEFORE else hint})
+    for key in [k for k in ss if isinstance(k, str) and k.startswith("gm_w_")]:
+        del ss[key]                      # 入力欄の値を、新しい設定から入れ直す（入力欄を描く前なので、消してよい）
+    if session.game.finished:
+        session.begin()
+        st.toast("卒業判定に数える設定で、新しい対局を始めました。", icon=":material/emoji_events:", duration="long")
+    else:
+        ss["gm_graduation_set"] = True
+
+
 def _open_kifu() -> None:
     ss["gm_kifu_on"] = True
 
@@ -241,8 +280,20 @@ if not session.started:
         st.toast("通信が切れていたので、続きから再開しました。もう一度操作してください。", icon=":material/sync:", duration="long")
 session.sync_code(generation)
 
+# 卒業判定のページの「卒業判定に数える設定で対局する」から来た：設定を、数える条件にそろえる（URL の graduation は 1 回だけ使う）
+if st.query_params.get("graduation") is not None:
+    del st.query_params["graduation"]
+    _use_graduation_settings()
+
 _sync_widgets()
 _read_widgets()
+news = session.take_auto_news()
+if news is not None:
+    # おまかせが、新しい対局の補正の段階を変えた（理由は、設定のツキ補正のところに出す）
+    st.toast(news_text(news), icon=":material/tune:", duration="long")
+if ss.pop("gm_graduation_set", False):
+    st.info("卒業判定に数える設定にしました（ツキ補正なし・CPU ふつう・東風戦・初期のルール・ヒントは答え合わせ）。いまの対局は、前の設定のままです。")
+    st.button("この設定で新しい対局を始める", on_click=_new_game, key="gm_b_graduation_new", type="primary", width="stretch")
 
 game = session.game
 hand = game.current
@@ -251,8 +302,18 @@ hint, level = settings["hint"], settings["level"]
 aka = game.config.rules.aka_dora
 mark = session.mark
 rb = Rubifier()
+access = AiAccess(store=store)
 
-st.html(status_html(game, rb) + scores_html(game, rb, mark=mark))
+# 自分があがった局は、解説の前に点数を申告してもらう（設定で切れる。申告するか、申告しないことにするまで、結果を見せない）
+declaring = None
+if hand.result is not None and settings.get("declare", True) and session.declared is None:
+    mine = next((w for w in hand.result.wins if w.seat == HUMAN), None)
+    if mine is not None:
+        mine_explanation = explain(mine.ctx, game.config.rules)
+        quiz = declare_quiz(mine_explanation, f"{game.config.seed}:{hand.start.number}")
+        declaring = (mine_explanation, quiz) if quiz is not None else None
+auto_game = session.auto and game.config.luck == config_of(settings, game.config.seed).luck      # おまかせで決まった補正の対局か
+st.html(status_html(game, rb, auto=auto_game) + scores_html(game, rb, mark=mark, settled=declaring is None))
 
 my_turn = human_turn(game)
 claim = my_turn and hand.phase is Phase.CLAIM
@@ -285,7 +346,9 @@ if hand.result is None and my_turn:
     tsumo_only = drawing and player.in_riichi and can_tsumo
     if claim and can_ron:
         bumped = bool(ron_ahead(hand, HUMAN)) and not hand.rules.multiple_ron
-        st.html(claim_headline_html(hand, ron_preview(hand, HUMAN), rb, bumped=bumped))
+        # 点数の申告の練習中（ヒントを見ていない対局）は、ロンする前に点数を見せない（申告の答えになってしまうため）
+        show_points = session.hinted or not settings.get("declare", True)
+        st.html(claim_headline_html(hand, ron_preview(hand, HUMAN), rb, bumped=bumped, points=show_points))
     elif claim:
         if call_adv is not None:
             session.note_hint_shown()
@@ -413,6 +476,18 @@ if hand.result is None and my_turn:
 
     st.html(table_html(hand, mark, rb))
 
+    # 「なぜ？」：打つ前のヒントのときは、いまの局面。答え合わせのときは、さっきの打牌
+    if call_adv is not None:
+        why_box(call_facts(hand, HUMAN, call_adv), key="gm_why_call", access=access, rb=rb)
+    elif advice is not None and hint == HINT_BEFORE and kan_pick is None:
+        win_now = tsumo_preview(hand, HUMAN) if can_tsumo else None
+        why_box(turn_facts(hand, HUMAN, advice, last=last, win=win_now), key="gm_why", access=access, rb=rb)
+    elif hint == HINT_AFTER and last_call is not None and not claim:
+        why_box(call_review_facts(last_call, game.config.rules), key="gm_why_review_call", access=access, rb=rb,
+                title="なぜ？（さっきの返事について質問する）")
+    elif hint == HINT_AFTER and last is not None and not claim:
+        why_box(turn_review_facts(last), key="gm_why_review", access=access, rb=rb, title="なぜ？（さっき切った牌について質問する）")
+
     if call_adv is not None and level >= LEVEL_NORMAL:
         with st.expander("鳴きの判断（鳴く・鳴かないの比べ方）", expanded=True, key="gm_x_call"):
             st.html(call_html(call_adv, rb.fork(), aka=aka))
@@ -450,9 +525,20 @@ if hand.result is None and my_turn:
         with st.expander("さっきの鳴きの判断（答え合わせ）", expanded=level == LEVEL_FULL, key=f"gm_x_prevcall_{level}"):
             st.html(call_html(last_call.advice, rb.fork(), aka=aka))
 
+elif hand.result is not None and declaring is not None:
+    # ---- 自分があがった：解説の前に、点数を申告してもらう
+    declare_quiz_view(
+        declaring[0], declaring[1], rb, key="gm_declare", rev=session.rev,
+        on_pick=lambda picked: session.declare(declaring[1], picked), on_skip=session.skip_declare,
+    )
 elif hand.result is not None:
     # ---- 局が終わったあと
     result = hand.result
+    if any(w.seat == HUMAN for w in result.wins):
+        session.result_shown()          # 申告の問題を出さずに点数を見せたら、この局では、あとから問題を出さない
+    if session.declared_rev:
+        scroll_top(session.declared_rev, key="gm_declare_scroll")     # 申告した直後は、答え合わせの札が見えるように、上へ
+    _html(declare_result_html(session.declared, rb))
     st.html(result_banner_html(game, rb) + passed_html(hand, rb))
     if game.finished:
         st.html(final_html(game, session.tally, rb))
@@ -468,6 +554,11 @@ elif hand.result is not None:
             st.html(summary_section(explanation, inner, indicators=bool(win.ctx.ura_indicators)).html)
             for section in detail_sections(explanation, inner, detail=DETAIL_BY_LEVEL[level]):
                 st.html(section.heading_html + section.html)
+        extra = [] if win.from_seat is None else [f"放銃した人：{SEAT_NAMES[win.from_seat]}。"]
+        if win.pao is not None:
+            extra.append(pao_text(win))
+        why_box(win_facts(explanation, who=SEAT_NAMES[win.seat], extra=extra), key=f"gm_why_win_{win.seat}", access=access, rb=rb,
+                title=f"なぜ？（{SEAT_NAMES[win.seat]}のあがりについて質問する）")
     with st.expander("この局の振り返り（自分の判断の評価）", key="gm_x_review"):
         st.html(review_list_html(session.decisions, rb.fork(), aka=aka, calls=session.calls))
     # 牌譜：局を 1 手ずつ振り返る（作るのに少し時間がかかるので、開いたときだけ作る）
@@ -502,11 +593,16 @@ with st.expander("設定（対局・ツキ補正・コーチ）", key="gm_x_sett
         "（計測では、CPU のリーチを受けた局が、強で 4 局に 1 局ほど、弱で 3 局に 2 局ほど、なしで 5 局に 4 局ほど）。",
         srb,
     ))
-    st.segmented_control("強さ", list(PRESET_LEVELS), key="gm_w_preset", on_change=_on_preset, label_visibility="collapsed")
-    st.slider("配牌の良さ", 0, 100, step=SLIDER_STEP, key="gm_w_deal")
-    st.slider("ツモの良さ", 0, 100, step=SLIDER_STEP, key="gm_w_draw")
+    auto = settings["auto"]
+    st.toggle("おまかせ（成績に合わせて、補正を自動で上げ下げする）", key="gm_w_auto", on_change=_on_auto)
+    if auto:
+        st.html(auto_html(session.auto_preview(), last_change(settings), srb, mode=GAME, hint_before=hint == HINT_BEFORE))
+    st.segmented_control("強さ", list(PRESET_LEVELS), key="gm_w_preset", on_change=_on_preset, label_visibility="collapsed", disabled=auto)
+    st.slider("配牌の良さ", 0, 100, step=SLIDER_STEP, key="gm_w_deal", disabled=auto)
+    st.slider("ツモの良さ", 0, 100, step=SLIDER_STEP, key="gm_w_draw", disabled=auto)
     st.html(luck_now_html(ss["gm_w_deal"], ss["gm_w_draw"], srb))
     st.toggle("補正によるツモに印（★）を付ける", key="gm_w_mark")
+    st.toggle("あがったら、解説の前に点数を申告する", key="gm_w_declare")
     st.html(subhead_html("CPU のツキ補正", "CPU 3 人に、同じ強さで働きます。", srb))
     st.slider("CPU の配牌の良さ", 0, 100, step=SLIDER_STEP, key="gm_w_cpu_deal")
     st.slider("CPU のツモの良さ", 0, 100, step=SLIDER_STEP, key="gm_w_cpu_draw")
@@ -540,6 +636,7 @@ with st.expander("設定（対局・ツキ補正・コーチ）", key="gm_x_sett
 
 with st.expander("成績", key="gm_x_stats"):
     st.html(stats_html(summarize(session.history), graduation(session.history), rb.fork()))
+    st.page_link("views/graduation.py", label="卒業判定（ドリル・点数の申告も合わせた、6 つの条件）", icon=":material/emoji_events:")
     if session.history:
         with st.popover("成績を消す"):
             st.caption("このブラウザに残っている対局の成績を、すべて消します。元に戻せません。")
@@ -551,6 +648,7 @@ with st.expander("このページの使い方", key="gm_x_help"):
 notes = [f"対局の番号 {game.config.seed}", config_text(game), phase_text(hand)]
 if not session.counted:
     notes.append("番号を指定した対局は、成績に入れません")
+notes.append(graduation_text(game, hinted=session.hinted, counted=session.counted))
 if session.resumed:
     notes.append("この対局は、ブラウザに残っていた記録から再開したものです")
 if not store.available:

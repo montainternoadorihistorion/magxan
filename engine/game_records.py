@@ -40,31 +40,44 @@ class Tally:
     safe: int = 0               # そのうち、いちばん安全な牌を切れた回数
     calls: int = 0              # 自分が鳴いた回数（チー・ポン・大明槓）
     bad_calls: int = 0          # そのうち、役なしの鳴き（鳴いたあとの手に役が見えない）
+    #: 自分で選んだ打牌のうち、コーチの評価がいちばん良かった回数（Phase 5。おまかせ補正で使う）。
+    #: オリるべき局面では、いちばん安全な牌を切れたとき。ほかは、おすすめと同じ速さの牌を切れたとき（同じ速さの牌が
+    #: いくつかあれば、どれでもよい）。鳴いた手で、役が見えなくなる牌・役まで遠回りになる牌を切ったときは数えない
+    good: int = 0
 
     def add(self, other: Tally) -> Tally:
         return Tally(
             self.decisions + other.decisions, self.followed + other.followed, self.defense + other.defense, self.safe + other.safe,
-            self.calls + other.calls, self.bad_calls + other.bad_calls,
+            self.calls + other.calls, self.bad_calls + other.bad_calls, self.good + other.good,
         )
 
+    @property
+    def good_rate(self) -> float | None:
+        return self.good / self.decisions if self.decisions else None
+
     def to_dict(self) -> dict[str, int]:
-        return {"n": self.decisions, "f": self.followed, "d": self.defense, "s": self.safe, "c": self.calls, "b": self.bad_calls}
+        return {"n": self.decisions, "f": self.followed, "d": self.defense, "s": self.safe, "c": self.calls, "b": self.bad_calls,
+                "g": self.good}
 
     @classmethod
     def from_dict(cls, data: object) -> Tally:
-        """形がおかしければ、0 から数え直す（記録の一部なので、読めないだけで止めない）。鳴きの数が無い記録（鳴きの無かったころ）は 0"""
+        """形がおかしければ、0 から数え直す（記録の一部なので、読めないだけで止めない）。鳴きの数が無い記録（鳴きの無かったころ）は 0。
+
+        良い打牌の数（g）が無い記録（Phase 4 までの記録）は、おすすめと同じ牌を切った回数で代える
+        （おすすめどおりの打牌は、良い打牌に入る。少なめに数えることになるが、0 にするよりずっと近い）。
+        """
         if not isinstance(data, dict):
             return cls()
         values = []
-        for name in ("n", "f", "d", "s", "c", "b"):
-            value = data.get(name, 0)
+        for name in ("n", "f", "d", "s", "c", "b", "g"):
+            value = data.get(name, data.get("f", 0) if name == "g" else 0)
             if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 10_000:
                 return cls()
             values.append(value)
-        decisions, followed, defense, safe, calls, bad_calls = values
-        if followed > decisions or safe > defense or defense > decisions or bad_calls > calls:
+        decisions, followed, defense, safe, calls, bad_calls, good = values
+        if followed > decisions or safe > defense or defense > decisions or bad_calls > calls or good > decisions:
             return cls()
-        return cls(decisions, followed, defense, safe, calls, bad_calls)
+        return cls(decisions, followed, defense, safe, calls, bad_calls, good)
 
 
 @dataclass(frozen=True)

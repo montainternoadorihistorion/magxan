@@ -20,7 +20,7 @@ def _code_state() -> dict:
 sys.modules.pop("ui.fresh", None)
 _fresh = importlib.import_module("ui.fresh")
 _state = _code_state()
-_changed = _fresh.drop_stale_modules(Path(__file__).resolve().parent, ("engine", "ui"), _state, data_folders=("data",))
+_changed = _fresh.drop_stale_modules(Path(__file__).resolve().parent, ("engine", "narration", "ui"), _state, data_folders=("data",))
 # Streamlit も、ページ（views/）などが書き換わると、自作モジュールを捨てて読み直させる。そのときも型が作り直される
 _replaced = _fresh.module_replaced(_state, importlib.import_module("engine.tiles"))
 if _changed or _replaced:
@@ -43,6 +43,7 @@ page = st.navigation(
             st.Page("views/score_lab.py", title="点数計算ラボ", icon=":material/calculate:", url_path="lab"),
         ],
         "学ぶ": [
+            st.Page("views/curriculum.py", title="カリキュラム", icon=":material/school:", url_path="curriculum"),
             st.Page("views/yaku_book.py", title="役図鑑", icon=":material/menu_book:", url_path="yaku"),
             st.Page("views/glossary.py", title="用語辞典", icon=":material/dictionary:", url_path="terms"),
             st.Page("views/drill.py", title="ドリル", icon=":material/quiz:", url_path="drill"),
@@ -50,6 +51,7 @@ page = st.navigation(
             st.Page("views/rules.py", title="ルールの違い", icon=":material/rule:", url_path="rules"),
         ],
         "記録": [
+            st.Page("views/graduation.py", title="卒業判定", icon=":material/emoji_events:", url_path="graduation"),
             st.Page("views/records.py", title="記録と保存", icon=":material/save:", url_path="records"),
             st.Page("views/device_check.py", title="実機チェック", icon=":material/smartphone:", url_path="check"),
         ],

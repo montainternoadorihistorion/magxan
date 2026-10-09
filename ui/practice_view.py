@@ -85,17 +85,20 @@ def _small_kind(kind: int) -> str:
 # ---------------------------------------------------------------- 状況（いちばん上）
 
 
-def luck_text(deal: int, draw: int) -> str:
-    """ツキ補正の強さの書き方（いつも画面に出す）"""
+def luck_text(deal: int, draw: int, *, auto: bool = False) -> str:
+    """ツキ補正の強さの書き方（いつも画面に出す）。auto なら、おまかせで決まった段階の名前も書く（例：（おまかせ：中））"""
     if deal == 0 and draw == 0:
-        return "ツキ補正なし（通常の麻雀）"
-    return f"ツキ補正：配牌 {deal}・ツモ {draw}"
+        return "ツキ補正なし（おまかせ）" if auto else "ツキ補正なし（通常の麻雀）"
+    name = next((name for name, level in PRESETS if deal == draw == level), None)
+    tail = (f"（おまかせ：{name}）" if name else "（おまかせ）") if auto else ""
+    return f"ツキ補正：配牌 {deal}・ツモ {draw}{tail}"
 
 
-def status_html(state: PracticeState, rb: Rubifier, *, target_note: str = "") -> str:
+def status_html(state: PracticeState, rb: Rubifier, *, target_note: str = "", auto: bool = False) -> str:
     """場・自風・巡目・ドラ・ツキ補正の強さ・狙う役。
 
     target_note は、狙う役の札に添えるひとこと（「もう作れない」など）。見出しに足すと 3 行になって手牌が下がるので、ここに書く。
+    auto は、この局の補正が、おまかせで決まったものか。
     """
     aka = state.config.rules.aka_dora
     luck = state.config.luck
@@ -116,7 +119,7 @@ def status_html(state: PracticeState, rb: Rubifier, *, target_note: str = "") ->
             f"{_small_kind(dora)} {escape(kind_text(dora))}</span></span>"
         )
     off = " mj-chip-plain" if luck.is_off else " mj-chip-luck"
-    html += f'<span class="mj-chip{off}"><span>{rb.html(luck_text(luck.deal, luck.draw))}</span></span>'
+    html += f'<span class="mj-chip{off}"><span>{rb.html(luck_text(luck.deal, luck.draw, auto=auto))}</span></span>'
     if state.config.target:
         note = f"（{target_note}）" if target_note else ""
         html += f'<span class="mj-chip mj-chip-target"><span>{rb.html(f"役指定：{target_name(state.config.target)}{note}")}</span></span>'
@@ -706,6 +709,12 @@ HELP_ITEMS = (
      "補正の強さはいつも画面の上に出ていて、成績も補正の強さごとに分けて記録する。"),
     ("役指定練習", "狙う役を 1 つ決めて打つ。配牌がその役に近くなり、ツモの補正も、その役に近づく牌を引き寄せる。"
      "コーチは、速さではなく「その役に近い切り方」を勧める。役図鑑の「この役を実戦で練習する」か、下の「設定」から始められる。"),
+    ("なぜ？", "「なぜ？」を開くと、よくある質問のボタンが出る。押すと、アプリの計算をもとにした説明が出る"
+     "（AI のキーが設定してあれば、AI が分かりやすく言い直す。数・牌・役は、アプリの計算と照らし合わせる）。"),
+    ("点数の申告", "あがったら、解説の前に、点数を選ぶ（卓では、あがった人が自分で点数を言う）。"
+     "打つ前のヒントを見ずに打った局の申告だけを、卒業判定に数える。設定で切れる。"),
+    ("おまかせ", "設定の「おまかせ」を入れると、ヒントを見ずに打った局の評価とドリルの正答率から、ツキ補正を 1 段階ずつ自動で上げ下げする。"
+     "いまの段階と、変えた理由は、設定のツキ補正のところに出る。"),
     ("スタンプ", "あがった手に付いた役は、役図鑑にスタンプが押される。"),
     ("記録", "打っている局・設定・成績は、このブラウザの中に残る（別の端末やブラウザには引き継がれない）。"
      "しばらく開かないと、ブラウザが消してしまうことがある。"),

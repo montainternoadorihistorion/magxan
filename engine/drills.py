@@ -24,7 +24,7 @@ from engine import practice
 from engine.analysis.shanten import shanten_text
 from engine.analysis.waits import wait_kinds
 from engine.coach import Analysis, Position, Verdict, analyze, judge_discard
-from engine.content import TRAP_RESULTS, YakuPage, glossary, yaku_pages
+from engine.content import TRAP_RESULTS, YakuPage, glossary, table_guide, yaku_page_map, yaku_pages
 from engine.cpu import decide
 from engine.defense import LEVEL_NAMES, TileDanger, danger_table, summary, threats
 from engine.game import (
@@ -79,6 +79,7 @@ GROUPS: dict[str, str] = {
     "yaku": "役を覚える",
     "count": "数える",
     "play": "打つ",
+    "table": "卓での作法",
 }
 
 _KINDS = (
@@ -93,6 +94,7 @@ _KINDS = (
     DrillKind("score", "点数計算", "あがった手の点数を、役から順に数える", False, "count"),
     DrillKind("discard", "何切る", "いちばん速く聴牌に近づく打牌を選ぶ（牌効率）", False, "play"),
     DrillKind("danger", "危険牌", "リーチに対して、いちばん安全な牌を選ぶ（現物・スジ・壁・字牌）", False, "play"),
+    DrillKind("manners", "発声と作法", "ポン・チー・カン・ロン・ツモ・リーチの発声と、卓での手順・反則", True, "table"),
 )
 #: ドリルの種類（画面に並べる順）
 KINDS: dict[str, DrillKind] = {kind.key: kind for kind in _KINDS}
@@ -320,7 +322,7 @@ def _ladder(dealer: bool, tsumo: bool) -> tuple[tuple[int, str, str], ...]:
     return tuple(rows)
 
 
-def _near_points(label: str, total: int, *, dealer: bool, tsumo: bool, rng: Rng, count: int = 3) -> list[tuple[int, str, str]]:
+def near_points(label: str, total: int, *, dealer: bool, tsumo: bool, rng: Rng, count: int = 3) -> list[tuple[int, str, str]]:
     """正解に近い点数を、はずれの選択肢として選ぶ（一覧の上で、正解のすぐ上下にあるもの）"""
     rows = [row for row in _ladder(dealer, tsumo) if row[1] != label]
     below = [row for row in rows if row[0] <= total][::-1]
@@ -485,7 +487,7 @@ def _score_question(item: str) -> Question:
     dealer, tsumo = ctx.is_dealer, ctx.is_tsumo
     label = pay_text(points, tsumo=tsumo, dealer=dealer)
     rng = Rng(item, "drill:score")
-    others = _near_points(label, points.total, dealer=dealer, tsumo=tsumo, rng=rng)
+    others = near_points(label, points.total, dealer=dealer, tsumo=tsumo, rng=rng)
     if best.is_yakuman:
         why = points.level_name
     elif points.level is Level.NONE:
@@ -1161,6 +1163,100 @@ def _reading_question(item: str) -> Question:
     )
 
 
+# ---------------------------------------------------------------- 発声と作法
+
+
+#: 発声の問題：（鍵, 言う言葉, 場面, 説明の元になる用語）。場面と説明は、用語辞典・役図鑑と同じ内容
+_CALLS = (
+    ("ron", "ロン", "ほかの人の捨て牌であがるとき", "栄和"),
+    ("tsumo", "ツモ", "自分で山から取った牌であがるとき", "自摸"),
+    ("pon", "ポン", "同じ牌を 2 枚持っていて、誰かが捨てた 3 枚目をもらって、刻子を作るとき", "ポン"),
+    ("chi", "チー", "左隣の人（上家）が捨てた牌をもらって、順子を作るとき", "チー"),
+    ("kan", "カン", "同じ牌 4 枚を、1 組の面子（槓子）にするとき", "カン"),
+    ("riichi", "リーチ", "門前で聴牌して、牌を横向きに捨て、1000 点棒を出すとき", ""),
+)
+#: 意味から言葉を選ぶ問題に使う、卓での作法と反則の用語（用語辞典の「卓での作法と反則」）
+_MANNER_TERMS = ("先ヅモ", "6 枚切り", "チョンボ", "アガリ放棄", "多牌", "少牌", "誤ロン", "見せ牌", "腰", "三味線", "強打")
+#: 順番の問題にする、卓での手順（table.yaml の節の鍵。まとめの文が「A → B → C、の順。」になっているもの）
+_ORDER_SECTIONS = ("call", "riichi", "win")
+#: 卓によって入れ替わることがある手順の組（はずれの選択肢にしない）。鳴きの「捨て牌を取る」と「1 枚捨てる」（table.yaml の differ）
+_ORDER_SWAPS = {"call": ((2, 3),)}
+
+
+@cache
+def _manners_items() -> tuple[str, ...]:
+    items = [f"say:{key}" for key, *_ in _CALLS]
+    items += [f"order:{key}" for key in _ORDER_SECTIONS]
+    known = {term.term for term in glossary().terms}
+    items += [f"term:{term}" for term in _MANNER_TERMS if term in known]
+    return tuple(items)
+
+
+def _with_reading(word: str, reading: str) -> str:
+    """言葉と読み（読みが同じ書き方なら、言葉だけ）"""
+    return word if reading == word else f"{word}（{reading}）"
+
+
+def _order_steps(summary: str) -> list[str]:
+    """「A → B → C、の順。」を [A, B, C] にする"""
+    body = summary.split("、の順")[0]
+    return [part.strip() for part in body.split("→")]
+
+
+def _manners_question(item: str) -> Question:
+    if item not in _manners_items():
+        raise ValueError(f"発声と作法に無い問題です: {item!r}")
+    rng = Rng(item, "drill:manners")
+    kind, key = item.split(":", 1)
+    speak = glossary().find("発声")
+    speak_line = f"発声：{speak.meaning}" if speak is not None else ""
+    if kind == "say":
+        word, scene, term = next((w, sc, t) for k, w, sc, t in _CALLS if k == key)
+        others = _shuffled(rng, [w for k, w, _, _ in _CALLS if k != key])[:3]
+        choices = [Choice(word, f"「{word}」"), *(Choice(w, f"「{w}」") for w in others)]
+        rng.shuffle(choices)
+        if term:
+            entry = glossary().find(term)
+            meaning = f"{_with_reading(entry.term, entry.reading)}：{entry.meaning}" if entry is not None else ""
+        else:
+            page = yaku_page_map()["riichi"]
+            meaning = f"{page.name}（{page.reading}）：{page.short}"
+        answer = tuple(line for line in (meaning, speak_line) if line)
+        return Question("manners", item, f"{scene}、何と言う？", tuple(choices), frozenset({word}), answer=answer,
+                        note="声が先、動作はあと。", term="発声")
+    if kind == "order":
+        section = next(s for s in table_guide().sections if s.key == key)
+        steps = _order_steps(section.summary)
+        right = " → ".join(steps)
+        # 卓によっては正しい順番（入れ替わることがある手順を入れ替えたもの）は、はずれにしない
+        allowed = {right}
+        for first, second in _ORDER_SWAPS.get(key, ()):
+            swapped = list(steps)
+            swapped[first], swapped[second] = swapped[second], swapped[first]
+            allowed.add(" → ".join(swapped))
+        wrong: list[str] = []
+        for _ in range(60):                     # 並べ替えた順番から、はずれを 3 つ選ぶ
+            order = _shuffled(rng, steps)
+            text = " → ".join(order)
+            if text not in allowed and text not in wrong:
+                wrong.append(text)
+            if len(wrong) >= 3:
+                break
+        choices = [Choice(right, right), *(Choice(text, text) for text in wrong)]
+        rng.shuffle(choices)
+        answer = (f"{section.title}：{section.summary}", *section.steps, *section.differ)
+        return Question("manners", item, f"{section.title}：正しい順番は？", tuple(choices), frozenset({right}), answer=answer)
+    entry = glossary().find(key)
+    assert entry is not None
+    others = _shuffled(rng, [t for t in _MANNER_TERMS if t != key])[:3]
+    choices = [Choice(key, key), *(Choice(t, t) for t in others)]
+    rng.shuffle(choices)
+    meaning = entry.meaning.replace(key, "〇〇")          # 説明の中に答えの言葉があれば、伏せる
+    answer = (f"{_with_reading(entry.term, entry.reading)}：{entry.meaning}",)
+    return Question("manners", item, f"次の説明に当てはまる言葉は？「{_first_sentence(meaning)}」", tuple(choices), frozenset({key}),
+                    answer=answer, term=key)
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -1169,6 +1265,7 @@ _FINITE = {
     "valid": lambda: tuple(_valid_items()),
     "han": lambda: tuple(_han_items()),
     "reading": lambda: tuple(_reading_items()),
+    "manners": _manners_items,
 }
 _MAKERS = {
     "table": _table_question,
@@ -1182,6 +1279,7 @@ _MAKERS = {
     "danger": _danger_question,
     "han": _han_question,
     "reading": _reading_question,
+    "manners": _manners_question,
 }
 
 

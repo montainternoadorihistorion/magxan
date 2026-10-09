@@ -1,0 +1,146 @@
+# カリキュラム（仕様の 8 章）。ツキ補正を段階的に下げながら、
+#   よく出る 1 翻役と点数の流れ → 2〜3 翻の役と鳴き → 牌効率・リーチ・守り・符 → 押し引きと高い手
+# の順に学ぶ。各段階に、到達目標と確認テストがある。確認テストに合格すると、次の段階に進める。
+#
+#   key     段階の鍵（step1〜step4）
+#   title   見出し
+#   luck    この段階で打つときのツキ補正（配牌とツモの良さ。0〜100。強 75・中 50・弱 25・なし 0）
+#   focus   仕様にある、この段階で学ぶこと
+#   goals   到達目標（できるようになること）
+#   learn   学ぶところ。yaku（役図鑑の鍵）・term（用語辞典の見出し語）・lab（点数計算ラボの例題）・
+#           guide（卓で打つときの節）・drill（ドリルの種類）
+#   play    実戦で練習すること。practice（一人練習。値は役指定練習の役。空なら、ふつうの一人練習）・game（CPU と対局）・
+#           graduation（true なら、CPU との対局を、卒業判定に数える設定で始める）
+#   test    確認テスト。parts のそれぞれから count 問ずつ出す（from は、ドリルの「種類:鍵」。鍵が * なら、その種類から選ぶ）。
+#           pass 問以上の正解で合格。問題は受けるたびに選び直す。
+#           その場で作る問題（点数計算・役の判定・あがれる？）には、yaku（手に付いてよい役。役図鑑の鍵）と、
+#           fu（点数計算の手の符。書くと、満貫に届かない手だけ）を書ける。まだ学んでいない役や、符の数え方が要る手を出さないため
+#
+# テスト（tests/test_curriculum.py）で、鍵がすべて実在すること、問題が作れることを確かめている。
+
+steps:
+  - key: step1
+    title: よく出る 1 翻役と、点数の流れ
+    luck: 75
+    focus: よく出る 1 翻役（立直・門前清自摸和・断么九・平和・役牌）と、点数計算の全体の流れ
+    goals:
+      - 立直・門前清自摸和・断么九・平和・役牌の条件を、それぞれ言える。
+      - あがった手を見て、この 5 つの役が付くかどうかを見分けられる。
+      - 点数は「役 → ドラ → 符 → 点数」の順に決まること、子のロンは基本点の 4 倍・親のロンは 6 倍を、100 点単位に切り上げた点になることを知っている。
+    learn:
+      yaku: [riichi, menzen_tsumo, tanyao, pinfu, yakuhai]
+      term: [聴牌, 門前, 翻, 符]
+      lab: [A-1, A-2, A-4, G-1]
+      drill: [han, valid, table]
+    play:
+      practice: ["", tanyao, pinfu]
+    test:
+      pass: 8
+      parts:
+        - count: 3
+          from: [han:h:riichi, han:h:menzen_tsumo, han:h:tanyao, han:h:pinfu, han:h:yakuhai]
+        - count: 3
+          from: [valid:tanyao:e0, valid:tanyao:e1, valid:tanyao:t0, valid:tanyao:t1, valid:pinfu:e0, valid:pinfu:e1,
+                 valid:pinfu:t0, valid:pinfu:t1, valid:yakuhai:e0, valid:yakuhai:t0]
+        - count: 2
+          from: [table:cr:30:1, table:cr:30:2, table:cr:30:3, table:cr:40:1, table:cr:40:2, table:pr:30:2]
+        - count: 2
+          from: ["score:*"]
+          yaku: [riichi, menzen_tsumo, tanyao, pinfu, yakuhai]
+          fu: [20, 30]
+
+  - key: step2
+    title: 2〜3 翻の役と、鳴き
+    luck: 50
+    focus: 2〜3 翻の役（三色同順・一気通貫・対々和・三暗刻・七対子・混一色・混全帯么九 など）と、1 翻の一盃口（門前だけ）・一発、鳴きと「役なし」の関係、フリテン
+    goals:
+      - 一盃口・一発・三色同順・一気通貫・対々和・三暗刻・七対子・混一色・混全帯么九の条件と翻数を言える（鳴くと下がる役、門前でしか付かない役も）。
+      - 鳴くと、立直・門前清自摸和・平和などの門前の役が付かなくなることを知っている。
+      - 鳴く前に「鳴いたあとも役が残るか」を確かめて、役なしの鳴きをしない。
+      - 自分の捨て牌にあがり牌があるとき（フリテン）は、ロンできないことを知っている（ツモならあがれる）。
+    learn:
+      yaku: [iipeikou, ippatsu, sanshoku, ittsu, toitoi, sanankou, chiitoitsu, honitsu, chanta]
+      term: [鳴き, 役なし, 喰い下がり, 喰いタン, 後付け, 振聴]
+      lab: [B-1, B-4, B-5, B-6, E-1, I-1, I-3]
+      drill: [han, valid, win, yaku]
+    play:
+      practice: [sanshoku, ittsu, chiitoitsu, honitsu]
+      game: CPU と対局する（鳴ける牌が出たら、鳴きの判断のコーチを見る）
+    test:
+      pass: 8
+      parts:
+        - count: 3
+          from: [han:h:iipeikou, han:h:ippatsu, han:h:sanshoku, han:h:ittsu, han:h:toitoi, han:h:sanankou, han:h:chiitoitsu,
+                 han:h:honitsu, han:h:chanta]
+        - count: 3
+          from: [valid:iipeikou:e0, valid:iipeikou:t0, valid:sanshoku:e0, valid:sanshoku:t0, valid:ittsu:e0, valid:ittsu:t0,
+                 valid:toitoi:e0, valid:toitoi:t0, valid:sanankou:e0, valid:sanankou:t0, valid:chiitoitsu:e0, valid:chiitoitsu:t0,
+                 valid:honitsu:e0, valid:honitsu:t0, valid:chanta:e0, valid:chanta:t0]
+        - count: 2
+          from: ["win:*"]
+          yaku: [riichi, menzen_tsumo, tanyao, pinfu, yakuhai, iipeikou, ippatsu, sanshoku, ittsu, toitoi, sanankou, chiitoitsu,
+                 honitsu, chanta]
+        - count: 2
+          from: ["yaku:*"]
+          yaku: [riichi, menzen_tsumo, tanyao, pinfu, yakuhai, iipeikou, ippatsu, sanshoku, ittsu, toitoi, sanankou, chiitoitsu,
+                 honitsu, chanta]
+
+  - key: step3
+    title: 牌効率・リーチ判断・守り・符
+    luck: 25
+    focus: 牌効率、リーチ判断、守備（ベタオリ）、符計算
+    goals:
+      - 向聴数を戻さない打牌のうち、切ったあとの受け入れ枚数がいちばん多い牌を選べる（手がいちばん早く進む）。
+      - 聴牌したとき、リーチとダマ（黙聴）の違い（役が付く待ち・打点・あがれる牌）を説明できる。
+      - リーチを受けて聴牌していないとき、現物・スジ・壁を手がかりに安全な牌を選んでオリられる（ベタオリ）。
+      - 副底・門前ロン・ツモ・待ち・雀頭・刻子と槓子の符を足して、10 符単位に切り上げられる。
+    learn:
+      term: [有効牌, 受け入れ, 牌効率, 黙聴, 現物, 筋, 壁, ベタオリ, 副底]
+      lab: [A-3, C-1, C-2, C-3, D-1, D-2, D-3, E-1]
+      drill: [discard, wait, danger, fu]
+    play:
+      practice: [""]
+      game: CPU と対局する（リーチを受けたら、守備の表とベタオリの手順を見る）
+    test:
+      pass: 8
+      parts:
+        - count: 3
+          from: ["discard:*"]
+        - count: 3
+          from: ["danger:*"]
+        - count: 2
+          from: ["fu:*"]
+        - count: 2
+          from: ["wait:*"]
+
+  - key: step4
+    title: 押し引きと、高い手・役満
+    luck: 0
+    focus: 押し引きの基本、高打点役と役満の知識
+    goals:
+      - 押し引きは、自分の手の価値と、放銃したときの失点を比べて決めることを知っている（このアプリのコーチは、リーチを受けたとき、あがれる聴牌（役があり、待ち牌が残っている）を保てれば押し、そうでなければオリる）。
+      - 満貫・跳満・倍満・三倍満・役満の点数（子と親のロン）を言える。
+      - 清一色・純全帯么九・二盃口と、主な役満（国士無双・四暗刻・大三元 など）の条件を言える。
+      - 実際の卓での発声（ポン・チー・カン・ロン・ツモ・リーチ）と、基本の作法を知っている。
+    learn:
+      yaku: [chinitsu, junchan, ryanpeikou, kokushi, suuankou, daisangen, tsuuiisou, ryuuiisou, chinroutou, chuuren]
+      term: [押し引き, 満貫, 役満, 数え役満, 発声]
+      lab: [G-4, G-5, G-6, G-7, G-8]
+      guide: [call, riichi, win, foul, manner]
+      drill: [table, manners]
+    play:
+      game: 補正なしで、CPU（ふつう）と東風戦を打つ（卒業判定に数える設定で始まる）
+      graduation: true
+    test:
+      pass: 8
+      parts:
+        - count: 3
+          from: [han:h:chinitsu, han:h:junchan, han:h:ryanpeikou, han:h:kokushi, han:h:suuankou, han:h:daisangen,
+                 han:h:tsuuiisou, han:h:chuuren, han:h:ryuuiisou, han:h:chinroutou]
+        - count: 3
+          from: [table:cr:mangan, table:pr:mangan, table:cr:haneman, table:pr:haneman, table:cr:baiman, table:cr:yakuman,
+                 table:pr:yakuman, table:lv:6, table:lv:8, table:lv:11]
+        - count: 2
+          from: ["manners:*"]
+        - count: 2
+          from: ["danger:*"]

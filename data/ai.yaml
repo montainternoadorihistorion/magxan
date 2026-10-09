@@ -1,0 +1,25 @@
+# AI（Claude API）による解説と質問の設定。
+#
+# API キーは、ここには書かない（Streamlit Community Cloud のアプリ設定の Secrets 欄に入れる。README の「AI による解説（任意）」）。
+# キーが無くても、アプリのすべての機能はテンプレートの解説で動く。AI を呼ぶのは、画面でボタンを押したときだけ。
+#
+# モデルの名前は、Anthropic の公式の一覧（https://platform.claude.com/docs/en/models/overview）にある
+# 「Claude API ID」を書く。effort は low・medium・high のどれか（低いほど速く、安い）。
+# thinking は adaptive（モデルが考える量を決める）・disabled（考えない。Haiku で使える）・between_tools（Sonnet でいちばん少ない）のどれか。
+
+narration:          # よくある質問の答え（「なぜこの牌？」など）を、エンジンの計算結果から、ことばにする
+  model: claude-haiku-5-5
+  effort: low
+  thinking: disabled
+  max_tokens: 1200
+
+question:           # 「なぜ？」で自分で書いた質問に答える
+  model: claude-sonnet-5-5
+  effort: low
+  thinking: adaptive
+  max_tokens: 3000
+
+limits:
+  calls_per_session: 30     # 1 回の接続（セッション）で AI を呼べる回数
+  question_chars: 200       # 自分で書く質問の長さの上限（文字）
+  timeout_seconds: 60       # 返事を待つ長さ（秒）

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 
+from engine.curriculum import Progress
 from engine.drills import KINDS
 from engine.progress import Stamp, dump_stamps, load_stamps, parse_export
 from engine.records import HandRecord, dump_record, load_history
 from engine.srs import Card, Deck, dump_deck, load_deck
 from ui.practice_session import DEFAULT_SETTINGS, clean_settings
 from ui.progress_store import (
+    CURRICULUM_NAME,
+    DECLARE,
     DRILL_PREFIX,
     HAND_NAME,
     HISTORY_NAME,
@@ -18,12 +21,14 @@ from ui.progress_store import (
     apply_import,
     clear_all,
     export_text,
+    read_curriculum,
     read_deck,
     read_decks,
     read_history,
     read_stamps,
     summary_of_export,
     summary_of_store,
+    write_curriculum,
     write_deck,
     write_history,
     write_stamps,
@@ -96,7 +101,7 @@ def test_history_and_decks_round_trip():
     deck = Deck().review("h:riichi", False, NOW)
     write_deck(store, "han", deck)
     assert read_deck(store, "han") == deck and read_deck(store, "table") == Deck()
-    assert set(read_decks(store)) == set(KINDS)
+    assert set(read_decks(store)) == {*KINDS, DECLARE}
 
 
 # ---------------------------------------------------------------- 書き出し・読み込み
@@ -191,3 +196,34 @@ def test_clear_all_removes_progress_but_keeps_the_hand_and_settings():
     assert set(store.values) == {SETTINGS_NAME, HAND_NAME}
     assert summary_of_store(store) == Summary(0, 0, 0)
     assert load_history(store.get(HISTORY_NAME)) == [] and load_deck(store.get(DRILL_PREFIX + "table")) == Deck()
+
+
+# ---------------------------------------------------------------- Phase 5：点数の申告の記録と、カリキュラムの進み具合
+
+
+def test_declare_records_and_curriculum_travel_in_the_file():
+    """書き出したファイルに、点数の申告の記録とカリキュラムの進み具合が入り、置き換え・合わせのどちらでも元に戻る"""
+    source = filled_store()
+    write_deck(source, DECLARE, Deck().review("c-r-30-3", True, NOW).review("p-t-40-2", False, NOW + 5))
+    progress = Progress().with_result("step1", 9, 10, NOW + 10).with_result("step2", 6, 10, NOW + 20)
+    write_curriculum(source, progress)
+    text = export_text(source, time=NOW + 30, app_version="1")
+    data = parse_export(text)
+    assert set(data.drills) == {"table", "score", DECLARE} and data.curriculum is not None
+    assert summary_of_export(data) == summary_of_store(source) == Summary(hands=2, stamps=2, answers=8, declares=2)
+
+    replaced = FakeStore()
+    apply_import(replaced, data, merge=False, clean_settings=clean_settings)
+    assert read_deck(replaced, DECLARE) == read_deck(source, DECLARE)
+    assert read_curriculum(replaced) == progress and read_curriculum(replaced).passed("step1")
+    assert not read_curriculum(replaced).passed("step2")
+
+    merged = FakeStore()
+    write_curriculum(merged, Progress().with_result("step2", 8, 10, NOW + 99))           # こちらでは、2 つ目の段階にも合格している
+    after = apply_import(merged, data, merge=True, clean_settings=clean_settings)
+    both = read_curriculum(merged)
+    assert both.passed("step1") and both.passed("step2") and both.record("step2").last == 8   # 合格は残し、最後の結果は新しいほう
+    assert after.declares == 2 and read_deck(merged, DECLARE).answered == 2
+
+    clear_all(merged)
+    assert CURRICULUM_NAME not in merged.values and read_deck(merged, DECLARE) == Deck()   # すべて消すと、どちらも消える

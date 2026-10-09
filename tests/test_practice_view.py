@@ -423,6 +423,8 @@ def test_status_shows_round_seat_turn_dora_and_luck():
 def test_luck_text():
     assert luck_text(0, 0) == "ツキ補正なし（通常の麻雀）"
     assert luck_text(75, 0) == "ツキ補正：配牌 75・ツモ 0" and luck_text(0, 5) == "ツキ補正：配牌 0・ツモ 5"
+    # おまかせで決まった補正は、段階の名前も（変わったときの知らせと同じ呼び方）
+    assert luck_text(50, 50, auto=True) == "ツキ補正：配牌 50・ツモ 50（おまかせ：中）" and luck_text(0, 0, auto=True) == "ツキ補正なし（おまかせ）"
 
 
 # ---------------------------------------------------------------- ひとことの案内

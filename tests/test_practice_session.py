@@ -85,10 +85,12 @@ def play_to_end(session: PracticeSession, *, use_best: bool = True) -> None:
 
 def test_clean_settings_keeps_good_values_and_resets_bad_ones():
     assert clean_settings(None) == DEFAULT_SETTINGS and clean_settings("x") == DEFAULT_SETTINGS
-    good = {"deal": 0, "draw": 100, "tenpai_deal": True, "mark": False, "hint": HINT_OFF, "level": LEVEL_FULL, "target": "sanshoku"}
+    good = {"deal": 0, "draw": 100, "tenpai_deal": True, "mark": False, "hint": HINT_OFF, "level": LEVEL_FULL, "target": "sanshoku", "declare": False,
+            "auto": True, "auto_since": 1234, "auto_last": None}
     assert clean_settings(good) == good
     assert clean_settings({**good, "target": None})["target"] is None
-    bad = {"deal": 101, "draw": "50", "tenpai_deal": 1, "mark": None, "hint": "いつも", "level": 9, "余分": 1, "target": "toitoi"}
+    bad = {"deal": 101, "draw": "50", "tenpai_deal": 1, "mark": None, "hint": "いつも", "level": 9, "余分": 1, "target": "toitoi", "declare": "yes",
+           "auto": 1, "auto_since": -5, "auto_last": {"from": 75}}
     assert clean_settings(bad) == DEFAULT_SETTINGS                      # 対々和は、役指定練習で選べない
     for target in (5, "", ["sanshoku"], True):
         assert clean_settings({"target": target}, base=good)["target"] == "sanshoku"     # おかしな値は、前の値のまま
@@ -116,7 +118,7 @@ def test_first_visit_starts_a_hand_with_the_default_settings():
     assert (session.decisions, session.counted, session.hinted, session.resumed) == ([], True, False, False)
     assert session.last_decision is None and not session.luck_changed
     saved = json.loads(store.values[HAND_NAME])
-    assert saved == {"v": 1, "save": practice.to_save(session.state), "counted": True, "hinted": False}
+    assert saved == {"v": 1, "save": practice.to_save(session.state), "counted": True, "hinted": False, "declared": None}
 
 
 def test_settings_are_saved_and_apply_from_the_next_hand():

@@ -196,6 +196,7 @@ class Export:
     parts: tuple[str, ...] = field(default=())      # ファイルに入っていた部品の名前
     games: list[GameRecord] = field(default_factory=list)      # CPU との対局の成績（Phase 3 より前のファイルには無い）
     game_settings: dict[str, Any] | None = None     # CPU との対局の設定（確かめる前の形）
+    curriculum: dict[str, Any] | None = None        # カリキュラムの進み具合（確かめる前の形。Phase 5 より前のファイルには無い）
 
 
 def build_export(
@@ -208,6 +209,7 @@ def build_export(
     app_version: str,
     games: Sequence[GameRecord] = (),
     game_settings: Mapping[str, Any] | None = None,
+    curriculum: Mapping[str, Any] | None = None,
 ) -> str:
     """進み具合を、1 つの JSON の文字列にまとめる（人が読める形に、字下げして書く）"""
     data = {
@@ -227,6 +229,8 @@ def build_export(
             "settings": dict(game_settings) if game_settings is not None else None,
             "history": {"v": GAME_HISTORY_VERSION, "games": [record.to_dict() for record in games]},
         },
+        # カリキュラムの進み具合（Phase 5 で足した。前の版のアプリは、知らない部品として読み飛ばす）
+        "curriculum": dict(curriculum) if curriculum is not None else None,
     }
     text = json.dumps(data, ensure_ascii=False, indent=1)
     if not is_text(text):
@@ -292,6 +296,7 @@ def parse_export(text: str) -> Export:
             ("drills", isinstance(data.get("drills"), dict)),
             ("games", isinstance(game_rows, list)),
             ("game_settings", game_settings is not None),
+            ("curriculum", isinstance(data.get("curriculum"), dict)),
         )
         if present
     )
@@ -306,4 +311,5 @@ def parse_export(text: str) -> Export:
         parts=parts,
         games=games[-MAX_GAME_RECORDS:],
         game_settings=game_settings,
+        curriculum=data.get("curriculum") if isinstance(data.get("curriculum"), dict) else None,
     )

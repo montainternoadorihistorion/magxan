@@ -16,6 +16,9 @@
 役指定練習：設定の target に、狙う役（図鑑のページの鍵）を入れておくと、次の局から、その役を狙う局になる。
 あがった局では、付いた役にスタンプを押す（progress.stamps）。成績に入れない局（やり直しなど）でも押す。
 
+おまかせ補正：設定の auto を入れておくと、新しい局（成績に入れる局）を始めるたびに、成績からツキ補正の段階を決め直す
+（engine/auto_luck.py・ui/auto_state.py）。段階を変えたときは、take_auto_news() で 1 回だけ知らせる。
+
 画面の部品（Streamlit）には触れない。画面なしでテストできる。
 """
 from __future__ import annotations
@@ -29,11 +32,15 @@ from typing import Any
 
 from engine import practice
 from engine.analysis.target import TARGET_KEYS
+from engine.auto_luck import MIN_HANDS, AutoDecision, decision_data, decision_from_data, practice_play
+from engine.declare import DeclareQuiz
 from engine.luck import PRESETS, LuckSettings
 from engine.practice import Decision, Outcome, PracticeConfig, PracticeState
 from engine.progress import add_stamps
 from engine.records import MAX_RECORDS, HandRecord, add_record, dump_record, load_history, record_of
 from engine.scoring.explain import explain
+from ui.auto_state import AUTO_DEFAULTS, clean_auto, judge, step_values, turn_on
+from ui.declare_state import clean_declared, declared_state, record_declaration, skipped_state
 from ui.practice_view import HINT_AFTER, HINT_BEFORE, HINT_OFF, LEVEL_FULL, LEVEL_MIN, LEVEL_NORMAL
 from ui.progress_store import HAND_NAME, HISTORY_NAME, SETTINGS_NAME, Store, read_stamps, write_stamps
 from ui.progress_store import parse_json as _parse_json
@@ -54,6 +61,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "hint": HINT_BEFORE,     # ヒントのタイミング
     "level": LEVEL_NORMAL,   # コーチの表示量
     "target": None,          # 役指定練習で狙う役（図鑑のページの鍵）。None なら、ふつうの一人練習
+    "declare": True,         # あがったら、解説の前に点数を申告する（Phase 5）
+    **AUTO_DEFAULTS,         # おまかせ補正（Phase 5。ui/auto_state.py）
 }
 
 
@@ -66,7 +75,7 @@ def clean_settings(data: object, base: dict[str, Any] | None = None) -> dict[str
         value = data.get(name)
         if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100:
             result[name] = value
-    for name in ("tenpai_deal", "mark"):
+    for name in ("tenpai_deal", "mark", "declare"):
         if isinstance(data.get(name), bool):
             result[name] = data[name]
     if data.get("hint") in (HINT_BEFORE, HINT_AFTER, HINT_OFF):
@@ -75,6 +84,7 @@ def clean_settings(data: object, base: dict[str, Any] | None = None) -> dict[str
         result["level"] = data["level"]
     if "target" in data and (data["target"] is None or (isinstance(data["target"], str) and data["target"] in TARGET_KEYS)):
         result["target"] = data["target"]
+    clean_auto(data, result)
     return result
 
 
@@ -180,6 +190,80 @@ class PracticeSession:
         """この局のあがりで、はじめてスタンプが押された役（図鑑のページの鍵）"""
         return self._s.get("pr_fresh", [])
 
+    @property
+    def declared(self) -> dict[str, Any] | None:
+        """この局で、点数を申告した（または申告しないことにした）記録。まだなら None（ui.declare_state の形）"""
+        state = self._s.get("pr_declared")
+        return state if isinstance(state, dict) else None
+
+    @property
+    def declare_fair(self) -> bool:
+        """この局の申告を、記録に入れるか（成績に入れる局で、打つ前のヒントを見ていない。ui/declare_state.py）"""
+        return self.counted and not self.hinted
+
+    @property
+    def declared_rev(self) -> int:
+        """申告するか、申告しないことにするたびに増える番号（答え合わせを、画面の上から見せる合図）"""
+        return int(self._s.get("pr_declared_rev", 0))
+
+    def declare(self, quiz: DeclareQuiz, picked: str) -> bool:
+        """あがった手の点数を申告する（この局で 1 回だけ）。→ 正解したか。記録に入れるのは declare_fair のときだけ"""
+        if self.declared is not None or not self.state.finished or picked not in quiz.choices:
+            self._bump()
+            return False
+        fair = self.declare_fair
+        correct = record_declaration(self._store, quiz, picked, now=self._now()) if fair else quiz.correct(picked)
+        self._s["pr_declared"] = declared_state(None, quiz, picked, recorded=fair)
+        self._s["pr_declared_rev"] = self.declared_rev + 1
+        self._bump()
+        self._save_hand()
+        return correct
+
+    def skip_declare(self) -> None:
+        """申告しないで、結果を見る（記録には残さない）"""
+        if self.declared is None:
+            self._s["pr_declared"] = skipped_state(None)
+            self._s["pr_declared_rev"] = self.declared_rev + 1
+        self._bump()
+        self._save_hand()
+
+    def result_shown(self) -> None:
+        """あがりの結果（点数）を、申告の問題を出さずに見せた。あとで申告の設定を入れても、この局では問題を出さない"""
+        if self.declared is None:
+            self._s["pr_declared"] = skipped_state(None)
+            self._save_hand()
+
+    # ------------------------------------------------------------ おまかせ補正
+
+    @property
+    def auto(self) -> bool:
+        """おまかせ補正にしているか"""
+        return self.settings.get("auto") is True
+
+    def set_auto(self, on: bool) -> None:
+        """おまかせ補正を入れる・切る。入れたときは、いまの補正にいちばん近い段階から始める。切ったときは、いまの補正のまま"""
+        if on == self.auto:
+            return
+        self.update_settings(turn_on(self.settings, int(self._now())) if on else {"auto": False})
+
+    def auto_preview(self) -> AutoDecision:
+        """いまの成績で判断すると、どうなるか（次に新しい局を始めるとき、こう判断する）"""
+        return judge(self.settings, lambda since, level: practice_play(self.history, since, level), MIN_HANDS, self._store, int(self._now()))
+
+    def take_auto_news(self) -> AutoDecision | None:
+        """新しい局を始めたときに、おまかせが段階を変えていれば、その判断（1 回だけ。画面で知らせる）"""
+        found = decision_from_data(self._s.pop("pr_auto_news", None))
+        return found[0] if found is not None else None
+
+    def _auto_step(self) -> None:
+        now = int(self._now())
+        decision = self.auto_preview()
+        values = step_values(self.settings, decision, now)
+        if values is not None:
+            self.update_settings(values)
+        if decision.changed:
+            self._s["pr_auto_news"] = decision_data(decision, now)
+
     # ------------------------------------------------------------ 始める
 
     def start(self, generation: int = 0) -> None:
@@ -201,7 +285,10 @@ class PracticeSession:
 
         役指定練習では、その役が作れる山に当たるまで、番号を引き直す。必要な牌が王牌（嶺上牌・ドラ表示牌）にしか
         無い山では、どう打っても役が作れないため（補正は王牌に触れない）。番号を指定した局は、引き直さない。
+        おまかせ補正なら、成績に入れる局を始める前に、補正の段階を決め直す（番号を指定した局では、決め直さない）。
         """
+        if seed is None and counted and self.auto:
+            self._auto_step()
         if seed is not None:
             self._open(practice.start(self._config(seed)), counted=False)
             return
@@ -225,6 +312,7 @@ class PracticeSession:
         self._s["pr_hinted"] = False
         self._s["pr_resumed"] = False
         self._s["pr_fresh"] = []
+        self._s.pop("pr_declared", None)
         self._s["pr_scroll"] = True       # 新しい局は、画面のいちばん上から見せる
         self._bump()
         self._save_hand()
@@ -250,6 +338,7 @@ class PracticeSession:
         self._s["pr_decisions"] = decisions
         self._s["pr_counted"] = data.get("counted") is True
         self._s["pr_hinted"] = data.get("hinted") is True
+        self._s["pr_declared"] = clean_declared(data.get("declared")) if state.finished else None
         self._s["pr_resumed"] = resumed
         self._s.setdefault("pr_fresh", [])       # スタンプは、あがった瞬間にだけ押す（再開した局では押し直さない）
         self._s["pr_save"] = self._hand_data()
@@ -370,7 +459,8 @@ class PracticeSession:
 
     def _hand_data(self) -> dict[str, Any]:
         """いまの局を、文字と数だけで表したもの（ブラウザに残す形。コードが更新されたあとの作り直しにも使う）"""
-        return {"v": SAVE_VERSION, "save": practice.to_save(self.state), "counted": self.counted, "hinted": self.hinted}
+        return {"v": SAVE_VERSION, "save": practice.to_save(self.state), "counted": self.counted, "hinted": self.hinted,
+                "declared": self._s.get("pr_declared")}
 
     def _save_hand(self) -> None:
         data = self._hand_data()

@@ -39,9 +39,14 @@ def progress_text(kind: str, progress: DrillProgress, *, due: bool = True) -> st
     return "・".join(parts)
 
 
-def header_html(kind: str, reason: str, count: int, right: int, rb: Rubifier) -> str:
-    """問題の上に出す札：種類・出した理由・この回の数"""
+def header_html(kind: str, reason: str, count: int, right: int, rb: Rubifier, *, test: tuple[int, int, str] | None = None) -> str:
+    """問題の上に出す札：種類・出した理由・この回の数。test は確認テストの（何問目, 問題の数, 段階の見出し）"""
     chips = [f'<span class="mj-chip mj-chip-target">{rb.html(KINDS[kind].name)}</span>']
+    if test is not None:
+        number, total, title = test
+        chips.append(f'<span class="mj-chip mj-chip-luck">{rb.html(f"確認テスト：{title}")}</span>')
+        chips.append(f'<span class="mj-chip">{number} / {total} 問目</span>')
+        return f'<div class="mj-chips mj-statusbar">{"".join(chips)}</div>'
     if reason in REASON_LABELS:
         cls = " mj-chip-luck" if reason != NEW else ""
         chips.append(f'<span class="mj-chip{cls}">{REASON_LABELS[reason]}</span>')

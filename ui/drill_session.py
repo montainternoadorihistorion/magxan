@@ -10,6 +10,7 @@
     session.answer_discard(牌ID)    # 何切るに答える
     session.next()                  # 次の問題へ
     session.leave()                 # 種類の一覧へ戻る
+    session.start_test(step, items) # カリキュラムの確認テスト（決まった問題を順に出し、最後に合否を記録する）
 
 画面の部品（Streamlit）には触れない。画面なしでテストできる。
 """
@@ -20,6 +21,7 @@ import time
 from collections.abc import Callable, Iterable, MutableMapping
 from typing import Any
 
+from engine.curriculum import step_of
 from engine.drills import (
     DONE,
     KINDS,
@@ -33,10 +35,12 @@ from engine.drills import (
     question,
 )
 from engine.srs import Card, Deck
-from ui.progress_store import Store, read_deck, write_deck
+from ui.progress_store import Store, read_curriculum, read_deck, write_curriculum, write_deck
 
-MODE_KIND, MODE_REVIEW = "kind", "review"
+MODE_KIND, MODE_REVIEW, MODE_TEST = "kind", "review", "test"
 EARLY = "early"
+#: 確認テストの問題を出した理由
+TEST = "test"
 #: 続けて同じ問題を出さないために覚えておく、直前の問題の数
 RECENT = 4
 #: いまは無い問題（内容を入れ替えたあとに残った古い記録）に当たったとき、次を探す回数の上限
@@ -126,6 +130,9 @@ class DrillSession:
             except (ValueError, RuntimeError):
                 # いまは無い問題（内容を入れ替えたあとに、古い記録が残っていた）か、局面を作れなかった問題。飛ばして次へ
                 self._recent_add(kind, item)
+                test = self.test
+                if test is not None and len(test["results"]) == test["index"]:
+                    test["results"].append(True)        # 確認テストでは、作れなかった問題を正解と数える（受ける人のせいではない）
                 self.next()
         return None
 
@@ -135,6 +142,18 @@ class DrillSession:
     def take_review_done(self) -> bool:
         """復習をすべて終えた直後の 1 回だけ True"""
         return bool(self._s.pop("dr_review_done", False))
+
+    @property
+    def test(self) -> dict[str, Any] | None:
+        """確認テストの途中なら、その状態 {"step": 段階の鍵, "items": [[種類, 鍵], …], "index": いまの問題, "results": [正解か, …]}"""
+        state = self._s.get("dr_test")
+        return state if self.mode == MODE_TEST and isinstance(state, dict) else None
+
+    @property
+    def test_done(self) -> dict[str, Any] | None:
+        """終えたばかりの確認テストの結果 {"step": 段階の鍵, "right": 正解の数, "total": 問題の数, "passed": 合格したか}"""
+        done = self._s.get("dr_test_done")
+        return done if isinstance(done, dict) else None
 
     # ------------------------------------------------------------ 出す問題を決める
 
@@ -171,9 +190,44 @@ class DrillSession:
         self._reset(MODE_REVIEW)
         self.next()
 
+    def start_test(self, step: str, items: Iterable[tuple[str, str]]) -> None:
+        """カリキュラムの確認テストを始める（items の問題を順に出す）"""
+        questions = [[kind, item] for kind, item in items]
+        if step_of(step) is None or not questions or any(kind not in KINDS for kind, _ in questions):
+            raise ValueError("確認テストの問題がおかしい")
+        self._reset(MODE_TEST)
+        self._s.pop("dr_test_done", None)
+        self._s["dr_test"] = {"step": step, "items": questions, "index": 0, "results": []}
+        self._show(questions[0][0], questions[0][1], TEST)
+
+    def _finish_test(self, test: dict[str, Any]) -> None:
+        """確認テストを終える：合否をカリキュラムの記録に入れて、結果を見せる"""
+        right, total = sum(1 for ok in test["results"] if ok), len(test["items"])
+        progress = read_curriculum(self._store).with_result(test["step"], right, total, int(self._now()))
+        write_curriculum(self._store, progress)
+        step = step_of(test["step"])
+        self._s["dr_test_done"] = {"step": test["step"], "right": right, "total": total,
+                                   "passed": step is not None and right >= step.passing}
+        self._s.pop("dr_test", None)
+        self._s["dr_mode"] = MODE_KIND
+        self._show(None, None, "")
+
     def next(self) -> None:
         """次の問題へ進む"""
         now = int(self._now())
+        if self.mode == MODE_TEST:
+            test = self.test
+            if test is None:
+                self.leave()
+                return
+            index = test["index"] + 1
+            if index >= len(test["items"]):
+                self._finish_test(test)
+                return
+            test["index"] = index
+            kind, item = test["items"][index]
+            self._show(kind, item, TEST)
+            return
         if self.mode == MODE_REVIEW:
             for kind in KINDS:
                 item, why = next_item(kind, self.deck(kind), now, pick=0, skip=self._recent(kind))
@@ -198,8 +252,14 @@ class DrillSession:
         self._show(kind, item, EARLY if item is not None else DONE)
 
     def leave(self) -> None:
-        """種類の一覧へ戻る"""
+        """種類の一覧へ戻る（確認テストの途中なら、テストをやめる。結果は残さない）"""
+        if self.mode == MODE_TEST:
+            self._s.pop("dr_test", None)
+            self._s["dr_mode"] = MODE_KIND
         self._show(None, None, "")
+
+    def clear_test_done(self) -> None:
+        self._s.pop("dr_test_done", None)
 
     # ------------------------------------------------------------ 答える
 
@@ -216,6 +276,9 @@ class DrillSession:
         self._s["dr_count"] = self.count + 1
         self._s["dr_right"] = self.right + (1 if correct else 0)
         self._recent_add(kind, item)
+        test = self.test
+        if test is not None and len(test["results"]) == test["index"]:
+            test["results"].append(correct)
 
     def answer(self, keys: Iterable[str]) -> bool:
         """選択肢で答える。できない操作（もう答えた、選択肢に無い答え）なら何もせず False"""

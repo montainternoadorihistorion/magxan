@@ -88,6 +88,16 @@ def test_round_trip_and_broken_records():
     assert len(records_from(json.loads(dump_history([record, record])))) == 2
 
 
+def test_tally_good_turns():
+    tally = Tally(10, 6, 2, 1, 1, 0, 8)
+    assert Tally.from_dict(tally.to_dict()) == tally and tally.to_dict()["g"] == 8 and tally.good_rate == 0.8
+    assert tally.add(Tally(5, 5, good=5)) == Tally(15, 11, 2, 1, 1, 0, 13)
+    # Phase 4 までの記録（良い打牌の数が無い）：おすすめと同じ牌を切った回数で代える
+    assert Tally.from_dict({"n": 10, "f": 6, "d": 2, "s": 1}).good == 6
+    assert Tally.from_dict({**tally.to_dict(), "g": 11}) == Tally()          # 打牌の回数より多いのは、おかしい
+    assert Tally().good_rate is None
+
+
 def test_summaries_split_by_condition_and_put_skill_first():
     base = GameRecord(time=1, seed=1, length="east", deal=0, draw=0, cpu_deal=0, cpu_draw=0, cpu_level="normal",
                       hinted=False, rank=2, score=26_000, hands=5, wins=1, deal_ins=0)

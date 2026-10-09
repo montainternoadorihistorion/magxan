@@ -11,17 +11,20 @@ import re
 from functools import cache
 from pathlib import Path
 
-from component_helpers import action_keys, component_data, pick_tile, press_action
+from component_helpers import action_keys, choose, component_data, pick_tile, press_action
 from html_helpers import check_tile_images, page_html, page_parts
 from streamlit.testing.v1 import AppTest
 
 from engine import game as g
 from engine.cpu import advance
+from engine.declare import declare_quiz
 from engine.defense import threats
 from engine.game import HUMAN, GameConfig, Phase
 from engine.game_coach import coach_action
 from engine.game_records import load_history
 from engine.luck import LuckSettings
+from engine.scoring.explain import explain
+from engine.srs import load_deck
 from engine.tiles import kind_of
 from ui.components.browser_store import initial_state
 from ui.game_session import GAME_HISTORY_NAME, GAME_NAME
@@ -200,7 +203,11 @@ def test_ron_prompt_offers_ron_and_pass():
     data = component_data(at, "mjdojo_tile_hand")
     assert data["discard"] is False and action_keys(at) == ["ron", "pass"]
     assert "ロンできます" in text(at)
+    # 点数の申告の練習中（初期設定）は、ロンする前に点数を見せない（申告の答えになるため）。役は見せる
+    assert "点数は、あがったあとに申告する" in text(at) and "ロンすると" not in text(at)
     no_missing_ruby(at)
+    without = open_game({GAME_NAME: saved(game), "game.settings": json.dumps({"declare": False})})
+    assert "ロンすると" in text(without) and " 点（" in text(without)
     press_action(at, "ron")
     after = json.loads(stored(at, GAME_NAME))
     rebuilt = g.from_save(after["save"])
@@ -234,6 +241,24 @@ def test_riichi_tsumo_is_declared_by_pressing_the_button():
 def test_hand_end_reveals_hands_and_explains_the_win():
     game = find("hand_end_win")
     at = open_game({GAME_NAME: saved(game)})
+    # 自分があがった局は、解説の前に点数を申告する。答えるまで、精算のあとの持ち点も見せない
+    hand = game.current
+    win = next(w for w in hand.result.wins if w.seat == HUMAN)
+    quiz = declare_quiz(explain(win.ctx, game.config.rules), f"{game.config.seed}:{hand.start.number}")
+    body = text(at)
+    assert "あがり！ 何点？" in body and "全員の手牌と待ち（この河で" not in body
+    assert f"{hand.result.scores[HUMAN]:,}" not in body.split("あがり！")[0] or hand.result.scores[HUMAN] == hand.scores[HUMAN]
+    no_missing_ruby(at)
+    wrong = next(c for c in quiz.choices if c != quiz.answer)
+    choose(at, [wrong], key="gm_declare")
+    body = text(at)
+    assert f"✗ 申告：{quiz.answer} が正解" in body and f"（選んだのは {wrong}）" in body
+    assert json.loads(stored(at, GAME_NAME))["declared"]["picked"] == wrong
+    deck = load_deck(stored(at, "drill.declare"))
+    assert (deck.answered, deck.right) == (1, 0)
+    # 開き直しても、もう一度は聞かない（記録も 1 回ぶんのまま）
+    again = open_game(at.session_state[STORE_STATE]["known"])
+    assert "あがり！ 何点？" not in text(again) and load_deck(stored(again, "drill.declare")).answered == 1
     body = text(at)
     assert "全員の手牌と待ち" in body and "自分" in body
     assert any(e.label.startswith("あがりの解説") for e in at.expander)
@@ -341,6 +366,7 @@ def test_after_a_call_the_kuikae_tiles_are_locked_and_the_melds_are_shown():
 def test_kifu_viewer_opens_at_the_end_of_a_hand():
     game = find("hand_end_win")
     at = open_game({GAME_NAME: saved(game)})
+    click(at, "申告しないで結果を見る")
     assert not at.get("bidi_component") or all(
         getattr(c.proto, "component_name", "") != "mjdojo_kifu_view" for c in at.get("bidi_component")
     )

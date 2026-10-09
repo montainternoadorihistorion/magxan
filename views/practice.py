@@ -14,14 +14,21 @@ from engine import practice
 from engine.analysis.target import SHAPELESS_KEYS, TARGET_KEYS
 from engine.coach import analyze
 from engine.content import yaku_page_map
+from engine.declare import declare_quiz
 from engine.luck import PRESETS
 from engine.practice import Outcome
 from engine.records import summarize, target_stats
 from engine.scoring.explain import explain
 from engine.target_coach import target_result, wants_riichi
+from narration.facts import practice_facts, practice_review_facts, win_facts
+from ui.ai_access import AiAccess
+from ui.auto_state import last_change
+from ui.auto_view import PRACTICE, auto_html, news_text
 from ui.components.browser_store import BrowserStore
 from ui.components.choices import Option, choice_buttons
+from ui.components.scroll_top import scroll_top
 from ui.components.tile_hand import HandButton, Pick, tile_hand
+from ui.declare_view import declare_quiz_view, declare_result_html
 from ui.practice_session import MAX_SEED, PracticeSession, parse_seed, preset_name
 from ui.practice_view import (
     HINT_AFTER,
@@ -74,6 +81,7 @@ from ui.practice_view import (
     waits_html,
 )
 from ui.ruby import Rubifier
+from ui.why_view import why_box
 from ui.win_view import DETAIL_BRIEF, DETAIL_FULL, DETAIL_NORMAL, detail_sections, summary_section
 
 ss = st.session_state
@@ -110,10 +118,15 @@ def _group_of(target: str | None) -> str:
 def _sync_widgets() -> None:
     """入力欄を描く前に、その値を整える"""
     settings = session.settings
+    ss.setdefault("pr_w_auto", settings["auto"])
+    if settings["auto"]:
+        # おまかせのあいだは、補正は成績で決まる（スライダーは動かせない）。決まった値を、いつも入力欄に写す
+        ss["pr_w_deal"], ss["pr_w_draw"] = settings["deal"], settings["draw"]
     ss.setdefault("pr_w_deal", round(settings["deal"] / SLIDER_STEP) * SLIDER_STEP)
     ss.setdefault("pr_w_draw", round(settings["draw"] / SLIDER_STEP) * SLIDER_STEP)
     ss.setdefault("pr_w_tenpai", settings["tenpai_deal"])
     ss.setdefault("pr_w_mark", settings["mark"])
+    ss.setdefault("pr_w_declare", settings["declare"])
     if ss.get("pr_w_hint") not in HINTS:
         ss["pr_w_hint"] = HINT_LABELS[settings["hint"]]
     if ss.get("pr_w_level") not in LEVELS:
@@ -133,6 +146,7 @@ def _read_widgets() -> None:
             "draw": ss["pr_w_draw"],
             "tenpai_deal": ss["pr_w_tenpai"],
             "mark": ss["pr_w_mark"],
+            "declare": ss["pr_w_declare"],
             "hint": HINTS[ss["pr_w_hint"]],
             "level": LEVELS[ss["pr_w_level"]],
         }
@@ -143,6 +157,11 @@ def _on_preset() -> None:
     level = PRESET_LEVELS.get(ss.get("pr_w_preset"))
     if level is not None:
         ss["pr_w_deal"] = ss["pr_w_draw"] = level
+
+
+def _on_auto() -> None:
+    """おまかせを入れた・切った（入れたときは、いまの補正にいちばん近い段階から始める）"""
+    session.set_auto(bool(ss.get("pr_w_auto")))
 
 
 def _set_target(target: str | None) -> None:
@@ -242,6 +261,10 @@ if wanted is not None:
 
 _sync_widgets()
 _read_widgets()
+news = session.take_auto_news()
+if news is not None:
+    # おまかせが、新しい局の補正の段階を変えた（理由は、設定のツキ補正のところに出す）
+    st.toast(news_text(news), icon=":material/tune:", duration="long")
 
 state = session.state
 settings = session.settings
@@ -252,13 +275,16 @@ aiming = target is not None and target not in SHAPELESS_KEYS       # 手の形�
 # 用語のルビは、この画面で最初に出てきたときだけ振る。文章は画面の上から順に作る。
 # 折りたたみの中身は rb.fork() に通す（閉じていると読まれないので、そこで振ったルビを「もう出てきた」と数えない）
 rb = Rubifier()
+access = AiAccess(store=store)
 
 analysis = advice = None
 if not state.finished:
     analysis = analyze(practice.position_of(state)) if hint == HINT_BEFORE else None
     advice = practice.target_advice_of(state) if analysis is not None and aiming else None
 # 狙う役が、この局ではもう付かない・作れないことは、上の札に書く（見出しに足すと 3 行になって、手牌が下がる）
-st.html(status_html(state, rb, target_note=target_note_text(state, advice)))
+# おまかせで決まった補正の局なら、札にも「おまかせ：中」のように書く（変わったときの知らせと、同じ呼び方で）
+auto_hand = session.auto and state.config.luck == session.luck
+st.html(status_html(state, rb, target_note=target_note_text(state, advice), auto=auto_hand))
 
 if not state.finished:
     # ---- 打っている途中
@@ -321,12 +347,17 @@ if not state.finished:
     if lucky_draw:
         st.html(draw_note_html(draw, rb, aka=aka))
     st.html(river_html(state, rb))
+    # 「なぜ？」：打つ前のヒントのときは、いまの局面（答え合わせのときは、さっきの打牌。下の答え合わせのあとに出す）
+    if analysis is not None:
+        win_now = explain(practice.apply(state, practice.TSUMO).result.win, state.config.rules) if state.can_tsumo else None
+        why_box(practice_facts(state, analysis, target=advice, win=win_now), key="pr_why", access=access, rb=rb)
     tip = shapeless_tip(state) if hint != HINT_OFF else ""
     if tip:
         st.html(note_html(tip, rb))
     if aiming and state.config.luck.is_off:
         # 補正なしだと、配牌もツモも役に近づかない（ふつうの麻雀と同じ難しさ）。役指定練習のつもりで開いた人が、とまどわないように
-        st.html(note_html(f"ツキ補正が「なし」なので、配牌もツモも、ふつうの麻雀と同じです。{target_name(target)}を作りやすくするには、下の「設定」でツキ補正を上げてください。", rb))
+        how = "おまかせを切って、ツキ補正を上げてください" if session.auto else "ツキ補正を上げてください"
+        st.html(note_html(f"ツキ補正が「なし」なので、配牌もツモも、ふつうの麻雀と同じです。{target_name(target)}を作りやすくするには、下の「設定」で{how}。", rb))
 
     if hint != HINT_OFF and last is not None:
         if last.target is not None:
@@ -342,6 +373,8 @@ if not state.finished:
             with st.expander("さっきの局面の受け入れ表（答え合わせ）", expanded=level == LEVEL_FULL and last.target is None, key=f"pr_x_previous_{level}"):
                 inner = rb.fork()
                 st.html(shanten_html(last.analysis, inner) + candidates_html(last.analysis, inner, chosen_kind=last.verdict.chosen.kind))
+        if hint == HINT_AFTER:
+            why_box(practice_review_facts(last), key="pr_why_review", access=access, rb=rb, title="なぜ？（さっき切った牌について質問する）")
 
     if advice is not None and not advice.won and level >= LEVEL_NORMAL:
         name = advice.name
@@ -365,49 +398,67 @@ if not state.finished:
 else:
     # ---- 局が終わったあと
     result = state.result
-    explanation = None
-    if result.outcome == Outcome.TSUMO and result.win is not None:
-        explanation = explain(result.win, state.config.rules)
-        banner = f'<div class="mj-headline mj-headline-short good"><b class="mj-stage">ツモあがり</b>　{result.turn} {rb.html("巡目")}</div>'
-        if target is not None:
-            banner += target_result_html(target_result(explanation, target), rb)
-        # ドラ表示牌は、上の札にもう出ている。手牌の下にもう一度出すのは、裏ドラがあるとき（リーチしてあがった局）だけ。
-        # 「次の局へ」を、スマホの最初の画面に収めるため
-        st.html(banner + summary_section(explanation, rb, indicators=bool(result.win.ura_indicators)).html)
+    explanation = explain(result.win, state.config.rules) if result.outcome == Outcome.TSUMO and result.win is not None else None
+    # あがった局は、解説の前に点数を申告してもらう（設定で切れる。申告するか、申告しないことにするまで、結果を見せない）
+    quiz = None
+    if explanation is not None and settings.get("declare", True) and session.declared is None:
+        quiz = declare_quiz(explanation, f"{state.config.seed}:{len(state.actions)}")
+    if explanation is not None and quiz is not None:
+        declare_quiz_view(explanation, quiz, rb, key="pr_declare", rev=session.rev,
+                          on_pick=lambda picked: session.declare(quiz, picked), on_skip=session.skip_declare)
     else:
-        st.html(exhausted_html(state, rb))
+        if explanation is not None:
+            session.result_shown()          # 申告の問題を出さずに点数を見せたら、この局では、あとから問題を出さない
+        if session.declared_rev:
+            scroll_top(session.declared_rev, key="pr_declare_scroll")     # 申告した直後は、答え合わせの札が見えるように、上へ
+        if explanation is not None and result.win is not None:
+            banner = declare_result_html(session.declared, rb)
+            banner += f'<div class="mj-headline mj-headline-short good"><b class="mj-stage">ツモあがり</b>　{result.turn} {rb.html("巡目")}</div>'
+            if target is not None:
+                banner += target_result_html(target_result(explanation, target), rb)
+            # ドラ表示牌は、上の札にもう出ている。手牌の下にもう一度出すのは、裏ドラがあるとき（リーチしてあがった局）だけ。
+            # 「次の局へ」を、スマホの最初の画面に収めるため
+            st.html(banner + summary_section(explanation, rb, indicators=bool(result.win.ura_indicators)).html)
+        else:
+            st.html(exhausted_html(state, rb))
 
-    with st.container(horizontal=True):
-        st.button("次の局へ", type="primary", on_click=_next_hand, width="stretch")
-        st.button("同じ局をもう一度", on_click=_again, width="stretch")
-    if target is not None:
-        with st.container(horizontal=True, vertical_alignment="center"):
-            st.page_link("views/yaku_book.py", label=f"役図鑑で「{target_name(target)}」を見る", icon=":material/menu_book:", query_params={"y": target})
-            st.button("役指定をやめる", on_click=_stop_target)
+        with st.container(horizontal=True):
+            st.button("次の局へ", type="primary", on_click=_next_hand, width="stretch")
+            st.button("同じ局をもう一度", on_click=_again, width="stretch")
+        if target is not None:
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.page_link("views/yaku_book.py", label=f"役図鑑で「{target_name(target)}」を見る", icon=":material/menu_book:", query_params={"y": target})
+                st.button("役指定をやめる", on_click=_stop_target)
 
-    # はじめて押されたスタンプの案内は、ボタンの下に出す（上に置くと、「次の局へ」が最初の画面から押し出される）
-    st.html(stamps_html(session.fresh_stamps, rb) + hand_summary_html(state, session.decisions, rb, counted=session.counted, hinted=session.hinted))
-    if state.in_riichi:
-        st.html(riichi_draws_html(state, rb, mark=settings["mark"]))
-    st.html(river_html(state, rb))
-    with st.expander("この局の振り返り（切った牌の評価）", key="pr_x_review"):
-        st.html(review_list_html(session.decisions, rb.fork(), aka=aka))
+        # はじめて押されたスタンプの案内は、ボタンの下に出す（上に置くと、「次の局へ」が最初の画面から押し出される）
+        st.html(stamps_html(session.fresh_stamps, rb) + hand_summary_html(state, session.decisions, rb, counted=session.counted, hinted=session.hinted))
+        if state.in_riichi:
+            st.html(riichi_draws_html(state, rb, mark=settings["mark"]))
+        st.html(river_html(state, rb))
+        with st.expander("この局の振り返り（切った牌の評価）", key="pr_x_review"):
+            st.html(review_list_html(session.decisions, rb.fork(), aka=aka))
 
-    if explanation is not None:
-        for section in detail_sections(explanation, rb, detail=DETAIL_BY_LEVEL[level]):
-            st.html(section.heading_html + section.html)
-        # 解説を下まで読んだあと、上まで戻らなくても次へ進めるように
-        st.button("次の局へ", key="pr_b_next_bottom", type="primary", on_click=_next_hand, width="stretch")
+        if explanation is not None:
+            for section in detail_sections(explanation, rb, detail=DETAIL_BY_LEVEL[level]):
+                st.html(section.heading_html + section.html)
+            why_box(win_facts(explanation, who="自分"), key="pr_why_win", access=access, rb=rb, title="なぜ？（このあがりについて質問する）")
+            # 解説を下まで読んだあと、上まで戻らなくても次へ進めるように
+            st.button("次の局へ", key="pr_b_next_bottom", type="primary", on_click=_next_hand, width="stretch")
 
 # ---- 設定（どの状態でも必ず描く。描かなかった入力欄の値は消えてしまうため）
 with st.expander("設定（ツキ補正・役指定・コーチ）", key="pr_x_settings"):
     srb = rb.fork()
     st.html(subhead_html("ツキ補正", "配牌とツモの「引きの良さ」を上げます。変えた強さは、次の局から使います。", srb))
-    st.segmented_control("強さ", list(PRESET_LEVELS), key="pr_w_preset", on_change=_on_preset, label_visibility="collapsed")
-    st.slider("配牌の良さ", 0, 100, step=SLIDER_STEP, key="pr_w_deal")
-    st.slider("ツモの良さ", 0, 100, step=SLIDER_STEP, key="pr_w_draw")
+    auto = settings["auto"]
+    st.toggle("おまかせ（成績に合わせて、補正を自動で上げ下げする）", key="pr_w_auto", on_change=_on_auto)
+    if auto:
+        st.html(auto_html(session.auto_preview(), last_change(settings), srb, mode=PRACTICE, hint_before=hint == HINT_BEFORE))
+    st.segmented_control("強さ", list(PRESET_LEVELS), key="pr_w_preset", on_change=_on_preset, label_visibility="collapsed", disabled=auto)
+    st.slider("配牌の良さ", 0, 100, step=SLIDER_STEP, key="pr_w_deal", disabled=auto)
+    st.slider("ツモの良さ", 0, 100, step=SLIDER_STEP, key="pr_w_draw", disabled=auto)
     st.html(luck_now_html(ss["pr_w_deal"], ss["pr_w_draw"], srb, target=settings["target"], tenpai_deal=ss["pr_w_tenpai"]))
     st.toggle("補正によるツモに印（★）を付ける", key="pr_w_mark")
+    st.toggle("あがったら、解説の前に点数を申告する", key="pr_w_declare")
     st.html(note_html("配牌の候補のうち、最初から聴牌しているものは、ふつう採用しません（あがりに近すぎて、練習にならないため）。", srb))
     st.toggle("聴牌している配牌も採用する", key="pr_w_tenpai")
     if session.luck_changed or session.target_changed:

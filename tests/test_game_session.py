@@ -127,6 +127,8 @@ def test_next_hand_and_finishing_a_game_records_it():
     record = history[0]
     assert record.rank == session.game.result.ranks[HUMAN] and record.hands == len(session.game.hands) == hands
     assert record.tally.decisions >= 1
+    # コーチのおすすめどおりに打ったので、どの打牌も良い打牌（オリる局面では、いちばん安全な牌）
+    assert record.tally.good == record.tally.decisions and record.tally.followed == record.tally.decisions
     # 開き直しても、二重に記録しない
     again = reopen(store)
     assert again.game.finished and len(again.history) == 1
